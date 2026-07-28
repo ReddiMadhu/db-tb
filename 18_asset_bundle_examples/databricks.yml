@@ -1,0 +1,32 @@
+# databricks.yml
+# Databricks Asset Bundle configuration for Lakeview Dashboards
+
+bundle:
+  name: lakeview_bundle_example
+
+workspace:
+  host: ${workspace.host}
+
+resources:
+  # Example Lakeview Dashboard Resource
+  dashboards:
+    sales_dashboard:
+      display_name: "Sales Overview [Bundle]"
+      # Path to the serialized JSON definition of the dashboard
+      file_path: ./src/sales_dashboard.lvdash.json
+      # Optional: where to deploy it in the workspace
+      parent_path: /Shared/BundledDashboards
+      
+      # Optional permissions can be defined if supported by your bundle schema version
+      # permissions:
+      #   - level: CAN_RUN
+      #     group_name: users
+
+targets:
+  dev:
+    default: true
+    workspace:
+      root_path: /Users/${workspace.current_user.userName}/.bundle/${bundle.name}/dev
+  prod:
+    workspace:
+      root_path: /Shared/Production/${bundle.name}

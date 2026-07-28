@@ -1,0 +1,406 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://databricks.com/schemas/lakeview/serialized-dashboard.json",
+  "title": "Databricks Lakeview Serialized Dashboard",
+  "description": "Reverse-engineered JSON Schema for the serialized_dashboard field of Databricks AI/BI (Lakeview) Dashboards. Based on the verified NYC Taxi example from databricks/bundle-examples (SHA: 07d8a5815e12b4480a75358d1d0ab0f8a09bc41e).",
+  "type": "object",
+  "required": ["pages"],
+  "properties": {
+    "datasets": {
+      "type": "array",
+      "description": "Array of dataset definitions containing SQL queries.",
+      "items": { "$ref": "#/$defs/Dataset" }
+    },
+    "pages": {
+      "type": "array",
+      "description": "Array of dashboard pages/tabs.",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/Page" }
+    },
+    "uiSettings": {
+      "type": "object",
+      "description": "Dashboard-level UI settings.",
+      "properties": {
+        "genieSpace": {
+          "type": "object",
+          "description": "Genie AI assistant configuration.",
+          "properties": {
+            "isEnabled": { "type": "boolean" },
+            "enablementMode": { "type": "string", "enum": ["ENABLED", "DISABLED"] }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Dataset": {
+      "type": "object",
+      "required": ["name", "query"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique dataset identifier (8-char hex string).",
+          "pattern": "^[0-9a-f]{8}$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Human-readable dataset name."
+        },
+        "query": {
+          "type": "string",
+          "description": "SQL query string executed against the SQL Warehouse."
+        }
+      }
+    },
+    "Page": {
+      "type": "object",
+      "required": ["name", "displayName", "layout"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique page identifier (8-char hex string).",
+          "pattern": "^[0-9a-f]{8}$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Page tab title."
+        },
+        "pageType": {
+          "type": "string",
+          "enum": ["PAGE_TYPE_CANVAS"],
+          "description": "Page type. Only PAGE_TYPE_CANVAS is known."
+        },
+        "layout": {
+          "type": "array",
+          "description": "Array of layout items (widget + position pairs).",
+          "items": { "$ref": "#/$defs/LayoutItem" }
+        }
+      }
+    },
+    "LayoutItem": {
+      "type": "object",
+      "required": ["position", "widget"],
+      "properties": {
+        "position": { "$ref": "#/$defs/Position" },
+        "widget": { "$ref": "#/$defs/Widget" }
+      }
+    },
+    "Position": {
+      "type": "object",
+      "required": ["x", "y", "width", "height"],
+      "description": "Grid position on a 6-column layout.",
+      "properties": {
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Column start (0-indexed)."
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Row start (0-indexed, increases downward)."
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Number of grid columns."
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of grid rows."
+        }
+      }
+    },
+    "Widget": {
+      "type": "object",
+      "required": ["name"],
+      "description": "Widget definition. Must have either 'spec' + 'queries' (visualization/filter) or 'textbox_spec' (text/markdown).",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique widget identifier (8-char hex string).",
+          "pattern": "^[0-9a-f]{8}$"
+        },
+        "queries": {
+          "type": "array",
+          "description": "Array of widget query bindings.",
+          "items": { "$ref": "#/$defs/WidgetQuery" }
+        },
+        "spec": { "$ref": "#/$defs/WidgetSpec" },
+        "textbox_spec": {
+          "type": "string",
+          "description": "Markdown content for text widgets."
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["spec", "queries"],
+          "properties": { "textbox_spec": false }
+        },
+        {
+          "required": ["textbox_spec"],
+          "properties": { "spec": false, "queries": false }
+        }
+      ]
+    },
+    "WidgetQuery": {
+      "type": "object",
+      "required": ["name", "query"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Query name. 'main_query' for viz widgets, or path-style 'dashboards/{uuid}/datasets/{uuid}_{field}' for filter bindings."
+        },
+        "query": { "$ref": "#/$defs/QueryDefinition" }
+      }
+    },
+    "QueryDefinition": {
+      "type": "object",
+      "required": ["datasetName", "fields"],
+      "properties": {
+        "datasetName": {
+          "type": "string",
+          "description": "References a Dataset.name."
+        },
+        "disaggregated": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, returns raw rows. If false, applies aggregation from field expressions."
+        },
+        "fields": {
+          "type": "array",
+          "description": "Output fields with SQL expressions.",
+          "items": { "$ref": "#/$defs/FieldDefinition" }
+        }
+      }
+    },
+    "FieldDefinition": {
+      "type": "object",
+      "required": ["expression", "name"],
+      "properties": {
+        "expression": {
+          "type": "string",
+          "description": "SQL expression. Examples: '`column_name`', 'COUNT(`*`)', 'DATE_TRUNC(\"HOUR\", `col`)', 'COUNT_IF(`associative_filter_predicate_group`)'"
+        },
+        "name": {
+          "type": "string",
+          "description": "Output field name referenced by encodings."
+        }
+      }
+    },
+    "WidgetSpec": {
+      "type": "object",
+      "required": ["widgetType", "version"],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "enum": [1, 2, 3],
+          "description": "Spec version. 1=table/pivot, 2=counter/filter, 3=chart."
+        },
+        "widgetType": {
+          "type": "string",
+          "enum": [
+            "bar", "line", "area", "scatter", "pie", "combo",
+            "heatmap", "histogram", "boxplot", "map",
+            "counter",
+            "table", "pivot",
+            "filter-multi-select", "filter-single-select",
+            "filter-date-range-picker", "filter-date-picker"
+          ],
+          "description": "Type of widget visualization."
+        },
+        "encodings": {
+          "type": "object",
+          "description": "Encoding configuration (varies by widgetType).",
+          "properties": {
+            "x": { "$ref": "#/$defs/AxisEncoding" },
+            "y": { "$ref": "#/$defs/AxisEncoding" },
+            "color": { "$ref": "#/$defs/ColorEncoding" },
+            "value": { "$ref": "#/$defs/ValueEncoding" },
+            "label": { "$ref": "#/$defs/LabelEncoding" },
+            "columns": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/TableColumn" }
+            },
+            "fields": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/FilterField" }
+            }
+          }
+        },
+        "frame": {
+          "type": "object",
+          "description": "Widget frame/title configuration.",
+          "properties": {
+            "showTitle": { "type": "boolean" },
+            "title": { "type": "string" }
+          }
+        },
+        "mark": {
+          "type": "object",
+          "description": "Mark configuration (colors, shapes).",
+          "properties": {
+            "colors": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+              "description": "Color palette as hex values."
+            }
+          }
+        },
+        "condensed": { "type": "boolean" },
+        "allowHTMLByDefault": { "type": "boolean" },
+        "itemsPerPage": { "type": "integer" },
+        "paginationSize": { "type": "string" },
+        "withRowNumber": { "type": "boolean" },
+        "invisibleColumns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TableColumn" }
+        }
+      }
+    },
+    "AxisEncoding": {
+      "type": "object",
+      "properties": {
+        "fieldName": { "type": "string" },
+        "displayName": { "type": "string" },
+        "scale": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["quantitative", "temporal", "categorical", "ordinal"]
+            }
+          }
+        },
+        "axis": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" }
+          }
+        }
+      }
+    },
+    "ColorEncoding": {
+      "type": "object",
+      "properties": {
+        "fieldName": { "type": "string" },
+        "displayName": { "type": "string" },
+        "scale": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["categorical", "ordinal", "quantitative"]
+            }
+          }
+        }
+      }
+    },
+    "ValueEncoding": {
+      "type": "object",
+      "description": "For counter widgets.",
+      "properties": {
+        "fieldName": { "type": "string" },
+        "displayName": { "type": "string" }
+      }
+    },
+    "LabelEncoding": {
+      "type": "object",
+      "properties": {
+        "show": { "type": "boolean" }
+      }
+    },
+    "FilterField": {
+      "type": "object",
+      "properties": {
+        "fieldName": { "type": "string" },
+        "displayName": { "type": "string" },
+        "queryName": { "type": "string" }
+      }
+    },
+    "TableColumn": {
+      "type": "object",
+      "properties": {
+        "fieldName": { "type": "string" },
+        "name": { "type": "string" },
+        "displayName": { "type": "string" },
+        "title": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "float", "datetime", "boolean"]
+        },
+        "displayAs": {
+          "type": "string",
+          "enum": ["string", "number", "datetime", "link", "image"]
+        },
+        "alignContent": {
+          "type": "string",
+          "enum": ["left", "right", "center"]
+        },
+        "visible": { "type": "boolean" },
+        "order": { "type": "integer" },
+        "numberFormat": { "type": "string" },
+        "allowHTML": { "type": "boolean" },
+        "allowSearch": { "type": "boolean" },
+        "preserveWhitespace": { "type": "boolean" },
+        "useMonospaceFont": { "type": "boolean" },
+        "highlightLinks": { "type": "boolean" },
+        "booleanValues": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "imageHeight": { "type": "string" },
+        "imageWidth": { "type": "string" },
+        "imageTitleTemplate": { "type": "string" },
+        "imageUrlTemplate": { "type": "string" },
+        "linkOpenInNewTab": { "type": "boolean" },
+        "linkTextTemplate": { "type": "string" },
+        "linkTitleTemplate": { "type": "string" },
+        "linkUrlTemplate": { "type": "string" },
+        "cellFormat": { "$ref": "#/$defs/CellFormat" }
+      }
+    },
+    "CellFormat": {
+      "type": "object",
+      "description": "Conditional formatting for table cells.",
+      "properties": {
+        "default": {
+          "type": "object",
+          "properties": {
+            "foregroundColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "backgroundColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+          }
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "if": {
+                "type": "object",
+                "required": ["column", "fn", "literal"],
+                "properties": {
+                  "column": { "type": "string" },
+                  "fn": { "type": "string", "enum": ["<", ">", "<=", ">=", "==", "!="] },
+                  "literal": { "type": "string" }
+                }
+              },
+              "value": {
+                "type": "object",
+                "properties": {
+                  "foregroundColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+                  "backgroundColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

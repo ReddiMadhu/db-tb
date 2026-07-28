@@ -1,0 +1,151 @@
+{
+  "datasets": [
+    {
+      "name": "a1b2c3d4",
+      "displayName": "Sales Data",
+      "query": "SELECT * FROM samples.nyctaxi.trips"
+    }
+  ],
+  "pages": [
+    {
+      "name": "e5f6a7b8",
+      "displayName": "Sales Overview",
+      "layout": [
+        {
+          "position": { "x": 0, "y": 0, "width": 6, "height": 1 },
+          "widget": {
+            "name": "1111aaaa",
+            "spec": {
+              "version": 1,
+              "widgetType": "text",
+              "text": "# Sales Overview Dashboard\nSummary of key sales metrics."
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 1, "width": 2, "height": 2 },
+          "widget": {
+            "name": "2222bbbb",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "a1b2c3d4",
+                  "fields": [
+                    { "expression": "SUM(`fare_amount`)", "name": "total_revenue" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "total_revenue", "displayName": "Total Revenue" }
+              },
+              "frame": { "showTitle": true, "title": "Total Revenue" }
+            }
+          }
+        },
+        {
+          "position": { "x": 2, "y": 1, "width": 2, "height": 2 },
+          "widget": {
+            "name": "3333cccc",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "a1b2c3d4",
+                  "fields": [
+                    { "expression": "COUNT(`*`)", "name": "total_orders" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "total_orders", "displayName": "Total Orders" }
+              },
+              "frame": { "showTitle": true, "title": "Total Orders" }
+            }
+          }
+        },
+        {
+          "position": { "x": 4, "y": 1, "width": 2, "height": 2 },
+          "widget": {
+            "name": "4444dddd",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter",
+              "encodings": {
+                "field": { "datasetName": "a1b2c3d4", "fieldName": "tpep_pickup_datetime" }
+              },
+              "frame": { "showTitle": true, "title": "Date Range" }
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 3, "width": 3, "height": 4 },
+          "widget": {
+            "name": "5555eeee",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "a1b2c3d4",
+                  "fields": [
+                    { "expression": "MONTH(`tpep_pickup_datetime`)", "name": "month" },
+                    { "expression": "SUM(`fare_amount`)", "name": "revenue" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "month", "displayName": "Month" },
+                "y": { "fieldName": "revenue", "displayName": "Revenue" }
+              },
+              "frame": { "showTitle": true, "title": "Revenue by Month" }
+            }
+          }
+        },
+        {
+          "position": { "x": 3, "y": 3, "width": 3, "height": 4 },
+          "widget": {
+            "name": "6666ffff",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "a1b2c3d4",
+                  "fields": [
+                    { "expression": "`pickup_zip`", "name": "product" },
+                    { "expression": "SUM(`fare_amount`)", "name": "revenue" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "product", "displayName": "Product/Zip" },
+                  { "fieldName": "revenue", "displayName": "Revenue" }
+                ],
+                "conditionalFormatting": [
+                  { "fieldName": "revenue", "rule": "value > 1000", "color": "green" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Top Products" }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

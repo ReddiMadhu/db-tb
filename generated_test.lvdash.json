@@ -1,0 +1,533 @@
+{
+  "datasets": [
+    {
+      "name": "01032c3e",
+      "displayName": "Trip Summary",
+      "query": "SELECT\n  DATE_TRUNC('MONTH', tpep_pickup_datetime) AS month,\n  pickup_zip,\n  COUNT(*) AS total_trips,\n  SUM(fare_amount) AS total_revenue,\n  AVG(fare_amount) AS avg_fare,\n  AVG(trip_distance) AS avg_distance\nFROM `samples`.`nyctaxi`.`trips`\nWHERE fare_amount > 0 AND fare_amount < 500\nGROUP BY 1, 2\nORDER BY 1"
+    },
+    {
+      "name": "906bdee0",
+      "displayName": "Trip Details",
+      "query": "SELECT\n  tpep_pickup_datetime,\n  tpep_dropoff_datetime,\n  pickup_zip,\n  dropoff_zip,\n  fare_amount,\n  trip_distance\nFROM `samples`.`nyctaxi`.`trips`\nWHERE fare_amount > 0 AND trip_distance > 0\nLIMIT 1000"
+    }
+  ],
+  "pages": [
+    {
+      "name": "a9a4ad56",
+      "displayName": "Sales Overview",
+      "layout": [
+        {
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          },
+          "widget": {
+            "name": "74cc756f",
+            "textbox_spec": "# \ud83d\ude95 NYC Taxi Sales Analytics"
+          }
+        },
+        {
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 2,
+            "height": 2
+          },
+          "widget": {
+            "name": "d67d838e",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "01032c3e",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`total_revenue`)",
+                      "name": "total_revenue"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "frame": {
+                "showTitle": true,
+                "title": "Total Revenue"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "total_revenue",
+                  "displayName": "Total Revenue"
+                }
+              }
+            }
+          }
+        },
+        {
+          "position": {
+            "x": 2,
+            "y": 1,
+            "width": 2,
+            "height": 2
+          },
+          "widget": {
+            "name": "f3e04546",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "01032c3e",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`total_trips`)",
+                      "name": "total_trips"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "frame": {
+                "showTitle": true,
+                "title": "Total Trips"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "total_trips",
+                  "displayName": "Total Trips"
+                }
+              }
+            }
+          }
+        },
+        {
+          "position": {
+            "x": 4,
+            "y": 1,
+            "width": 2,
+            "height": 2
+          },
+          "widget": {
+            "name": "cd59b174",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "01032c3e",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "AVG(`avg_fare`)",
+                      "name": "avg_fare"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "frame": {
+                "showTitle": true,
+                "title": "Avg Fare"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "avg_fare",
+                  "displayName": "Average Fare"
+                }
+              }
+            }
+          }
+        },
+        {
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 4,
+            "height": 4
+          },
+          "widget": {
+            "name": "b9f120de",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "01032c3e",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`month`",
+                      "name": "month"
+                    },
+                    {
+                      "expression": "SUM(`total_revenue`)",
+                      "name": "total_revenue"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "frame": {
+                "showTitle": true,
+                "title": "Revenue by Month"
+              },
+              "encodings": {
+                "x": {
+                  "fieldName": "month",
+                  "displayName": "Month",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "axis": {
+                    "title": "Month"
+                  }
+                },
+                "y": {
+                  "fieldName": "total_revenue",
+                  "displayName": "Total Revenue",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Revenue ($)"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "position": {
+            "x": 4,
+            "y": 3,
+            "width": 2,
+            "height": 4
+          },
+          "widget": {
+            "name": "34dcd235",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "01032c3e",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`pickup_zip`",
+                      "name": "pickup_zip"
+                    },
+                    {
+                      "expression": "SUM(`total_trips`)",
+                      "name": "total_trips"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "frame": {
+                "showTitle": true,
+                "title": "Trips by Pickup Zip"
+              },
+              "encodings": {
+                "x": {
+                  "fieldName": "pickup_zip",
+                  "displayName": "Zip Code",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "title": "Pickup Zip"
+                  }
+                },
+                "y": {
+                  "fieldName": "total_trips",
+                  "displayName": "Trips",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Number of Trips"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 6,
+            "height": 5
+          },
+          "widget": {
+            "name": "3213602f",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "906bdee0",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`tpep_pickup_datetime`",
+                      "name": "tpep_pickup_datetime"
+                    },
+                    {
+                      "expression": "`pickup_zip`",
+                      "name": "pickup_zip"
+                    },
+                    {
+                      "expression": "`dropoff_zip`",
+                      "name": "dropoff_zip"
+                    },
+                    {
+                      "expression": "`fare_amount`",
+                      "name": "fare_amount"
+                    },
+                    {
+                      "expression": "`trip_distance`",
+                      "name": "trip_distance"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "frame": {
+                "showTitle": true,
+                "title": "Trip Details"
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "tpep_pickup_datetime",
+                    "displayName": "Pickup",
+                    "title": "Pickup Time",
+                    "type": "datetime",
+                    "displayAs": "datetime",
+                    "alignContent": "left",
+                    "visible": true,
+                    "order": 100000,
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "preserveWhitespace": false,
+                    "useMonospaceFont": false
+                  },
+                  {
+                    "fieldName": "pickup_zip",
+                    "displayName": "From",
+                    "title": "Pickup Zip",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "alignContent": "left",
+                    "visible": true,
+                    "order": 100001,
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "preserveWhitespace": false,
+                    "useMonospaceFont": false,
+                    "numberFormat": "0"
+                  },
+                  {
+                    "fieldName": "dropoff_zip",
+                    "displayName": "To",
+                    "title": "Dropoff Zip",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "alignContent": "left",
+                    "visible": true,
+                    "order": 100002,
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "preserveWhitespace": false,
+                    "useMonospaceFont": false,
+                    "numberFormat": "0"
+                  },
+                  {
+                    "fieldName": "fare_amount",
+                    "displayName": "Fare",
+                    "title": "Fare ($)",
+                    "type": "float",
+                    "displayAs": "number",
+                    "alignContent": "right",
+                    "visible": true,
+                    "order": 100003,
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "preserveWhitespace": false,
+                    "useMonospaceFont": false,
+                    "numberFormat": "$0.00",
+                    "cellFormat": {
+                      "default": {
+                        "foregroundColor": "#1FA873"
+                      },
+                      "rules": [
+                        {
+                          "if": {
+                            "column": "Fare ($)",
+                            "fn": "<",
+                            "literal": "10"
+                          },
+                          "value": {
+                            "foregroundColor": "#9C2638"
+                          }
+                        },
+                        {
+                          "if": {
+                            "column": "Fare ($)",
+                            "fn": "<",
+                            "literal": "25"
+                          },
+                          "value": {
+                            "foregroundColor": "#FFD465"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldName": "trip_distance",
+                    "displayName": "Distance",
+                    "title": "Distance (mi)",
+                    "type": "float",
+                    "displayAs": "number",
+                    "alignContent": "right",
+                    "visible": true,
+                    "order": 100004,
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "preserveWhitespace": false,
+                    "useMonospaceFont": false,
+                    "numberFormat": "0.0"
+                  }
+                ]
+              },
+              "condensed": true,
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "paginationSize": "default",
+              "withRowNumber": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "datasets": [
+    {
+      "name": "11a22b33",
+      "displayName": "Operations Log",
+      "query": "SELECT * FROM samples.nyctaxi.trips"
+    }
+  ],
+  "pages": [
+    {
+      "name": "44c55d66",
+      "displayName": "Operations",
+      "layout": [
+        {
+          "position": { "x": 0, "y": 0, "width": 2, "height": 2 },
+          "widget": {
+            "name": "aa11bb22",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "11a22b33",
+                  "fields": [
+                    { "expression": "COUNT(`*`)", "name": "active_orders" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "active_orders", "displayName": "Active Orders" }
+              },
+              "frame": { "showTitle": true, "title": "Active Orders" }
+            }
+          }
+        },
+        {
+          "position": { "x": 2, "y": 0, "width": 2, "height": 2 },
+          "widget": {
+            "name": "cc33dd44",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter",
+              "encodings": {
+                "field": { "datasetName": "11a22b33", "fieldName": "payment_type" }
+              },
+              "frame": { "showTitle": true, "title": "Order Status" }
+            }
+          }
+        },
+        {
+          "position": { "x": 4, "y": 0, "width": 2, "height": 2 },
+          "widget": {
+            "name": "ee55ff66",
+            "spec": {
+              "version": 1,
+              "widgetType": "text",
+              "text": "**Ops Notes:**\n- Check late orders\n- Monitor inventory"
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 2, "width": 3, "height": 4 },
+          "widget": {
+            "name": "11aa22bb",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "11a22b33",
+                  "fields": [
+                    { "expression": "`payment_type`", "name": "status" },
+                    { "expression": "COUNT(`*`)", "name": "order_count" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "status", "displayName": "Status" },
+                "y": { "fieldName": "order_count", "displayName": "Orders" }
+              },
+              "frame": { "showTitle": true, "title": "Orders by Status" }
+            }
+          }
+        },
+        {
+          "position": { "x": 3, "y": 2, "width": 3, "height": 4 },
+          "widget": {
+            "name": "33cc44dd",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "11a22b33",
+                  "fields": [
+                    { "expression": "`medallion`", "name": "order_id" },
+                    { "expression": "`payment_type`", "name": "status" },
+                    { "expression": "`trip_time_in_secs`", "name": "processing_time" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "order_id", "displayName": "Order ID" },
+                  { "fieldName": "status", "displayName": "Status" },
+                  { "fieldName": "processing_time", "displayName": "Processing Time (s)" }
+                ],
+                "conditionalFormatting": [
+                  { "fieldName": "processing_time", "rule": "value > 3600", "color": "red" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Order Details" }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

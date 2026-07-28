@@ -1,0 +1,158 @@
+{
+  "datasets": [
+    {
+      "name": "f1e2d3c4",
+      "displayName": "Financial Metrics",
+      "query": "SELECT * FROM samples.nyctaxi.trips"
+    }
+  ],
+  "pages": [
+    {
+      "name": "b5a69788",
+      "displayName": "Financial Summary",
+      "layout": [
+        {
+          "position": { "x": 0, "y": 0, "width": 3, "height": 2 },
+          "widget": {
+            "name": "7777aaaa",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "f1e2d3c4",
+                  "fields": [
+                    { "expression": "SUM(`fare_amount` - `tolls_amount`)", "name": "net_income" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "net_income", "displayName": "Net Income" }
+              },
+              "frame": { "showTitle": true, "title": "Net Income" }
+            }
+          }
+        },
+        {
+          "position": { "x": 3, "y": 0, "width": 3, "height": 2 },
+          "widget": {
+            "name": "8888bbbb",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "f1e2d3c4",
+                  "fields": [
+                    { "expression": "SUM(`fare_amount`)", "name": "total_revenue" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "total_revenue", "displayName": "Revenue" }
+              },
+              "frame": { "showTitle": true, "title": "Total Revenue" }
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 2, "width": 3, "height": 4 },
+          "widget": {
+            "name": "9999cccc",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "f1e2d3c4",
+                  "fields": [
+                    { "expression": "MONTH(`tpep_pickup_datetime`)", "name": "month" },
+                    { "expression": "SUM(`fare_amount`)", "name": "revenue" },
+                    { "expression": "SUM(`tolls_amount`)", "name": "expenses" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "line",
+              "encodings": {
+                "x": { "fieldName": "month", "displayName": "Month" },
+                "y": [
+                  { "fieldName": "revenue", "displayName": "Revenue" },
+                  { "fieldName": "expenses", "displayName": "Expenses" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Monthly Trends" }
+            }
+          }
+        },
+        {
+          "position": { "x": 3, "y": 2, "width": 3, "height": 4 },
+          "widget": {
+            "name": "0000dddd",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "f1e2d3c4",
+                  "fields": [
+                    { "expression": "'Tolls'", "name": "expense_type" },
+                    { "expression": "SUM(`tolls_amount`)", "name": "amount" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "pie",
+              "encodings": {
+                "color": { "fieldName": "expense_type", "displayName": "Expense Type" },
+                "theta": { "fieldName": "amount", "displayName": "Amount" }
+              },
+              "frame": { "showTitle": true, "title": "Expense Breakdown" }
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 6, "width": 6, "height": 4 },
+          "widget": {
+            "name": "aaaaffff",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "f1e2d3c4",
+                  "fields": [
+                    { "expression": "MONTH(`tpep_pickup_datetime`)", "name": "month" },
+                    { "expression": "SUM(`fare_amount`)", "name": "revenue" },
+                    { "expression": "SUM(`tolls_amount`)", "name": "expenses" },
+                    { "expression": "SUM(`fare_amount` - `tolls_amount`)", "name": "net_income" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "month", "displayName": "Month" },
+                  { "fieldName": "revenue", "displayName": "Revenue" },
+                  { "fieldName": "expenses", "displayName": "Expenses" },
+                  { "fieldName": "net_income", "displayName": "Net Income" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "P&L Statement" }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,189 @@
+{
+  "datasets": [
+    {
+      "name": "8888ffff",
+      "displayName": "Executive KPIs",
+      "query": "SELECT * FROM samples.nyctaxi.trips"
+    },
+    {
+      "name": "9999eeee",
+      "displayName": "Executive Details",
+      "query": "SELECT * FROM samples.nyctaxi.trips WHERE fare_amount > 20"
+    }
+  ],
+  "pages": [
+    {
+      "name": "aaaa0000",
+      "displayName": "Overview",
+      "layout": [
+        {
+          "position": { "x": 0, "y": 0, "width": 2, "height": 2 },
+          "widget": {
+            "name": "11119999",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "8888ffff",
+                  "fields": [
+                    { "expression": "SUM(`fare_amount`)", "name": "kpi_revenue" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "kpi_revenue", "displayName": "Total Revenue" }
+              },
+              "frame": { "showTitle": true, "title": "Total Revenue" }
+            }
+          }
+        },
+        {
+          "position": { "x": 2, "y": 0, "width": 2, "height": 2 },
+          "widget": {
+            "name": "22228888",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "8888ffff",
+                  "fields": [
+                    { "expression": "COUNT(`*`)", "name": "kpi_users" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "kpi_users", "displayName": "Total Users" }
+              },
+              "frame": { "showTitle": true, "title": "Total Users" }
+            }
+          }
+        },
+        {
+          "position": { "x": 4, "y": 0, "width": 2, "height": 2 },
+          "widget": {
+            "name": "33337777",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter",
+              "encodings": {
+                "field": { "datasetName": "8888ffff", "fieldName": "tpep_pickup_datetime" }
+              },
+              "frame": { "showTitle": true, "title": "Date Range" }
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 2, "width": 6, "height": 4 },
+          "widget": {
+            "name": "44446666",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "8888ffff",
+                  "fields": [
+                    { "expression": "MONTH(`tpep_pickup_datetime`)", "name": "month" },
+                    { "expression": "SUM(`fare_amount`)", "name": "revenue" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "line",
+              "encodings": {
+                "x": { "fieldName": "month", "displayName": "Month" },
+                "y": { "fieldName": "revenue", "displayName": "Revenue" }
+              },
+              "frame": { "showTitle": true, "title": "Revenue Over Time" }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "bbbb1111",
+      "displayName": "Details",
+      "layout": [
+        {
+          "position": { "x": 0, "y": 0, "width": 2, "height": 2 },
+          "widget": {
+            "name": "55555555",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter",
+              "encodings": {
+                "field": { "datasetName": "9999eeee", "fieldName": "vendor_id" }
+              },
+              "frame": { "showTitle": true, "title": "Region (Multi-select)" }
+            }
+          }
+        },
+        {
+          "position": { "x": 2, "y": 0, "width": 4, "height": 4 },
+          "widget": {
+            "name": "66664444",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "9999eeee",
+                  "fields": [
+                    { "expression": "`vendor_id`", "name": "region" },
+                    { "expression": "SUM(`fare_amount`)", "name": "revenue" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "region", "displayName": "Region" },
+                "y": { "fieldName": "revenue", "displayName": "Revenue" }
+              },
+              "frame": { "showTitle": true, "title": "Revenue by Region" }
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 4, "width": 6, "height": 4 },
+          "widget": {
+            "name": "77773333",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "9999eeee",
+                  "fields": [
+                    { "expression": "`medallion`", "name": "client" },
+                    { "expression": "`fare_amount`", "name": "amount" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "client", "displayName": "Client" },
+                  { "fieldName": "amount", "displayName": "Amount" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Top Clients" }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,141 @@
+{
+  "datasets": [
+    {
+      "name": "1234abcd",
+      "displayName": "Employee Data",
+      "query": "SELECT * FROM samples.nyctaxi.trips"
+    }
+  ],
+  "pages": [
+    {
+      "name": "5678ef01",
+      "displayName": "HR Analytics",
+      "layout": [
+        {
+          "position": { "x": 0, "y": 0, "width": 3, "height": 2 },
+          "widget": {
+            "name": "bbbb1111",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "1234abcd",
+                  "fields": [
+                    { "expression": "COUNT(DISTINCT `medallion`)", "name": "headcount" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "headcount", "displayName": "Total Headcount" }
+              },
+              "frame": { "showTitle": true, "title": "Headcount" }
+            }
+          }
+        },
+        {
+          "position": { "x": 3, "y": 0, "width": 3, "height": 2 },
+          "widget": {
+            "name": "cccc2222",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter",
+              "encodings": {
+                "field": { "datasetName": "1234abcd", "fieldName": "vendor_id" }
+              },
+              "frame": { "showTitle": true, "title": "Department Filter" }
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 2, "width": 3, "height": 4 },
+          "widget": {
+            "name": "dddd3333",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "1234abcd",
+                  "fields": [
+                    { "expression": "`trip_distance`", "name": "tenure" },
+                    { "expression": "`fare_amount`", "name": "salary" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "scatter",
+              "encodings": {
+                "x": { "fieldName": "tenure", "displayName": "Tenure (Years)" },
+                "y": { "fieldName": "salary", "displayName": "Salary" }
+              },
+              "frame": { "showTitle": true, "title": "Tenure vs Salary" }
+            }
+          }
+        },
+        {
+          "position": { "x": 3, "y": 2, "width": 3, "height": 4 },
+          "widget": {
+            "name": "eeee4444",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "1234abcd",
+                  "fields": [
+                    { "expression": "`vendor_id`", "name": "department" },
+                    { "expression": "COUNT(`*`)", "name": "employee_count" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "department", "displayName": "Department" },
+                "y": { "fieldName": "employee_count", "displayName": "Headcount" }
+              },
+              "frame": { "showTitle": true, "title": "Department Distribution" }
+            }
+          }
+        },
+        {
+          "position": { "x": 0, "y": 6, "width": 6, "height": 4 },
+          "widget": {
+            "name": "ffff5555",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "1234abcd",
+                  "fields": [
+                    { "expression": "`medallion`", "name": "employee_id" },
+                    { "expression": "`vendor_id`", "name": "department" },
+                    { "expression": "`fare_amount`", "name": "salary" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "employee_id", "displayName": "Employee ID" },
+                  { "fieldName": "department", "displayName": "Department" },
+                  { "fieldName": "salary", "displayName": "Salary" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Employee List" }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
