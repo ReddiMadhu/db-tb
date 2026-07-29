@@ -1,0 +1,19 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 8px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  border-radius: var(--radius-full);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.uploaded { background: var(--accent-orange-muted); color: var(--accent-orange); }
+.parsed { background: var(--accent-info-muted); color: var(--accent-info); }
+.executing { background: var(--accent-amber-muted); color: var(--accent-amber); animation: pulse 1.5s infinite; }
+.completed { background: var(--accent-green-muted); color: var(--accent-green); }
+.failed { background: var(--accent-red-muted); color: var(--accent-red); }
+.deployed { background: var(--accent-green-muted); color: var(--accent-green); }
+.needs_review { background: var(--accent-amber-muted); color: var(--accent-amber); }

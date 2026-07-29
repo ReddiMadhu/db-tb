@@ -1,0 +1,29 @@
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-card, #12263a) 25%,
+    var(--bg-hover, #19334d) 37%,
+    var(--bg-card, #12263a) 63%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--radius-md, 6px);
+  display: inline-block;
+}
+
+.cardSkeleton {
+  background: var(--bg-card, #12263a);
+  border: 1px solid var(--border-default, #28445e);
+  border-radius: var(--radius-lg, 8px);
+  padding: var(--space-4, 1rem);
+  box-shadow: var(--elevation-1);
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}

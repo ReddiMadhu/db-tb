@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tableau-to-lakeview"
+version = "0.1.0"
+description = "Production-Grade Tableau to Databricks Lakeview (AI/BI) Migration Platform"
+authors = [{ name = "Databricks Migration Team" }]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+    "lxml>=4.9.0",
+    "networkx>=3.0",
+    "sqlglot>=18.0.0",
+    "jsonschema>=4.17.0",
+    "requests>=2.31.0",
+    "databricks-sdk>=0.12.0",
+    "langchain-openai>=0.1.0",
+    "langchain-core>=0.1.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.6",
+    "pydantic-settings>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.6.0",
+    "httpx>=0.24.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true

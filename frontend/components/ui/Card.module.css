@@ -1,0 +1,22 @@
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--elevation-1);
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.card:hover {
+  border-color: var(--border-emphasis);
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-orange);
+  transform: translateY(-1px);
+}

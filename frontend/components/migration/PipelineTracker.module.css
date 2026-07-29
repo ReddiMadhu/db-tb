@@ -1,0 +1,78 @@
+.trackerContainer {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.stagesRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+
+.lineBackdrop {
+  position: absolute;
+  top: 14px;
+  left: 20px;
+  right: 20px;
+  height: 2px;
+  background: var(--border-default);
+  z-index: 1;
+}
+
+.stageItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  z-index: 2;
+  cursor: pointer;
+}
+
+.node {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  border: 2px solid var(--border-default);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* States */
+.complete .node {
+  background: var(--accent-green-muted);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+.complete .label { color: var(--text-primary); }
+
+.active .node {
+  background: var(--accent-blue-muted);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+  animation: pulse 1.5s infinite;
+}
+.active .label { color: var(--accent-blue); font-weight: var(--font-weight-semibold); }
+
+.failed .node {
+  background: var(--accent-red-muted);
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+.failed .label { color: var(--accent-red); }
