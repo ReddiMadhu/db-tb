@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { Play, Download, Rocket, FileText, CheckCircle2, RefreshCw, AlertCircle, ArrowRightLeft, Layers } from "lucide-react";
+import { Play, Download, Rocket, FileText, CheckCircle2, RefreshCw, AlertCircle, ArrowRightLeft, ArrowRight, Layers } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import PipelineTracker from "@/components/migration/PipelineTracker";
@@ -42,10 +42,11 @@ export default function MigrationWorkspacePage({
   const { toast, success } = useToast();
 
   const [activeTab, setActiveTab] = useState<
-    "source" | "sql" | "preview" | "validation" | "inspector" | "artifacts" | "deploy"
+    "source" | "mapping" | "sql" | "preview" | "validation" | "inspector" | "artifacts" | "deploy"
   >("sql");
 
   const [status, setStatus] = useState<JobStatus>("PARSED");
+  const [mappingStatus, setMappingStatus] = useState<string>("UNMAPPED");
   const [stage, setStage] = useState<number>(4);
   const [filename, setFilename] = useState<string>("Workbook.twbx");
   const [lakeview, setLakeview] = useState<LakeviewDashboard | null>(null);
@@ -59,6 +60,16 @@ export default function MigrationWorkspacePage({
       setStatus(s.status);
       setStage(s.current_stage || 4);
       if (s.filename) setFilename(s.filename);
+
+      // Fetch saved mappings status
+      try {
+        const { getSavedMappings } = await import("@/lib/api");
+        const mapRes = await getSavedMappings(jobUuid);
+        setMappingStatus(mapRes.mapping_status);
+        if (mapRes.mapping_status !== "COMPLETE" && s.status === "NEEDS_MAPPING") {
+          setActiveTab("mapping");
+        }
+      } catch {}
 
       if (s.status === "COMPLETED" || s.status === "EXECUTING" || s.status === "DEPLOYED") {
         const [dash, rep, b] = await Promise.all([
@@ -241,6 +252,12 @@ export default function MigrationWorkspacePage({
               Source Metadata
             </button>
             <button
+              className={`${styles.tab} ${activeTab === "mapping" ? styles.active : ""}`}
+              onClick={() => setActiveTab("mapping")}
+            >
+              Datasource Mapping {mappingStatus !== "COMPLETE" ? "⚠️" : "✅"}
+            </button>
+            <button
               className={`${styles.tab} ${activeTab === "sql" ? styles.active : ""}`}
               onClick={() => setActiveTab("sql")}
             >
@@ -289,6 +306,27 @@ export default function MigrationWorkspacePage({
                 <pre className={styles.yamlPre}>
                   {JSON.stringify(report || { filename, status, stage, jobUuid }, null, 2)}
                 </pre>
+              </div>
+            )}
+
+            {/* DATASOURCE MAPPING TAB */}
+            {activeTab === "mapping" && (
+              <div style={{ padding: "1.5rem", background: "var(--bg-card)", border: "1px solid var(--border-default)", borderRadius: "var(--radius-lg)" }}>
+                <h2 style={{ fontSize: "1.25rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <ArrowRightLeft color="var(--accent-orange)" size={20} />
+                  Datasource Discovery & Mapping
+                </h2>
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
+                  Map every Tableau datasource table (e.g. <code style={{ color: "var(--accent-orange)" }}>Sheet1$</code>) to a real, verified Unity Catalog table in Databricks before transpiling SQL.
+                </p>
+
+                <div style={{ display: "flex", gap: "1rem" }}>
+                  <Link href={`/migrations/${jobUuid}/mapping`}>
+                    <Button variant="primary" icon={<ArrowRight size={16} />}>
+                      Open Interactive Mapping Screen →
+                    </Button>
+                  </Link>
+                </div>
               </div>
             )}
 
