@@ -31,7 +31,7 @@ from app.services.parser.mark_type_resolver import resolve_mark_type
 from app.services.compiler.expression_compiler import compile_expression_to_sql
 from app.services.parser.tableau_extractor import is_tableau_pseudo_field
 from app.services.mapper.datasource_mapper import (
-    build_table_mapping, resolve_table_in_sql, is_unresolved_table
+    build_table_mapping, resolve_table_in_sql, is_unresolved_table, clean_table_name_for_catalog
 )
 
 
@@ -170,9 +170,13 @@ def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = N
 
     raw_name = table_names[0]
     from_clause = table_mapping.get(raw_name, raw_name)
-    # Fallback: if still unresolved, try catalog_schema prefix
-    if is_unresolved_table(from_clause) and catalog_schema:
-        from_clause = f"{catalog_schema}.{from_clause}"
+    # Fallback: if unresolved, clean name and prefix catalog_schema if present
+    if is_unresolved_table(from_clause):
+        clean_name = clean_table_name_for_catalog(from_clause)
+        if catalog_schema:
+            from_clause = f"{catalog_schema}.{clean_name}"
+        else:
+            from_clause = clean_name
 
     from_clause = _format_tbl(from_clause)
 

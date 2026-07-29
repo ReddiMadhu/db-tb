@@ -122,13 +122,15 @@ def build_table_mapping(
                 if catalog_schema:
                     mapping[original] = f"{catalog_schema}.{clean_name}"
                 else:
-                    unresolved.append({
-                        'table': original,
-                        'raw_name': raw,
-                        'connection_type': conn_type,
-                        'suggested_name': clean_name,
-                        'datasource': ds.name,
-                    })
+                    mapping[original] = clean_name
+
+                unresolved.append({
+                    'table': original,
+                    'raw_name': raw,
+                    'connection_type': conn_type,
+                    'suggested_name': clean_name,
+                    'datasource': ds.name,
+                })
             else:
                 # Looks like a real DB table, optionally prefix with catalog.schema
                 if catalog_schema and '.' not in original:
