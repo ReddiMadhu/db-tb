@@ -211,12 +211,19 @@ async def get_migration_report(job_uuid: str, db: Session = Depends(get_db)):
     }
 
 
+from pydantic import BaseModel
+from typing import Optional
+
+class DeployRequest(BaseModel):
+    warehouse_id: str
+    host: Optional[str] = None
+    token: Optional[str] = None
+
+
 @router.post("/{job_uuid}/deploy")
 async def deploy_to_databricks(
     job_uuid: str,
-    warehouse_id: str,
-    host: str = None,
-    token: str = None,
+    req: DeployRequest,
     db: Session = Depends(get_db)
 ):
     """Deploys generated Lakeview dashboard directly to Databricks workspace via REST/SDK API."""
@@ -231,14 +238,14 @@ async def deploy_to_databricks(
         )
 
     try:
-        client = LakeviewAPIClient(host=host, token=token)
+        client = LakeviewAPIClient(host=req.host, token=req.token)
         with open(job.output_lvdash_path, "r", encoding="utf-8") as f:
             serialized_json = f.read()
 
         result = client.create_dashboard(
             display_name=job.source_filename.replace('.twbx', '').replace('.twb', ''),
             serialized_dashboard=serialized_json,
-            warehouse_id=warehouse_id
+            warehouse_id=req.warehouse_id
         )
 
         job.status = "DEPLOYED"
