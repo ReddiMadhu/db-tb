@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+from enum import Enum
 
 
 class ColumnMetadata(BaseModel):
@@ -100,11 +101,41 @@ class BinMetadata(BaseModel):
     formula: Optional[str] = None
 
 
+class EncodingMetadata(BaseModel):
+    """A single visual encoding from a Tableau worksheet pane."""
+    channel: str  # color | size | detail | tooltip | label | shape | path | text
+    field_name: str
+    field_type: str = ""  # dimension | measure
+    aggregation: Optional[str] = None  # SUM | AVG | COUNT | COUNTD | MIN | MAX | ATTR | MEDIAN | NONE
+    derivation: Optional[str] = None  # yr | qr | mn | dy | wk | none
+
+
+class FilterMetadata(BaseModel):
+    """A Tableau filter on a worksheet or datasource."""
+    field_name: str
+    filter_type: str = "categorical"  # categorical | quantitative | relative-date | top | wildcard
+    include_values: List[str] = Field(default_factory=list)
+    exclude_values: List[str] = Field(default_factory=list)
+    min_value: Optional[str] = None
+    max_value: Optional[str] = None
+    is_context_filter: bool = False
+    is_global: bool = False
+    scope: str = "worksheet"  # worksheet | datasource | global
+
+
+class SortMetadata(BaseModel):
+    """Sort definition for a field."""
+    field_name: str
+    direction: str = "ASC"  # ASC | DESC
+    sort_type: str = "natural"  # natural | data | field | manual
+
+
 class DatasourceMetadata(BaseModel):
     name: str
     caption: Optional[str] = None
     version: Optional[str] = None
     has_connection: bool = True
+    connection_type: Optional[str] = None  # postgres | mysql | sqlserver | oracle | snowflake | databricks | hyper
     tables: List[TableMetadata] = Field(default_factory=list)
     columns: List[ColumnMetadata] = Field(default_factory=list)
     calculated_fields: List[CalculatedFieldMetadata] = Field(default_factory=list)
@@ -112,14 +143,29 @@ class DatasourceMetadata(BaseModel):
     relationships: List[RelationshipMetadata] = Field(default_factory=list)
 
 
+class ShelfField(BaseModel):
+    """A structured shelf field entry parsed from rows/cols."""
+    field_name: str
+    derivation: Optional[str] = None  # sum | avg | cnt | yr | mn | none | etc.
+    datasource_prefix: Optional[str] = None
+    raw: str = ""  # original unparsed shelf reference
+
+
 class WorksheetMetadata(BaseModel):
     name: str
+    datasource_name: Optional[str] = None  # resolved from <datasource-dependencies>
     used_calculated_fields: List[str] = Field(default_factory=list)
     rows: List[str] = Field(default_factory=list)
     columns: List[str] = Field(default_factory=list)
+    rows_shelves: List[ShelfField] = Field(default_factory=list)
+    columns_shelves: List[ShelfField] = Field(default_factory=list)
+    encodings: List[EncodingMetadata] = Field(default_factory=list)
+    filters: List[FilterMetadata] = Field(default_factory=list)
+    sorts: List[SortMetadata] = Field(default_factory=list)
     filters_and_marks: List[str] = Field(default_factory=list)
     mark_type: Optional[str] = None
     measure_bindings: List[Dict[str, Any]] = Field(default_factory=list)
+    tooltip_text: Optional[str] = None
 
 
 class DashboardZoneMetadata(BaseModel):
@@ -138,6 +184,8 @@ class DashboardMetadata(BaseModel):
     name: str
     worksheets: List[str] = Field(default_factory=list)
     zones: List[DashboardZoneMetadata] = Field(default_factory=list)
+    size_x: int = 1000  # dashboard canvas width
+    size_y: int = 800   # dashboard canvas height
 
 
 class WorkbookMetadata(BaseModel):

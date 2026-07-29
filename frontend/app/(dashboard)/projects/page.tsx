@@ -6,6 +6,8 @@ import { FolderOpen, Plus, Search, Trash2, ArrowRight, X, Layers } from "lucide-
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
+import ConfirmationDialog from "@/components/modals/ConfirmationDialog";
+import { useToast } from "@/components/ui/ToastProvider";
 import styles from "./Projects.module.css";
 
 interface ProjectItem {
@@ -31,9 +33,13 @@ const DEFAULT_PROJECTS: ProjectItem[] = [
 ];
 
 export default function ProjectsPage() {
+  const { success } = useToast();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  // Form State
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newEnv, setNewEnv] = useState("Production Workspace (AWS)");
@@ -71,16 +77,17 @@ export default function ProjectsPage() {
     };
 
     saveProjects([item, ...projects]);
+    success(`Project "${newName}" created successfully`, "Project Created");
     setNewName("");
     setNewDesc("");
     setIsModalOpen(false);
   };
 
-  const handleDelete = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirm("Are you sure you want to delete this project?")) {
-      saveProjects(projects.filter((p) => p.id !== id));
-    }
+  const confirmDelete = () => {
+    if (!deleteId) return;
+    saveProjects(projects.filter((p) => p.id !== deleteId));
+    success("Migration project group removed", "Project Deleted");
+    setDeleteId(null);
   };
 
   const filtered = projects.filter(
@@ -154,7 +161,7 @@ export default function ProjectsPage() {
               <div className={styles.footer} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "1rem" }}>
                 <span style={{ fontSize: "0.75rem", color: "var(--text-tertiary)" }}>Target: {p.environment}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                  <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} onClick={(e) => handleDelete(p.id, e)} />
+                  <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} onClick={(e) => { e.stopPropagation(); setDeleteId(p.id); }} />
                   <Link href="/migrations" className={styles.link} style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", color: "var(--accent-orange)", fontSize: "0.85rem", fontWeight: 600 }}>
                     Browse <ArrowRight size={14} />
                   </Link>
@@ -165,6 +172,17 @@ export default function ProjectsPage() {
         </div>
       )}
 
+      {/* Confirmation Dialog for Project Deletion */}
+      <ConfirmationDialog
+        isOpen={!!deleteId}
+        title="Delete Migration Project?"
+        description="Are you sure you want to delete this migration project? All associated workbook indexes and staging links will be removed."
+        confirmLabel="Delete Project"
+        variant="danger"
+        onConfirm={confirmDelete}
+        onClose={() => setDeleteId(null)}
+      />
+
       {/* Modal */}
       {isModalOpen && (
         <div
@@ -173,8 +191,7 @@ export default function ProjectsPage() {
             top: 0, left: 0, right: 0, bottom: 0,
             background: "rgba(0,0,0,0.7)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 1000,
-            backdropFilter: "blur(4px)",
+            zIndex: 1000, backdropFilter: "blur(4px)",
           }}
         >
           <div
@@ -183,8 +200,7 @@ export default function ProjectsPage() {
               border: "1px solid var(--border-default)",
               borderRadius: "12px",
               padding: "1.75rem",
-              width: "100%",
-              maxWidth: "480px",
+              width: "100%", maxWidth: "480px",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>

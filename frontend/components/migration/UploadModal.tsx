@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, FileSpreadsheet, Loader2, AlertCircle } from "lucide-react";
+import { Upload, FileSpreadsheet, AlertCircle } from "lucide-react";
 import Button from "@/components/ui/Button";
+import { useToast } from "@/components/ui/ToastProvider";
 import { uploadWorkbook } from "@/lib/api";
 import styles from "./UploadModal.module.css";
 
@@ -13,13 +14,20 @@ interface UploadModalProps {
 
 export default function UploadModal({ onClose }: UploadModalProps) {
   const router = useRouter();
+  const { success, error: toastError } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+      const selected = e.target.files[0];
+      if (!selected.name.endsWith(".twb") && !selected.name.endsWith(".twbx")) {
+        setError("Invalid file type. Please select a valid Tableau Workbook file (.twb or .twbx)");
+        setFile(null);
+        return;
+      }
+      setFile(selected);
       setError(null);
     }
   };
@@ -31,10 +39,13 @@ export default function UploadModal({ onClose }: UploadModalProps) {
 
     try {
       const res = await uploadWorkbook(file);
+      success(`Workbook "${file.name}" uploaded & XML TOM metadata extracted`, "Upload Complete");
       onClose();
       router.push(`/migrations/${res.job_uuid}`);
     } catch (err: unknown) {
-      setError((err as Error).message || "Upload failed");
+      const msg = (err as Error).message || "Upload failed";
+      setError(msg);
+      toastError(msg, "Upload Failed");
     } finally {
       setUploading(false);
     }
@@ -80,10 +91,12 @@ export default function UploadModal({ onClose }: UploadModalProps) {
           <Button
             variant="primary"
             onClick={handleUpload}
-            disabled={!file || uploading}
-            icon={uploading ? <Loader2 size={14} className="spin" /> : <FileSpreadsheet size={14} />}
+            disabled={!file}
+            isLoading={uploading}
+            loadingText="Parsing Metadata..."
+            icon={<FileSpreadsheet size={14} />}
           >
-            {uploading ? "Parsing Metadata..." : "Upload & Parse"}
+            Upload & Parse
           </Button>
         </div>
       </div>

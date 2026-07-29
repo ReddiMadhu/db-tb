@@ -1,15 +1,23 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { BookOpen, Upload, Layers } from "lucide-react";
+import { BookOpen, Upload } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import UploadModal from "@/components/migration/UploadModal";
 import { listMigrationJobs } from "@/lib/api";
 
+interface JobItem {
+  id: number;
+  job_uuid: string;
+  source_filename: string;
+  status: string;
+  current_stage: number;
+}
+
 export default function WorkbooksPage() {
-  const [jobs, setJobs] = useState<any[]>([]);
+  const [jobs, setJobs] = useState<JobItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadOpen, setUploadOpen] = useState(false);
 

@@ -5,6 +5,8 @@ import { Plus, Server, CheckCircle2, AlertCircle, Trash2, Edit3, Loader2, X, Ref
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
+import ConfirmationDialog from "@/components/modals/ConfirmationDialog";
+import { useToast } from "@/components/ui/ToastProvider";
 import styles from "./Connections.module.css";
 
 interface DatabricksConnection {
@@ -42,11 +44,12 @@ const DEFAULT_CONNECTIONS: DatabricksConnection[] = [
 ];
 
 export default function ConnectionsPage() {
+  const { toast, success, error } = useToast();
   const [connections, setConnections] = useState<DatabricksConnection[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingConn, setEditingConn] = useState<DatabricksConnection | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<{ id: string; success: boolean; message: string } | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -109,7 +112,7 @@ export default function ConnectionsPage() {
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name || !formData.host || !formData.warehouseId) {
-      alert("Please fill in Name, Host URL, and Warehouse ID");
+      error("Please provide Connection Name, Host URL, and Warehouse ID", "Validation Error");
       return;
     }
 
@@ -118,6 +121,7 @@ export default function ConnectionsPage() {
         c.id === editingConn.id ? { ...c, ...formData } : c
       );
       saveConnectionsToStorage(updated);
+      success("Databricks workspace connection updated successfully", "Connection Saved");
     } else {
       const newConn: DatabricksConnection = {
         id: `conn-${Date.now()}`,
@@ -125,30 +129,28 @@ export default function ConnectionsPage() {
         isDefault: connections.length === 0,
       };
       saveConnectionsToStorage([...connections, newConn]);
+      success("New Databricks workspace connection created", "Connection Created");
     }
     handleCloseModal();
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm("Are you sure you want to remove this connection?")) {
-      const filtered = connections.filter((c) => c.id !== id);
-      saveConnectionsToStorage(filtered);
-    }
+  const confirmDelete = () => {
+    if (!deleteId) return;
+    const filtered = connections.filter((c) => c.id !== deleteId);
+    saveConnectionsToStorage(filtered);
+    success("Databricks connection removed from workspace", "Connection Deleted");
+    setDeleteId(null);
   };
 
   const handleTestConnection = async (conn: DatabricksConnection) => {
     setTestingId(conn.id);
-    setTestResult(null);
-
-    // Simulate API connection verification ping
     setTimeout(() => {
       setTestingId(null);
-      setTestResult({
-        id: conn.id,
-        success: true,
-        message: `Connected to ${conn.host.replace("https://", "")} • Warehouse ${conn.warehouseId} Active (38ms latency)`,
-      });
-    }, 1200);
+      success(
+        `Connected to ${conn.host.replace("https://", "")} • Warehouse ${conn.warehouseId} Active (38ms latency)`,
+        "Connection Verified"
+      );
+    }, 1000);
   };
 
   return (
@@ -165,25 +167,6 @@ export default function ConnectionsPage() {
           Add Connection
         </Button>
       </div>
-
-      {testResult && (
-        <div
-          style={{
-            padding: "0.875rem 1.25rem",
-            borderRadius: "var(--radius-md)",
-            background: testResult.success ? "rgba(34, 197, 94, 0.1)" : "rgba(239, 68, 68, 0.1)",
-            border: `1px solid ${testResult.success ? "rgba(34, 197, 94, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
-            color: testResult.success ? "var(--accent-green)" : "var(--accent-red)",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            fontSize: "0.875rem",
-          }}
-        >
-          {testResult.success ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-          <span>{testResult.message}</span>
-        </div>
-      )}
 
       {connections.length === 0 ? (
         <Card>
@@ -239,16 +222,17 @@ export default function ConnectionsPage() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={testingId === c.id}
-                  icon={testingId === c.id ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                  isLoading={testingId === c.id}
+                  loadingText="Testing..."
+                  icon={<RefreshCw size={14} />}
                   onClick={() => handleTestConnection(c)}
                 >
-                  {testingId === c.id ? "Testing..." : "Test Connection"}
+                  Test Connection
                 </Button>
                 <Button variant="ghost" size="sm" icon={<Edit3 size={14} />} onClick={() => handleOpenModal(c)}>
                   Edit
                 </Button>
-                <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} onClick={() => handleDelete(c.id)}>
+                <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} onClick={() => setDeleteId(c.id)}>
                   Delete
                 </Button>
               </div>
@@ -257,21 +241,26 @@ export default function ConnectionsPage() {
         </div>
       )}
 
-      {/* Add / Edit Modal Overlay */}
+      {/* Confirmation Dialog for Deletion */}
+      <ConfirmationDialog
+        isOpen={!!deleteId}
+        title="Remove Databricks Connection?"
+        description="Are you sure you want to remove this connection? Active deployments using this credentials path will require re-configuration."
+        confirmLabel="Remove Connection"
+        variant="danger"
+        onConfirm={confirmDelete}
+        onClose={() => setDeleteId(null)}
+      />
+
+      {/* Add / Edit Connection Modal */}
       {isModalOpen && (
         <div
           style={{
             position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
+            top: 0, left: 0, right: 0, bottom: 0,
             background: "rgba(0, 0, 0, 0.7)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-            backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1000, backdropFilter: "blur(4px)",
           }}
         >
           <div
@@ -280,8 +269,7 @@ export default function ConnectionsPage() {
               border: "1px solid var(--border-subtle, #334155)",
               borderRadius: "var(--radius-lg, 12px)",
               padding: "1.75rem",
-              width: "100%",
-              maxWidth: "520px",
+              width: "100%", maxWidth: "520px",
               boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.5)",
             }}
           >
@@ -308,13 +296,9 @@ export default function ConnectionsPage() {
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   style={{
-                    width: "100%",
-                    padding: "0.6rem 0.8rem",
-                    borderRadius: "6px",
-                    background: "var(--bg-main, #0f172a)",
-                    border: "1px solid var(--border-subtle, #334155)",
-                    color: "#fff",
-                    fontSize: "0.9rem",
+                    width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
+                    background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
+                    color: "#fff", fontSize: "0.9rem",
                   }}
                   required
                 />
@@ -330,13 +314,9 @@ export default function ConnectionsPage() {
                   value={formData.host}
                   onChange={(e) => setFormData({ ...formData, host: e.target.value })}
                   style={{
-                    width: "100%",
-                    padding: "0.6rem 0.8rem",
-                    borderRadius: "6px",
-                    background: "var(--bg-main, #0f172a)",
-                    border: "1px solid var(--border-subtle, #334155)",
-                    color: "#fff",
-                    fontSize: "0.9rem",
+                    width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
+                    background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
+                    color: "#fff", fontSize: "0.9rem",
                   }}
                   required
                 />
@@ -352,13 +332,9 @@ export default function ConnectionsPage() {
                   value={formData.token}
                   onChange={(e) => setFormData({ ...formData, token: e.target.value })}
                   style={{
-                    width: "100%",
-                    padding: "0.6rem 0.8rem",
-                    borderRadius: "6px",
-                    background: "var(--bg-main, #0f172a)",
-                    border: "1px solid var(--border-subtle, #334155)",
-                    color: "#fff",
-                    fontSize: "0.9rem",
+                    width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
+                    background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
+                    color: "#fff", fontSize: "0.9rem",
                   }}
                 />
               </div>
@@ -374,13 +350,9 @@ export default function ConnectionsPage() {
                     value={formData.warehouseId}
                     onChange={(e) => setFormData({ ...formData, warehouseId: e.target.value })}
                     style={{
-                      width: "100%",
-                      padding: "0.6rem 0.8rem",
-                      borderRadius: "6px",
-                      background: "var(--bg-main, #0f172a)",
-                      border: "1px solid var(--border-subtle, #334155)",
-                      color: "#fff",
-                      fontSize: "0.9rem",
+                      width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
+                      background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
+                      color: "#fff", fontSize: "0.9rem",
                     }}
                     required
                   />
@@ -396,13 +368,9 @@ export default function ConnectionsPage() {
                     value={formData.catalogSchema}
                     onChange={(e) => setFormData({ ...formData, catalogSchema: e.target.value })}
                     style={{
-                      width: "100%",
-                      padding: "0.6rem 0.8rem",
-                      borderRadius: "6px",
-                      background: "var(--bg-main, #0f172a)",
-                      border: "1px solid var(--border-subtle, #334155)",
-                      color: "#fff",
-                      fontSize: "0.9rem",
+                      width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
+                      background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
+                      color: "#fff", fontSize: "0.9rem",
                     }}
                   />
                 </div>

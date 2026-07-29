@@ -16,8 +16,10 @@ from app.models.metadata import (
     WorkbookMetadata, DatasourceMetadata, TableMetadata, ColumnMetadata,
     CalculatedFieldMetadata, WorksheetMetadata, DashboardMetadata, DashboardZoneMetadata,
     JoinRelationship, RelationshipMetadata, ParameterMetadata, ActionMetadata,
-    HierarchyMetadata, GroupMetadata, SetMetadata, BinMetadata
+    HierarchyMetadata, GroupMetadata, SetMetadata, BinMetadata,
+    EncodingMetadata, FilterMetadata, SortMetadata, ShelfField
 )
+
 
 # ── Tableau shelf derivation constants ─────────────────────────────────────────
 TABLEAU_DERIVATIONS = (
@@ -147,6 +149,304 @@ def _infer_source_tables(formula: str, alias_map: dict) -> list:
         if info:
             tables.add(info["table"])
     return sorted(tables)
+
+def _parse_shelf_fields(shelf_text: str, ds_prefixes: list) -> list:
+    """Parse a cols/rows shelf text into structured ShelfField entries.
+    
+    Tableau shelf text looks like:
+      [federated.0wk1f8a0n6kgvh1g3cimq0gxkqe7].[none:Ship Mode:nk]
+      [federated.0wk1f8a0n6kgvh1g3cimq0gxkqe7].[sum:Sales:qk]
+    """
+    if not shelf_text:
+        return []
+    fields = []
+    # Match full bracket references including datasource prefix
+    for match in re.finditer(r'(?:\[([^\]]+)\]\.)?\[([^\]]+)\]', shelf_text):
+        ds_prefix = match.group(1) or ""
+        field_ref = match.group(2) or ""
+        # Parse derivation:field:qualifier pattern
+        deriv_match = re.match(r'^(' + '|'.join(TABLEAU_DERIVATIONS) + r'):(.+?)(?::(nk|qk|ok|tk))?$', field_ref, re.IGNORECASE)
+        if deriv_match:
+            derivation = deriv_match.group(1).lower()
+            field_name = deriv_match.group(2).strip()
+        else:
+            derivation = None
+            field_name = field_ref.strip()
+        
+        # Clean field name
+        clean_name = _clean_field(f"[{field_name}]", ds_prefixes)
+        fields.append(ShelfField(
+            field_name=clean_name,
+            derivation=derivation,
+            datasource_prefix=ds_prefix if ds_prefix else None,
+            raw=match.group(0)
+        ))
+    return fields
+
+
+def _extract_worksheet_encodings(ws_el, ds_prefixes: list) -> list:
+    """Extract visual encoding shelves from worksheet panes.
+    
+    Tableau stores encodings in:
+      <worksheet>/<table>/<panes>/<pane>/<encodings>/<encoding>
+    Each <encoding> has type (color, size, detail, tooltip, label, shape, path)
+    and field references.
+    """
+    encodings = []
+    # Try multiple XPaths for different Tableau versions
+    encoding_nodes = (
+        ws_el.xpath(".//panes/pane/encodings/encoding") or
+        ws_el.xpath(".//table/panes/pane/encodings/encoding") or
+        ws_el.xpath(".//view/panes/pane/encodings/encoding")
+    )
+    for enc in encoding_nodes:
+        channel = enc.get("type", enc.get("attr", ""))
+        if not channel:
+            continue
+        # Field references inside encoding
+        for field_ref in enc.xpath(".//field-ref") + enc.xpath(".//datasource-column-ref"):
+            fname = field_ref.get("field", field_ref.get("name", ""))
+            if fname:
+                clean = _clean_field(fname, ds_prefixes)
+                encodings.append(EncodingMetadata(
+                    channel=channel.lower(),
+                    field_name=clean,
+                    field_type="",
+                    aggregation=None,
+                    derivation=None
+                ))
+        # Also check for direct @field attribute on encoding
+        enc_field = enc.get("field", "")
+        if enc_field and not enc.xpath(".//field-ref") and not enc.xpath(".//datasource-column-ref"):
+            clean = _clean_field(enc_field, ds_prefixes)
+            encodings.append(EncodingMetadata(
+                channel=channel.lower(),
+                field_name=clean,
+                field_type="",
+                aggregation=None,
+                derivation=None
+            ))
+    
+    # Also extract from mark encodings: <mark class="..."><encoding .../>
+    for mark_enc in ws_el.xpath(".//panes/pane/mark/encoding") + ws_el.xpath(".//mark-encodings/encoding"):
+        channel = mark_enc.get("type", mark_enc.get("attr", ""))
+        field = mark_enc.get("field", "")
+        if channel and field:
+            clean = _clean_field(field, ds_prefixes)
+            deriv_m = DERIV_RE.match(field.strip("[]"))
+            encodings.append(EncodingMetadata(
+                channel=channel.lower(),
+                field_name=clean,
+                field_type="",
+                aggregation=deriv_m.group(1).upper() if deriv_m else None,
+                derivation=None
+            ))
+    
+    return encodings
+
+
+def _extract_worksheet_filters(ws_el, ds_prefixes: list) -> list:
+    """Extract filter definitions from a worksheet.
+    
+    Tableau stores filters at:
+      <worksheet>/<table>/<view>/<filter ...>
+      <worksheet>/<table>/<filter-shelf>/<filter ...>
+    """
+    filters = []
+    filter_nodes = (
+        ws_el.xpath(".//filter[@column]") or
+        ws_el.xpath(".//filter[@field]")
+    )
+    for filt in filter_nodes:
+        field = filt.get("column", filt.get("field", ""))
+        if not field:
+            continue
+        clean_field = _clean_field(field, ds_prefixes)
+        
+        # Determine filter type
+        ftype = "categorical"
+        if filt.get("type") == "quantitative":
+            ftype = "quantitative"
+        elif filt.get("class") == "relative-date":
+            ftype = "relative-date"
+        elif filt.get("class") == "top":
+            ftype = "top"
+        elif filt.get("class") == "wildcard":
+            ftype = "wildcard"
+        
+        # Extract include/exclude values
+        include_vals = []
+        exclude_vals = []
+        for gf in filt.xpath(".//groupfilter"):
+            func = gf.get("function", "")
+            if func == "member":
+                member = gf.get("member", "")
+                if member:
+                    include_vals.append(member.strip('"'))
+            elif func == "none":
+                # Exclusion
+                for sub in gf.xpath(".//groupfilter[@function='member']"):
+                    m = sub.get("member", "")
+                    if m:
+                        exclude_vals.append(m.strip('"'))
+        
+        # Quantitative range
+        min_val = filt.get("min")
+        max_val = filt.get("max")
+        
+        is_context = filt.get("context", "false") == "true"
+        
+        filters.append(FilterMetadata(
+            field_name=clean_field,
+            filter_type=ftype,
+            include_values=include_vals,
+            exclude_values=exclude_vals,
+            min_value=min_val,
+            max_value=max_val,
+            is_context_filter=is_context,
+            is_global=False,
+            scope="worksheet"
+        ))
+    return filters
+
+
+def _extract_worksheet_sorts(ws_el, ds_prefixes: list) -> list:
+    """Extract sort definitions from a worksheet."""
+    sorts = []
+    for sort_el in ws_el.xpath(".//sort"):
+        field = sort_el.get("column", sort_el.get("field", ""))
+        if not field:
+            continue
+        clean = _clean_field(field, ds_prefixes)
+        direction = sort_el.get("direction", "ASC").upper()
+        sort_type = sort_el.get("type", "natural")
+        sorts.append(SortMetadata(
+            field_name=clean,
+            direction=direction,
+            sort_type=sort_type
+        ))
+    return sorts
+
+
+def _resolve_worksheet_datasource(ws_el, ds_names: list) -> str:
+    """Resolve which datasource a worksheet uses from <datasource-dependencies>."""
+    # Primary method: <datasource-dependencies> element
+    ds_deps = ws_el.xpath(".//datasource-dependencies[@datasource]")
+    if ds_deps:
+        # Return the first non-Parameters datasource
+        for dep in ds_deps:
+            ds_name = dep.get("datasource", "")
+            if ds_name and ds_name != "Parameters":
+                return ds_name
+    
+    # Fallback: check <datasources> inside the worksheet's table
+    for ds_ref in ws_el.xpath(".//table/view/datasources/datasource"):
+        ds_name = ds_ref.get("name", "")
+        if ds_name and ds_name != "Parameters":
+            return ds_name
+    
+    # Last fallback: first available datasource
+    return ds_names[0] if ds_names else ""
+
+
+def _extract_used_calc_fields(ws_el, ds_prefixes: list, calc_field_names: set) -> list:
+    """Detect which calculated fields are referenced by a worksheet."""
+    used = []
+    # Check cols, rows, and encoding references
+    for text_el in [ws_el.find(".//cols"), ws_el.find(".//rows")]:
+        if text_el is not None and text_el.text:
+            for bracket_ref in re.findall(r'\[([^\]]+)\]', text_el.text):
+                clean = _clean_field(f"[{bracket_ref}]", ds_prefixes)
+                if clean in calc_field_names and clean not in used:
+                    used.append(clean)
+    
+    # Check encoding field references
+    for enc in ws_el.xpath(".//encoding[@field]") + ws_el.xpath(".//panes/pane/encodings/encoding"):
+        field = enc.get("field", "")
+        if field:
+            clean = _clean_field(field, ds_prefixes)
+            if clean in calc_field_names and clean not in used:
+                used.append(clean)
+    
+    return used
+
+
+def _extract_mark_type(ws_el) -> str:
+    """Extract mark type from the worksheet, checking multiple locations.
+    
+    Tableau stores mark type in:
+      1. <panes>/<pane>/<mark class="...">  (most specific)
+      2. <table>/<panes>/<pane>/<mark class="...">
+      3. <style>/<mark class="...">  (fallback)
+    """
+    # Most reliable: pane-level mark
+    pane_mark = ws_el.find(".//panes/pane/mark[@class]")
+    if pane_mark is not None:
+        return pane_mark.get("class", "Automatic")
+    
+    # Fallback: mark-class element
+    for mc in ws_el.xpath(".//mark-class"):
+        mark_type = mc.get("class", mc.get("mark", ""))
+        if mark_type:
+            return mark_type
+    
+    # Last fallback: style mark
+    style_mark = ws_el.find(".//style/mark")
+    if style_mark is not None:
+        return style_mark.get("class", "Automatic")
+    
+    return "Automatic"
+
+
+def _extract_tooltip_text(ws_el) -> str:
+    """Extract tooltip text content."""
+    tooltip = ws_el.find(".//tooltip")
+    if tooltip is not None:
+        formatted = tooltip.find(".//formatted-text")
+        if formatted is not None:
+            # Concatenate all run texts
+            runs = formatted.xpath(".//run/text()")
+            if runs:
+                return " ".join(runs)
+        if tooltip.text:
+            return tooltip.text.strip()
+    return ""
+
+
+def _parse_dashboard_zones(zone_el, ds_prefixes: list) -> DashboardZoneMetadata:
+    """Recursively parse a dashboard zone and its children."""
+    zone_id = int(zone_el.get("id", "0") or "0")
+    name = zone_el.get("name")
+    
+    # Determine zone type
+    zone_type = "container"
+    if zone_el.get("type") == "text":
+        zone_type = "text"
+    elif name:
+        zone_type = "worksheet"
+    elif zone_el.get("type-v2") == "filter":
+        zone_type = "filter"
+    elif zone_el.get("param"):
+        zone_type = "param"
+    
+    x = int(zone_el.get("x", "0") or "0")
+    y = int(zone_el.get("y", "0") or "0")
+    w = int(zone_el.get("w", "0") or "0")
+    h = int(zone_el.get("h", "0") or "0")
+    is_floating = zone_el.get("is-floating", "false") == "true" or zone_el.get("type") == "floating"
+    
+    children = []
+    for child_zone in zone_el.xpath("./zone"):
+        children.append(_parse_dashboard_zones(child_zone, ds_prefixes))
+    
+    return DashboardZoneMetadata(
+        zone_id=zone_id,
+        name=name,
+        zone_type=zone_type,
+        x=x, y=y, w=w, h=h,
+        is_floating=is_floating,
+        children=children
+    )
 
 
 # ── 14 Extraction Functions ───────────────────────────────────────────────────
@@ -500,13 +800,26 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         bins=extract_bins(root, ds_prefixes),
     )
 
+    # Build set of all calculated field names for reference detection
+    all_calc_names = set()
+
     # Parse datasources
+    ds_name_list = []
     for ds_el in root.xpath("//datasource[@name and not(@name='Parameters')]"):
         ds_name = ds_el.attrib.get("name", "Unknown")
+        ds_name_list.append(ds_name)
+        
+        # Detect connection type
+        conn_type = None
+        conn_el = ds_el.find(".//connection[@class]")
+        if conn_el is not None:
+            conn_type = conn_el.get("class", "")
+        
         ds_meta = DatasourceMetadata(
             name=ds_name,
             caption=ds_el.attrib.get("caption"),
             version=ds_el.attrib.get("version"),
+            connection_type=conn_type,
             tables=extract_tables(ds_el, ds_prefixes),
             columns=extract_columns(ds_el, ds_prefixes, caption_map, alias_map),
             joins=extract_joins(ds_el, ds_prefixes),
@@ -515,8 +828,10 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         # Extract calculated fields from columns
         for col_meta in ds_meta.columns:
             if col_meta.formula:
+                cf_name = col_meta.caption or col_meta.internal_name
+                all_calc_names.add(cf_name)
                 ds_meta.calculated_fields.append(CalculatedFieldMetadata(
-                    name=col_meta.caption or col_meta.internal_name,
+                    name=cf_name,
                     caption=col_meta.caption,
                     formula=col_meta.formula,
                     datatype=col_meta.datatype,
@@ -525,32 +840,81 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
                 ))
         workbook.datasources.append(ds_meta)
 
-    # Parse worksheets
+    # Parse worksheets — comprehensive extraction
     for ws_el in root.xpath("//worksheet[@name]"):
         ws_name = ws_el.attrib.get("name")
-        ws_meta = WorksheetMetadata(name=ws_name)
-        # Extract columns & rows shelves
+        
+        # Parse shelf fields (structured)
         cols_el = ws_el.find(".//cols")
-        if cols_el is not None and cols_el.text:
-            ws_meta.columns = re.findall(r'\[([^\]]+)\]', cols_el.text)
         rows_el = ws_el.find(".//rows")
-        if rows_el is not None and rows_el.text:
-            ws_meta.rows = re.findall(r'\[([^\]]+)\]', rows_el.text)
-
-        # Mark type
-        style_mark = ws_el.find(".//style/mark")
-        if style_mark is not None:
-            ws_meta.mark_type = style_mark.attrib.get("class", "Automatic")
+        cols_text = cols_el.text if cols_el is not None and cols_el.text else ""
+        rows_text = rows_el.text if rows_el is not None and rows_el.text else ""
+        
+        cols_shelves = _parse_shelf_fields(cols_text, ds_prefixes)
+        rows_shelves = _parse_shelf_fields(rows_text, ds_prefixes)
+        
+        # Legacy flat field name lists (backward compat)
+        cols_flat = [sf.field_name for sf in cols_shelves] if cols_shelves else re.findall(r'\[([^\]]+)\]', cols_text)
+        rows_flat = [sf.field_name for sf in rows_shelves] if rows_shelves else re.findall(r'\[([^\]]+)\]', rows_text)
+        
+        # Extract all the rich metadata
+        mark_type = _extract_mark_type(ws_el)
+        encodings = _extract_worksheet_encodings(ws_el, ds_prefixes)
+        filters = _extract_worksheet_filters(ws_el, ds_prefixes)
+        sorts = _extract_worksheet_sorts(ws_el, ds_prefixes)
+        datasource_name = _resolve_worksheet_datasource(ws_el, ds_name_list)
+        used_calcs = _extract_used_calc_fields(ws_el, ds_prefixes, all_calc_names)
+        tooltip = _extract_tooltip_text(ws_el)
+        
+        # Build measure bindings from shelf derivations
+        measure_bindings = []
+        for sf in cols_shelves + rows_shelves:
+            if sf.derivation and sf.derivation in ('sum', 'avg', 'cnt', 'cntd', 'min', 'max', 'attr', 'med'):
+                measure_bindings.append({
+                    "field": sf.field_name,
+                    "aggregation": sf.derivation.upper(),
+                    "shelf": "columns" if sf in cols_shelves else "rows"
+                })
+        
+        ws_meta = WorksheetMetadata(
+            name=ws_name,
+            datasource_name=datasource_name,
+            columns=cols_flat,
+            rows=rows_flat,
+            columns_shelves=cols_shelves,
+            rows_shelves=rows_shelves,
+            mark_type=mark_type,
+            encodings=encodings,
+            filters=filters,
+            sorts=sorts,
+            used_calculated_fields=used_calcs,
+            measure_bindings=measure_bindings,
+            tooltip_text=tooltip
+        )
         workbook.worksheets.append(ws_meta)
 
-    # Parse dashboards
+    # Parse dashboards — with zone geometry
     for db_el in root.xpath("//dashboard[@name]"):
         db_name = db_el.attrib.get("name")
-        db_meta = DashboardMetadata(name=db_name)
-        for zone in db_el.xpath(".//zone[@name]"):
-            ws_ref = zone.attrib.get("name")
+        
+        # Dashboard canvas size
+        size_el = db_el.find(".//size")
+        size_x = int(size_el.get("maxwidth", size_el.get("width", "1000")) or "1000") if size_el is not None else 1000
+        size_y = int(size_el.get("maxheight", size_el.get("height", "800")) or "800") if size_el is not None else 800
+        
+        db_meta = DashboardMetadata(name=db_name, size_x=size_x, size_y=size_y)
+        
+        # Extract worksheet references and zone geometry
+        zones = []
+        for zone in db_el.xpath(".//zone"):
+            ws_ref = zone.get("name")
             if ws_ref and ws_ref not in db_meta.worksheets:
                 db_meta.worksheets.append(ws_ref)
+            # Parse zone geometry recursively
+            if zone.getparent() is not None and zone.getparent().tag == "zones":
+                zones.append(_parse_dashboard_zones(zone, ds_prefixes))
+        
+        db_meta.zones = zones
         workbook.dashboards.append(db_meta)
 
     return workbook

@@ -6,11 +6,13 @@ from app.services.compiler.sql_translator import translate_sql_dialect
 class TestCompiler(unittest.TestCase):
     def test_compile_lod_fixed(self):
         res = compile_expression_to_sql("{ FIXED [Region] : SUM([Sales]) }")
-        self.assertIn("OVER (PARTITION BY Region)", res["sql"])
+        self.assertIn("LOD_FIXED(`Region`)", res["sql"])
+        self.assertIn("SUM(`Sales`)", res["sql"])
         self.assertTrue(res["is_lod"])
 
     def test_compile_lod_include(self):
         res = compile_expression_to_sql("{ INCLUDE [State] : AVG([Profit]) }")
+        self.assertIn("LOD_INCLUDE(`State`)", res["sql"])
         self.assertIn("AVG", res["sql"])
         self.assertTrue(res["is_lod"])
 
@@ -20,7 +22,7 @@ class TestCompiler(unittest.TestCase):
 
     def test_compile_countd(self):
         res = compile_expression_to_sql("COUNTD([Customer_ID])")
-        self.assertEqual(res["sql"], "COUNT(DISTINCT Customer_ID)")
+        self.assertIn("COUNT(DISTINCT `Customer_ID`)", res["sql"])
 
     def test_sqlglot_transpile(self):
         res = translate_sql_dialect("SELECT GETDATE() AS now", source_dialect="tsql", target_dialect="databricks")

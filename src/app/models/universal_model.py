@@ -6,9 +6,16 @@ from typing import List, Dict, Any, Optional
 class ChartType(str, Enum):
     BAR = "BAR"
     LINE = "LINE"
+    AREA = "AREA"
     SCATTER = "SCATTER"
     PIE = "PIE"
+    HEATMAP = "HEATMAP"
+    HISTOGRAM = "HISTOGRAM"
+    COMBO = "COMBO"
+    MAP = "MAP"
+    BOXPLOT = "BOXPLOT"
     TABLE = "TABLE"
+    PIVOT = "PIVOT"
     COUNTER = "COUNTER"
     FILTER_MULTI = "FILTER_MULTI"
     FILTER_SINGLE = "FILTER_SINGLE"
@@ -58,6 +65,20 @@ class IntermediateEncoding(BaseModel):
     data_type: str = "string"
 
 
+class IntermediateQueryField(BaseModel):
+    """A field expression for a Lakeview widget query."""
+    expression: str  # e.g. "SUM(`fare_amount`)" or "`region`"
+    name: str        # alias referenced by spec encodings
+    data_type: str = "string"
+
+
+class IntermediateFilter(BaseModel):
+    """A filter binding for a Lakeview filter widget."""
+    field_name: str
+    dataset_name: str
+    filter_type: str = "multi-select"  # multi-select | single-select | date-range | date
+
+
 class IntermediateDataset(BaseModel):
     name: str
     sql_query: str
@@ -71,9 +92,12 @@ class IntermediateWidget(BaseModel):
     chart_type: ChartType
     dataset_name: Optional[str] = None
     encodings: List[IntermediateEncoding] = Field(default_factory=list)
+    query_fields: List[IntermediateQueryField] = Field(default_factory=list)
+    filters: List[IntermediateFilter] = Field(default_factory=list)
     position: IntermediatePosition = Field(default_factory=IntermediatePosition)
     title: Optional[str] = None
     description: Optional[str] = None
+    disaggregated: bool = False  # True for table/pivot, False for aggregated charts
     properties: Dict[str, Any] = Field(default_factory=dict)
 
 

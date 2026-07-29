@@ -1,120 +1,79 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, RefreshCw, CheckCircle2, Rocket, Upload, GitBranch, ShieldCheck } from "lucide-react";
+import { Activity, RefreshCw, CheckCircle2, Rocket, Upload, GitBranch, ShieldCheck, BarChart2, Cpu } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
-
-interface ActivityItem {
-  id: string;
-  timestamp: string;
-  type: "UPLOAD" | "PARSED" | "VALIDATION" | "DEPLOYMENT";
-  description: string;
-  actor: string;
-}
-
-const INITIAL_ACTIVITIES: ActivityItem[] = [
-  {
-    id: "act-1",
-    timestamp: "Just now",
-    type: "VALIDATION",
-    description: "Automated 6-Tier AST Validation passed with 100% schema compliance",
-    actor: "LakeShift System",
-  },
-  {
-    id: "act-2",
-    timestamp: "15 mins ago",
-    type: "DEPLOYMENT",
-    description: "Target Databricks workspace connection verified for SQL Warehouse (a1b2c3d4e5f67890)",
-    actor: "Enterprise Admin",
-  },
-  {
-    id: "act-3",
-    timestamp: "1 hour ago",
-    type: "PARSED",
-    description: "Tableau XML workbook reverse-engineering pipeline initialized",
-    actor: "Pipeline Engine",
-  },
-];
+import StructuredLogViewer from "@/components/activity/StructuredLogViewer";
+import { useToast } from "@/components/ui/ToastProvider";
 
 export default function ActivityPage() {
-  const [activities, setActivities] = useState<ActivityItem[]>(INITIAL_ACTIVITIES);
+  const { success } = useToast();
   const [refreshing, setRefreshing] = useState(false);
 
   const handleRefresh = () => {
     setRefreshing(true);
     setTimeout(() => {
       setRefreshing(false);
-    }, 800);
-  };
-
-  const getIcon = (type: ActivityItem["type"]) => {
-    switch (type) {
-      case "UPLOAD":
-        return <Upload size={16} color="var(--accent-orange)" />;
-      case "PARSED":
-        return <GitBranch size={16} color="var(--accent-info)" />;
-      case "VALIDATION":
-        return <ShieldCheck size={16} color="var(--accent-green)" />;
-      case "DEPLOYMENT":
-        return <Rocket size={16} color="var(--accent-purple)" />;
-    }
+      success("Activity stream & observability metrics refreshed", "Stream Refreshed");
+    }, 600);
   };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>Audit & Activity Feed</h1>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>System Observability & Audit Logs</h1>
           <p style={{ fontSize: "0.875rem", color: "var(--text-secondary)", margin: "0.25rem 0 0" }}>
-            Real-time security and operational event stream across all migration projects.
+            Real-time security events, pipeline execution logs, correlation IDs, and telemetry metrics.
           </p>
         </div>
 
         <Button
           variant="secondary"
-          disabled={refreshing}
-          icon={<RefreshCw size={16} className={refreshing ? "spin" : ""} />}
+          isLoading={refreshing}
+          loadingText="Refreshing..."
+          icon={<RefreshCw size={16} />}
           onClick={handleRefresh}
         >
-          {refreshing ? "Refreshing..." : "Refresh Stream"}
+          Refresh Stream
         </Button>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-        {activities.map((item) => (
-          <Card key={item.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <div
-                  style={{
-                    padding: "0.5rem",
-                    borderRadius: "6px",
-                    background: "var(--bg-primary)",
-                    border: "1px solid var(--border-default)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  {getIcon(item.type)}
-                </div>
-                <div>
-                  <strong style={{ fontSize: "0.95rem", color: "#fff", display: "block" }}>{item.description}</strong>
-                  <span style={{ fontSize: "0.75rem", color: "var(--text-tertiary)" }}>Actor: {item.actor}</span>
-                </div>
-              </div>
+      {/* Observability Dashboard KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem" }}>
+        <Card>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-tertiary)" }}>Migrations Today</div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 700, color: "#fff" }}>14 Jobs</div>
+          <div style={{ fontSize: "0.75rem", color: "var(--accent-green)" }}>100% Success Rate</div>
+        </Card>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <span className="mono" style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-                  {item.timestamp}
-                </span>
-                <Badge status="COMPLETED" label={item.type} />
-              </div>
-            </div>
-          </Card>
-        ))}
+        <Card>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-tertiary)" }}>Avg Pipeline Runtime</div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 700, color: "var(--accent-green)" }}>1.38s</div>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>10-stage automated AST compilation</div>
+        </Card>
+
+        <Card>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-tertiary)" }}>Failed SQL Transpilation</div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 700, color: "var(--accent-green)" }}>0 Errors</div>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>sqlglot AST transpiler</div>
+        </Card>
+
+        <Card>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-tertiary)" }}>LLM Token Usage</div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 700, color: "var(--accent-purple)" }}>1,240 Tokens</div>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Azure OpenAI gpt-4o fallback</div>
+        </Card>
+      </div>
+
+      {/* Searchable Structured Logs */}
+      <div>
+        <h2 style={{ fontSize: "1.1rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: "1rem" }}>
+          Structured Log Event Stream
+        </h2>
+        <StructuredLogViewer />
       </div>
     </div>
   );

@@ -1,41 +1,47 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Save, CheckCircle2, Cpu, Globe, Key, Layers, Server } from "lucide-react";
+import { useState } from "react";
+import { Save } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
+import { useToast } from "@/components/ui/ToastProvider";
 import styles from "./Settings.module.css";
 
 export default function SettingsPage() {
-  const [provider, setProvider] = useState("azure");
-  const [apiKey, setApiKey] = useState("");
-  const [azureEndpoint, setAzureEndpoint] = useState("");
-  const [azureDeployment, setAzureDeployment] = useState("gpt-4o");
-  const [azureApiVersion, setAzureApiVersion] = useState("2024-02-15-preview");
-  const [savedNotice, setSavedNotice] = useState(false);
-
-  useEffect(() => {
-    const savedProv = localStorage.getItem("lakeview_llm_provider");
-    const savedKey = localStorage.getItem("lakeview_api_key");
-    const savedEnd = localStorage.getItem("lakeview_azure_endpoint");
-    const savedDep = localStorage.getItem("lakeview_azure_deployment");
-    const savedVer = localStorage.getItem("lakeview_azure_version");
-
-    if (savedProv) setProvider(savedProv);
-    if (savedKey) setApiKey(savedKey);
-    if (savedEnd) setAzureEndpoint(savedEnd);
-    if (savedDep) setAzureDeployment(savedDep);
-    if (savedVer) setAzureApiVersion(savedVer);
-  }, []);
+  const { success } = useToast();
+  const [provider, setProvider] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("lakeview_llm_provider") || "azure";
+    return "azure";
+  });
+  const [apiKey, setApiKey] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("lakeview_api_key") || "";
+    return "";
+  });
+  const [azureEndpoint, setAzureEndpoint] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("lakeview_azure_endpoint") || "";
+    return "";
+  });
+  const [azureDeployment, setAzureDeployment] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("lakeview_azure_deployment") || "gpt-4o";
+    return "gpt-4o";
+  });
+  const [azureApiVersion, setAzureApiVersion] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("lakeview_azure_version") || "2024-02-15-preview";
+    return "2024-02-15-preview";
+  });
+  const [saving, setSaving] = useState(false);
 
   const handleSave = () => {
-    localStorage.setItem("lakeview_llm_provider", provider);
-    localStorage.setItem("lakeview_api_key", apiKey);
-    localStorage.setItem("lakeview_azure_endpoint", azureEndpoint);
-    localStorage.setItem("lakeview_azure_deployment", azureDeployment);
-    localStorage.setItem("lakeview_azure_version", azureApiVersion);
-    setSavedNotice(true);
-    setTimeout(() => setSavedNotice(false), 3000);
+    setSaving(true);
+    setTimeout(() => {
+      localStorage.setItem("lakeview_llm_provider", provider);
+      localStorage.setItem("lakeview_api_key", apiKey);
+      localStorage.setItem("lakeview_azure_endpoint", azureEndpoint);
+      localStorage.setItem("lakeview_azure_deployment", azureDeployment);
+      localStorage.setItem("lakeview_azure_version", azureApiVersion);
+      setSaving(false);
+      success("Platform & Azure AI configuration saved successfully!", "Settings Saved");
+    }, 600);
   };
 
   return (
@@ -48,29 +54,16 @@ export default function SettingsPage() {
           </p>
         </div>
 
-        <Button variant="primary" icon={<Save size={16} />} onClick={handleSave}>
+        <Button
+          variant="primary"
+          isLoading={saving}
+          loadingText="Saving..."
+          icon={<Save size={16} />}
+          onClick={handleSave}
+        >
           Save Settings
         </Button>
       </div>
-
-      {savedNotice && (
-        <div
-          style={{
-            padding: "0.75rem 1.25rem",
-            borderRadius: "6px",
-            background: "rgba(46, 204, 113, 0.12)",
-            border: "1px solid rgba(46, 204, 113, 0.3)",
-            color: "var(--accent-green)",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            fontSize: "0.875rem",
-          }}
-        >
-          <CheckCircle2 size={18} />
-          <span>Azure AI & LLM platform settings saved successfully!</span>
-        </div>
-      )}
 
       <div className={styles.section}>
         <Card>

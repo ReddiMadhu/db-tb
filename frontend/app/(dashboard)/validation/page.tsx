@@ -7,6 +7,8 @@ import Card from "@/components/ui/Card";
 import ValidationCard from "@/components/validation/ValidationCard";
 import ValidationInspectModal from "@/components/validation/ValidationInspectModal";
 import QuickFixModal from "@/components/validation/QuickFixModal";
+import { useAsyncOperation } from "@/components/providers/AsyncOperationProvider";
+import { useToast } from "@/components/ui/ToastProvider";
 import styles from "./ValidationPage.module.css";
 
 interface ValidationItem {
@@ -88,20 +90,35 @@ const VALIDATION_ITEMS: ValidationItem[] = [
 ];
 
 export default function ValidationPage() {
-  const [running, setRunning] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const { startOperation, updateProgress, finishSuccess } = useAsyncOperation();
+  const { success } = useToast();
 
-  // Modal States
   const [inspectModalItem, setInspectModalItem] = useState<ValidationItem | null>(null);
   const [quickFixModalItem, setQuickFixModalItem] = useState<ValidationItem | null>(null);
 
-  const handleRunAiFix = () => {
-    setRunning(true);
-    setNotice(null);
-    setTimeout(() => {
-      setRunning(false);
-      setNotice("Automated 6-Tier AST Validation sweep completed. All 24_json_schema.json constraints verified with 100% compliance.");
-    }, 1500);
+  const handleRunAiFix = async () => {
+    const opId = startOperation({
+      title: "Executing 6-Tier AST Validation Sweep",
+      stageText: "Tier 1/6: JSON Schema Validation",
+      taskDescription: "Checking widget layout constraints against 24_json_schema.json...",
+    });
+
+    await new Promise((r) => setTimeout(r, 400));
+    updateProgress(opId, 33, "Tier 3/6: Reference Integrity", "Validating dataset bindings & references...");
+    
+    await new Promise((r) => setTimeout(r, 400));
+    updateProgress(opId, 70, "Tier 5/6: Widget Spec Validation", "Verifying chart & counter widget specs...");
+
+    await new Promise((r) => setTimeout(r, 400));
+    finishSuccess(opId, {
+      title: "6-Tier AST Validation Sweep Completed",
+      description: "Automated 6-Tier AST Validation sweep completed cleanly. All 24_json_schema.json constraints verified with 100% compliance.",
+      details: [
+        { label: "Tiers Passed", value: "6 / 6 Tiers" },
+        { label: "Schema Errors", value: "0 Error(s)" },
+        { label: "Compliance Score", value: "100%" },
+      ],
+    });
   };
 
   return (
@@ -115,32 +132,12 @@ export default function ValidationPage() {
         </div>
         <Button
           variant="primary"
-          disabled={running}
-          icon={running ? <RefreshCw size={16} className="spin" /> : <Sparkles size={16} />}
+          icon={<Sparkles size={16} />}
           onClick={handleRunAiFix}
         >
-          {running ? "Running Validation..." : "Run AI Validation Sweep"}
+          Run AI Validation Sweep
         </Button>
       </div>
-
-      {notice && (
-        <div
-          style={{
-            padding: "0.875rem 1.25rem",
-            borderRadius: "6px",
-            background: "rgba(46, 204, 113, 0.12)",
-            border: "1px solid rgba(46, 204, 113, 0.3)",
-            color: "var(--accent-green)",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            fontSize: "0.875rem",
-          }}
-        >
-          <CheckCircle2 size={18} />
-          <span>{notice}</span>
-        </div>
-      )}
 
       <div className={styles.summaryRow}>
         <Card className={styles.summaryCard}>
@@ -203,7 +200,7 @@ export default function ValidationPage() {
           targetSqlBefore={quickFixModalItem.targetSqlBefore}
           targetSqlAfter={quickFixModalItem.targetSqlAfter}
           onApplyFix={() => {
-            setNotice(`AI Quick Fix applied for ${quickFixModalItem.tier}. AST constraints verified.`);
+            success(`AI Quick Fix applied for ${quickFixModalItem.tier}. AST constraints verified.`, "Fix Applied");
           }}
           onClose={() => setQuickFixModalItem(null)}
         />

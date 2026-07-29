@@ -105,8 +105,10 @@ class LakeviewDashboard(BaseModel):
             "pages": [p.to_dict() for p in self.pages],
         }
 
-    def to_serialized(self) -> str:
-        """Returns compact serialized JSON matching Lakeview schema format."""
+    def to_serialized(self, indent: Optional[int] = 2) -> str:
+        """Returns serialized JSON matching Lakeview schema format."""
+        if indent:
+            return json.dumps(self.to_dict(), indent=indent)
         return json.dumps(self.to_dict(), separators=(",", ":"))
 
     def save_to_file(self, file_path: str):
