@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     DATABRICKS_HOST: Optional[str] = None
     DATABRICKS_TOKEN: Optional[str] = None
     DEFAULT_WAREHOUSE_ID: Optional[str] = None
-    DEFAULT_CATALOG: str = "main"
-    DEFAULT_SCHEMA: str = "default"
+    DEFAULT_CATALOG: str = ""
+    DEFAULT_SCHEMA: str = ""
     
     model_config = SettingsConfigDict(
         env_file=".env",
