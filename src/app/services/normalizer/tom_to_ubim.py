@@ -179,9 +179,11 @@ def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = N
 
 
 def _build_where_clause(filters: List[FilterMetadata]) -> str:
-    """Build WHERE clause from worksheet filters."""
+    """Build WHERE clause from worksheet filters, skipping any remaining pseudo-fields."""
     conditions = []
     for f in filters:
+        if is_tableau_pseudo_field(f.field_name):
+            continue
         if f.filter_type == "categorical" and f.include_values:
             vals = ", ".join(f"'{v}'" for v in f.include_values)
             conditions.append(f"`{f.field_name}` IN ({vals})")
@@ -193,7 +195,7 @@ def _build_where_clause(filters: List[FilterMetadata]) -> str:
                 conditions.append(f"`{f.field_name}` >= {f.min_value}")
             if f.max_value is not None:
                 conditions.append(f"`{f.field_name}` <= {f.max_value}")
-    
+
     return " AND ".join(conditions) if conditions else ""
 
 
@@ -227,15 +229,16 @@ def normalize_tom_to_ubim(
     """Stage 6 Normalizer: Maps Tableau Object Model (TOM) to Universal BI Model (UBIM)."""
     table_mapping = table_mapping or {}
 
-    # Auto-build table mapping if not provided
-    if not table_mapping:
-        auto_mapping, unresolved = build_table_mapping(
-            workbook_meta.datasources,
-            user_mapping=table_mapping,
-            default_catalog=default_catalog,
-            default_schema=default_schema,
-        )
-        table_mapping = auto_mapping
+    # Auto-build table mapping from datasource metadata + config
+    auto_mapping, unresolved = build_table_mapping(
+        workbook_meta.datasources,
+        user_mapping=table_mapping,
+        default_catalog=default_catalog,
+        default_schema=default_schema,
+    )
+    # Merge: user mapping takes precedence over auto-mapping
+    merged_mapping = {**auto_mapping, **table_mapping}
+    table_mapping = merged_mapping
 
     catalog_schema = ""
     if default_catalog and default_schema:

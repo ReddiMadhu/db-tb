@@ -8,6 +8,7 @@ from app.services.normalizer.optimizer import optimize_ubim
 from app.services.generator.lakeview_generator import generate_lakeview_dashboard
 from app.services.validator.validation_engine import validate_lakeview_dashboard
 from app.services.reporter.migration_report import generate_migration_report
+from app.services.mapper.datasource_mapper import build_table_mapping
 
 
 class MigrationPipeline:
@@ -41,8 +42,26 @@ class MigrationPipeline:
         if cycles:
             self.log("ERROR", f"Circular references detected in formulas: {cycles}")
 
-        # Stage 5 & 6: Expression & SQL Translation (handled in normalizer / compiler)
-        self.log("INFO", "Stage 5-6: Compiling expressions & transpiling SQL")
+        # Stage 5: Datasource Mapping — resolve table names before SQL generation
+        self.log("INFO", "Stage 5: Resolving datasource table mappings")
+        _, unresolved_tables = build_table_mapping(
+            workbook_meta.datasources,
+            user_mapping=self.table_mapping,
+            default_catalog=self.default_catalog,
+            default_schema=self.default_schema,
+        )
+        if unresolved_tables:
+            for t in unresolved_tables:
+                self.log(
+                    "ERROR",
+                    f"Unresolved table '{t['table']}' from datasource '{t['datasource']}' "
+                    f"(connection: {t['connection_type']}). "
+                    f"Provide a table_mapping entry: "
+                    f"{{'{t['table']}': '<catalog>.<schema>.{t['suggested_name']}'}}"
+                )
+
+        # Stage 6: Expression & SQL Translation (handled in normalizer / compiler)
+        self.log("INFO", "Stage 6: Compiling expressions & transpiling SQL")
 
         # Stage 7: Universal BI Model Normalization & Optimization
         self.log("INFO", "Stage 7: Normalizing TOM to Universal BI Model (UBIM)")
