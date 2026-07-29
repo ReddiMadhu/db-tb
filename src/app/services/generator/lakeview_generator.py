@@ -12,6 +12,7 @@ Fixes applied:
   - Chart types supported: BAR, LINE, AREA, SCATTER, PIE, COUNTER, TABLE, FILTER
 """
 
+import re
 from typing import Dict, Any, List
 from app.models.universal_model import IntermediateDashboard, ChartType, EncodingChannel
 from app.models.lakeview_model import (
@@ -77,6 +78,17 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                         "name": enc.field_name
                     })
 
+            if not query_fields_list and lakeview.datasets:
+                ds_match = next((d for d in lakeview.datasets if d.name == dataset_ref), None)
+                if ds_match and ds_match.query:
+                    cols_in_query = re.findall(r'`([^`]+)`', ds_match.query)
+                    if cols_in_query:
+                        for c_name in cols_in_query[:20]:
+                            query_fields_list.append({
+                                "expression": f"`{c_name}`",
+                                "name": c_name
+                            })
+
             is_disaggregated = w_ubim.disaggregated
 
             widget_query = WidgetQuery(
@@ -98,7 +110,16 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
             color_enc = next((e for e in w_ubim.encodings if e.channel == EncodingChannel.COLOR), None)
 
             x_field = x_enc.field_name if x_enc else (query_fields_list[0]["name"] if query_fields_list else "x")
-            y_field = y_enc.field_name if y_enc else (query_fields_list[1]["name"] if len(query_fields_list) > 1 else "y")
+            if y_enc:
+                y_field = y_enc.field_name
+            else:
+                other_fields = [qf["name"] for qf in query_fields_list if qf["name"] != x_field]
+                if other_fields:
+                    y_field = other_fields[0]
+                elif query_fields_list:
+                    y_field = query_fields_list[0]["name"]
+                else:
+                    y_field = x_field
 
             if w_ubim.chart_type == ChartType.BAR:
                 encodings_cfg: Dict[str, Any] = {

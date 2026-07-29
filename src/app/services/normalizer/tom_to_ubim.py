@@ -161,18 +161,28 @@ def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = N
     if not table_names:
         return "sample_table"
 
+    def _format_tbl(t_str: str) -> str:
+        if not t_str or t_str.startswith("`") or "." in t_str or "(" in t_str:
+            return t_str
+        if any(c in t_str for c in "$ -/\\"):
+            return f"`{t_str}`"
+        return t_str
+
     raw_name = table_names[0]
     from_clause = table_mapping.get(raw_name, raw_name)
     # Fallback: if still unresolved, try catalog_schema prefix
     if is_unresolved_table(from_clause) and catalog_schema:
         from_clause = f"{catalog_schema}.{from_clause}"
 
+    from_clause = _format_tbl(from_clause)
+
     if len(table_names) > 1 and ds.joins:
         for j in ds.joins:
             right = table_mapping.get(j.right_table, j.right_table)
             if is_unresolved_table(right) and catalog_schema:
                 right = f"{catalog_schema}.{right}"
-            left_ref = table_mapping.get(j.left_table, j.left_table)
+            right = _format_tbl(right)
+            left_ref = _format_tbl(table_mapping.get(j.left_table, j.left_table))
             from_clause += f" {j.join_type.upper()} JOIN {right} ON {left_ref}.{j.left_column} = {right}.{j.right_column}"
 
     return from_clause
@@ -455,6 +465,26 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 name=alias,
                 data_type="string" if agg == AggregationType.NONE else "number"
             ))
+
+        if not rows_shelves and ds:
+            real_measures = _get_real_measure_columns(ds)
+            for mname in real_measures:
+                alias = mname.replace(' ', '_').replace('/', '_')
+                expr = f"SUM(`{mname}`)"
+                encodings.append(IntermediateEncoding(
+                    channel=EncodingChannel.Y,
+                    field_name=alias,
+                    dataset_name=dataset_id,
+                    aggregation=AggregationType.SUM,
+                    expression_sql=expr,
+                    data_type="number"
+                ))
+                if not any(qf.name == alias for qf in query_fields):
+                    query_fields.append(IntermediateQueryField(
+                        expression=expr,
+                        name=alias,
+                        data_type="number"
+                    ))
     else:
         cols_clean = _filter_pseudo_fields(ws.columns)
         rows_clean = _filter_pseudo_fields(ws.rows)
@@ -510,16 +540,17 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     # Try to use zone geometry from dashboard
     if dashboard and dashboard.zones:
         zone = _find_zone_for_worksheet(ws.name, dashboard.zones)
-        if zone and dashboard.size_x > 0:
+        if zone and dashboard.size_x > 0 and dashboard.size_y > 0:
+            y_scaled = round((zone.y / dashboard.size_y) * 12)
             pos = IntermediatePosition(
                 x_rel=zone.x / dashboard.size_x,
                 y_rel=zone.y / dashboard.size_y,
                 w_rel=zone.w / dashboard.size_x,
                 h_rel=zone.h / dashboard.size_y,
-                grid_x=min(5, round((zone.x / dashboard.size_x) * 6)),
-                grid_y=y_offset,
+                grid_x=min(5, max(0, round((zone.x / dashboard.size_x) * 6))),
+                grid_y=y_scaled if (y_scaled >= 0 and y_scaled < 100) else y_offset,
                 grid_w=max(1, min(6, round((zone.w / dashboard.size_x) * 6))),
-                grid_h=max(1, round((zone.h / dashboard.size_y) * 8))
+                grid_h=max(2, min(12, round((zone.h / dashboard.size_y) * 12)))
             )
     
     # Counter special case: single measure, no dimensions
