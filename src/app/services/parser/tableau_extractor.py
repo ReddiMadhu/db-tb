@@ -106,6 +106,8 @@ TABLEAU_PSEUDO_FIELDS = {
     ':measure names', ':measure values',
     'measure names', 'measure values',
     'Number of Records',
+    'Multiple Values',
+    'multiple values',
 }
 
 TABLEAU_GENERATED_FIELD_RE = re.compile(
@@ -128,6 +130,9 @@ TABLEAU_INTERNAL_VALUE_RE = re.compile(
 )
 
 
+TABLEAU_CALC_ID_RE = re.compile(r'^Calculation_\d+$', re.IGNORECASE)
+
+
 def is_tableau_pseudo_field(field_name: str) -> bool:
     """Returns True if the field is a Tableau-internal pseudo-field that has
     no corresponding column in real data."""
@@ -143,6 +148,8 @@ def is_tableau_pseudo_field(field_name: str) -> bool:
     if name.endswith('(bin)') or name.endswith(' (bin)'):
         return True
     if TABLEAU_INTERNAL_FILTER_RE.match(name):
+        return True
+    if TABLEAU_CALC_ID_RE.match(name):
         return True
     return False
 
@@ -927,10 +934,19 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         
         cols_shelves = _parse_shelf_fields(cols_text, ds_prefixes)
         rows_shelves = _parse_shelf_fields(rows_text, ds_prefixes)
+
+        # Resolve Calculation_* IDs to captions in shelf fields
+        for sf in cols_shelves + rows_shelves:
+            if re.match(r'^Calculation_\d+$', sf.field_name, re.IGNORECASE):
+                resolved = caption_map.get(sf.field_name)
+                if resolved:
+                    sf.field_name = resolved
         
-        # Legacy flat field name lists (backward compat)
+        # Legacy flat field name lists (backward compat) — resolve Calculation_* IDs
         cols_flat = [sf.field_name for sf in cols_shelves] if cols_shelves else re.findall(r'\[([^\]]+)\]', cols_text)
         rows_flat = [sf.field_name for sf in rows_shelves] if rows_shelves else re.findall(r'\[([^\]]+)\]', rows_text)
+        cols_flat = [caption_map.get(f, f) if re.match(r'^Calculation_\d+$', f) else f for f in cols_flat]
+        rows_flat = [caption_map.get(f, f) if re.match(r'^Calculation_\d+$', f) else f for f in rows_flat]
         
         # Extract all the rich metadata
         mark_type = _extract_mark_type(ws_el)
