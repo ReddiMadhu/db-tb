@@ -103,3 +103,105 @@ export async function deployToDatabricks(
     body: JSON.stringify({ warehouse_id: warehouseId, host, token }),
   });
 }
+
+// ── Datasource Mapping APIs ──
+import type {
+  TableauDatasourceInfo,
+  EmbeddedFileInfo,
+  DatasourceDiscoveryResponse,
+  DatasourceMappingItem,
+  CatalogBrowseResponse,
+  MappingValidationResponse,
+} from "./types";
+
+export async function getJobDatasources(jobUuid: string): Promise<{
+  job_uuid: string;
+  datasources: TableauDatasourceInfo[];
+  embedded_files: EmbeddedFileInfo[];
+  existing_mappings: Record<string, { target_full_name: string; status: string; confidence_score?: number }>;
+  mapping_status: string;
+}> {
+  return apiFetch(`/mapping/${jobUuid}/datasources`);
+}
+
+export async function discoverMappings(
+  jobUuid: string,
+  host: string,
+  token: string,
+  warehouseId: string
+): Promise<DatasourceDiscoveryResponse> {
+  return apiFetch(`/mapping/${jobUuid}/datasources/discover`, {
+    method: "POST",
+    body: JSON.stringify({ host, token, warehouse_id: warehouseId }),
+  });
+}
+
+export async function autoUploadEmbedded(
+  jobUuid: string,
+  host: string,
+  token: string,
+  warehouseId: string,
+  catalog: string,
+  schemaName: string
+): Promise<{
+  job_uuid: string;
+  results: { table_name: string; full_name: string; source_file: string; status: string; error?: string }[];
+  uploaded_count: number;
+  failed_count: number;
+}> {
+  return apiFetch(`/mapping/${jobUuid}/datasources/auto-upload`, {
+    method: "POST",
+    body: JSON.stringify({ host, token, warehouse_id: warehouseId, catalog, schema_name: schemaName }),
+  });
+}
+
+export async function browseCatalog(
+  host: string,
+  token: string,
+  catalog?: string,
+  schemaName?: string
+): Promise<CatalogBrowseResponse> {
+  const params = new URLSearchParams({ host, token });
+  if (catalog) params.append("catalog", catalog);
+  if (schemaName) params.append("schema_name", schemaName);
+  return apiFetch(`/mapping/catalog/browse?${params.toString()}`);
+}
+
+export async function searchCatalog(
+  host: string,
+  token: string,
+  query: string
+): Promise<{ query: string; results: { catalog: string; schema: string; table: string; full_name: string; table_type: string }[]; count: number }> {
+  const params = new URLSearchParams({ host, token, q: query });
+  return apiFetch(`/mapping/catalog/search?${params.toString()}`);
+}
+
+export async function saveMappings(
+  jobUuid: string,
+  mappings: DatasourceMappingItem[]
+): Promise<{ job_uuid: string; saved_count: number; confirmed_count: number; mapping_status: string }> {
+  return apiFetch(`/mapping/${jobUuid}/mapping`, {
+    method: "POST",
+    body: JSON.stringify({ mappings }),
+  });
+}
+
+export async function getSavedMappings(jobUuid: string): Promise<{
+  job_uuid: string;
+  mapping_status: string;
+  mappings: DatasourceMappingItem[];
+}> {
+  return apiFetch(`/mapping/${jobUuid}/mapping`);
+}
+
+export async function validateMappings(
+  jobUuid: string,
+  host: string,
+  token: string
+): Promise<MappingValidationResponse> {
+  return apiFetch(`/mapping/${jobUuid}/mapping/validate`, {
+    method: "POST",
+    body: JSON.stringify({ host, token }),
+  });
+}
+

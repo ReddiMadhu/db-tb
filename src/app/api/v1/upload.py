@@ -49,13 +49,20 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
         cycles = dag_engine.detect_cycles()
         orphans = dag_engine.get_orphans()
 
+        # Extract embedded files if .twbx
+        from app.services.mapper.auto_upload_service import extract_and_list_embedded
+        embedded_files = []
+        if saved_file_path.lower().endswith(".twbx"):
+            embedded_files = extract_and_list_embedded(saved_file_path)
+
         # Create Migration Job in SQLite DB
         job = MigrationJob(
             job_uuid=job_uuid,
             source_filename=file.filename,
-            status="PARSED",
+            status="NEEDS_MAPPING",
             current_stage=4,
             pipeline_config={"upload_path": saved_file_path},
+            embedded_files=embedded_files,
             error_bag=[
                 {"level": "WARNING", "message": f"Detected {len(orphans)} orphan fields"} if orphans else None,
                 {"level": "ERROR", "message": f"Circular references detected: {cycles}"} if cycles else None
@@ -82,7 +89,9 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
             "dependency_cycles": cycles,
             "orphan_fields_count": len(orphans),
             "model_type": workbook_meta.model_type,
-            "current_stage": 4
+            "current_stage": 4,
+            "embedded_files": embedded_files,
+            "needs_mapping": True,
         }
     except Exception as e:
         # Clean up on failure

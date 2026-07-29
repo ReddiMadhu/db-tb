@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { Play, Download, Rocket, FileText, CheckCircle2, RefreshCw, AlertCircle, ArrowRightLeft, Layers } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -193,9 +194,11 @@ export default function MigrationWorkspacePage({
         </div>
 
         <div className={styles.topActions}>
-          <Button variant="ghost" size="sm" icon={<ArrowRightLeft size={14} />} onClick={() => setComparisonOpen(true)}>
-            Compare
-          </Button>
+          <Link href={`/migrations/${jobUuid}/mapping`}>
+            <Button variant="secondary" size="sm" icon={<ArrowRightLeft size={14} color="var(--accent-orange)" />}>
+              Datasource Mapping
+            </Button>
+          </Link>
           <Button variant="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={loadJobData}>
             Refresh
           </Button>

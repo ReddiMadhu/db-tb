@@ -1,0 +1,102 @@
+.overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--bg-card, #12263a);
+  border: 1px solid var(--border-default, #28445e);
+  border-radius: var(--radius-xl, 12px);
+  width: 100%;
+  max-width: 520px;
+  padding: 1.75rem;
+  box-shadow: var(--elevation-3);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.dropzone {
+  border: 2px dashed var(--border-emphasis, #385c7e);
+  border-radius: var(--radius-lg, 8px);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  background: var(--bg-primary, #071827);
+  transition: all var(--duration-fast, 100ms);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dropzone:hover, .dropzoneActive {
+  border-color: var(--accent-orange, #fb4e0b);
+  background: var(--bg-accent, rgba(251, 78, 11, 0.08));
+}
+
+.dropzoneText {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #c8d3e0);
+}
+
+.dropzoneSubtext {
+  font-size: 0.75rem;
+  color: var(--text-tertiary, #8fa3b8);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.label {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #c8d3e0);
+  margin-bottom: 0.35rem;
+}
+
+.input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-primary, #071827);
+  border: 1px solid var(--border-default, #28445e);
+  border-radius: var(--radius-md, 6px);
+  color: var(--text-primary, #ffffff);
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--accent-orange, #fb4e0b);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}

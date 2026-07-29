@@ -7,6 +7,7 @@ export type PipelineStage =
   | "UPLOAD"
   | "PARSE"
   | "DAG"
+  | "MAPPING"
   | "EXPRESSIONS"
   | "SQL"
   | "UBIM"
@@ -19,17 +20,103 @@ export const PIPELINE_STAGES: { key: PipelineStage; label: string; number: numbe
   { key: "UPLOAD", label: "Upload", number: 1 },
   { key: "PARSE", label: "Parse", number: 2 },
   { key: "DAG", label: "DAG", number: 3 },
-  { key: "EXPRESSIONS", label: "Expressions", number: 4 },
-  { key: "SQL", label: "SQL", number: 5 },
-  { key: "UBIM", label: "UBIM", number: 6 },
-  { key: "GENERATE", label: "Generate", number: 7 },
-  { key: "VALIDATE", label: "Validate", number: 8 },
-  { key: "DEPLOY", label: "Deploy", number: 9 },
-  { key: "REPORT", label: "Report", number: 10 },
+  { key: "MAPPING", label: "Mapping", number: 4 },
+  { key: "EXPRESSIONS", label: "Expressions", number: 5 },
+  { key: "SQL", label: "SQL", number: 6 },
+  { key: "UBIM", label: "UBIM", number: 7 },
+  { key: "GENERATE", label: "Generate", number: 8 },
+  { key: "VALIDATE", label: "Validate", number: 9 },
+  { key: "DEPLOY", label: "Deploy", number: 10 },
 ];
 
 // ── Job Status ──
-export type JobStatus = "UPLOADED" | "PARSED" | "EXECUTING" | "COMPLETED" | "FAILED" | "DEPLOYED" | "NEEDS_REVIEW";
+export type JobStatus = "UPLOADED" | "PARSED" | "NEEDS_MAPPING" | "EXECUTING" | "COMPLETED" | "FAILED" | "DEPLOYED" | "NEEDS_REVIEW";
+
+// ── Datasource Mapping Types ──
+export interface TableauDatasourceInfo {
+  name: string;
+  caption: string;
+  connection_type: string;
+  tables: {
+    name: string;
+    raw_name: string;
+    is_unresolved: boolean;
+    clean_name: string;
+  }[];
+  column_count: number;
+  worksheets: string[];
+}
+
+export interface EmbeddedFileInfo {
+  archive_path: string;
+  filename: string;
+  extension: string;
+  size: number;
+  uploadable: boolean;
+  needs_conversion: boolean;
+  is_hyper: boolean;
+}
+
+export interface MatchSuggestionItem {
+  target_full_name: string;
+  confidence_score: number;
+  match_reason: string;
+}
+
+export interface DatasourceDiscoveryResponse {
+  job_uuid: string;
+  suggestions: Record<string, {
+    datasource_name: string;
+    connection_type: string;
+    is_unresolved: boolean;
+    matches: MatchSuggestionItem[];
+    profile_match?: {
+      target_full_name: string;
+      profile_name: string;
+    };
+  }>;
+  uc_table_count: number;
+  tableau_table_count: number;
+}
+
+export interface DatasourceMappingItem {
+  id?: number;
+  tableau_datasource_name: string;
+  tableau_table_name: string;
+  tableau_connection_type: string;
+  target_full_name: string;
+  confidence_score?: number;
+  status: "PENDING" | "MATCHED" | "CONFIRMED" | "FAILED";
+}
+
+export interface CatalogItem {
+  name: string;
+  type: "catalog" | "schema" | "table";
+  table_type?: string;
+  full_name?: string;
+  comment?: string;
+}
+
+export interface CatalogBrowseResponse {
+  level: "catalogs" | "schemas" | "tables";
+  catalog?: string;
+  schema?: string;
+  items: CatalogItem[];
+}
+
+export interface MappingValidationResponse {
+  valid: boolean;
+  errors: string[];
+  mapped_count: number;
+  total_count: number;
+  mapping_status: "UNMAPPED" | "PARTIAL" | "COMPLETE";
+  details: {
+    tableau_table: string;
+    target: string | null;
+    exists: boolean;
+    status: string;
+  }[];
+}
 
 // ── Upload Response ──
 export interface UploadResponse {

@@ -78,8 +78,18 @@ async def execute_migration_pipeline(
         )
 
     from app.core.config import settings
+    from app.models.db_models import DatasourceMapping
 
-    table_mapping = (req.table_mapping if req else None) or {}
+    # Load saved confirmed mappings from DB
+    db_mappings = (
+        db.query(DatasourceMapping)
+        .filter(DatasourceMapping.job_id == job.id, DatasourceMapping.status == "CONFIRMED")
+        .all()
+    )
+    saved_table_mapping = {m.tableau_table_name: m.target_full_name for m in db_mappings if m.target_full_name}
+
+    # Explicit request mapping overrides saved mapping
+    table_mapping = {**saved_table_mapping, **((req.table_mapping if req else None) or {})}
     catalog = (req.catalog if req else None) or settings.DEFAULT_CATALOG
     schema_name = (req.schema_name if req else None) or settings.DEFAULT_SCHEMA
 
