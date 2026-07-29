@@ -13,8 +13,17 @@ from app.services.reporter.migration_report import generate_migration_report
 class MigrationPipeline:
     """10-Stage Migration Pipeline Orchestrator with ErrorBag log accumulation."""
 
-    def __init__(self, file_path: str):
+    def __init__(
+        self,
+        file_path: str,
+        table_mapping: Dict[str, str] = None,
+        default_catalog: str = "",
+        default_schema: str = "",
+    ):
         self.file_path = file_path
+        self.table_mapping = table_mapping or {}
+        self.default_catalog = default_catalog
+        self.default_schema = default_schema
         self.error_bag = []
 
     def log(self, level: str, message: str):
@@ -37,7 +46,12 @@ class MigrationPipeline:
 
         # Stage 7: Universal BI Model Normalization & Optimization
         self.log("INFO", "Stage 7: Normalizing TOM to Universal BI Model (UBIM)")
-        ubim = normalize_tom_to_ubim(workbook_meta)
+        ubim = normalize_tom_to_ubim(
+            workbook_meta,
+            table_mapping=self.table_mapping,
+            default_catalog=self.default_catalog,
+            default_schema=self.default_schema,
+        )
         ubim_opt = optimize_ubim(ubim)
 
         # Stage 8: Lakeview Generator & Layout Grid Engine

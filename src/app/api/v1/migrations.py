@@ -4,6 +4,7 @@ import tempfile
 import shutil
 import logging
 from datetime import datetime
+from typing import Optional, Dict
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.orm import Session
@@ -42,8 +43,22 @@ async def list_migration_jobs(db: Session = Depends(get_db)):
     ]
 
 
+from pydantic import BaseModel as PydanticBaseModel
+from typing import Dict
+
+
+class ExecuteRequest(PydanticBaseModel):
+    table_mapping: Optional[Dict[str, str]] = None
+    catalog: Optional[str] = None
+    schema_name: Optional[str] = None
+
+
 @router.post("/{job_uuid}/execute")
-async def execute_migration_pipeline(job_uuid: str, db: Session = Depends(get_db)):
+async def execute_migration_pipeline(
+    job_uuid: str,
+    req: Optional[ExecuteRequest] = None,
+    db: Session = Depends(get_db),
+):
     """Executes full 10-stage migration pipeline for a given upload job."""
     job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
     if not job:
@@ -55,7 +70,6 @@ async def execute_migration_pipeline(job_uuid: str, db: Session = Depends(get_db
             detail=f"Job is in state '{job.status}', expected 'PARSED' or 'FAILED'."
         )
 
-    # Retrieve the stored file path from pipeline_config
     upload_path = (job.pipeline_config or {}).get("upload_path")
     if not upload_path or not os.path.exists(upload_path):
         raise HTTPException(
@@ -63,14 +77,23 @@ async def execute_migration_pipeline(job_uuid: str, db: Session = Depends(get_db
             detail="Source workbook file not found. Please re-upload."
         )
 
+    from app.core.config import settings
+
+    table_mapping = (req.table_mapping if req else None) or {}
+    catalog = (req.catalog if req else None) or settings.DEFAULT_CATALOG
+    schema_name = (req.schema_name if req else None) or settings.DEFAULT_SCHEMA
+
     try:
-        # Update status to EXECUTING
         job.status = "EXECUTING"
         job.current_stage = 5
         db.commit()
 
-        # Run the full 10-stage pipeline
-        pipeline = MigrationPipeline(upload_path)
+        pipeline = MigrationPipeline(
+            upload_path,
+            table_mapping=table_mapping,
+            default_catalog=catalog,
+            default_schema=schema_name,
+        )
         result = pipeline.run()
 
         workbook_meta = result["workbook_meta"]
@@ -211,13 +234,12 @@ async def get_migration_report(job_uuid: str, db: Session = Depends(get_db)):
     }
 
 
-from pydantic import BaseModel
-from typing import Optional
-
-class DeployRequest(BaseModel):
+class DeployRequest(PydanticBaseModel):
     warehouse_id: str
     host: Optional[str] = None
     token: Optional[str] = None
+    catalog: Optional[str] = None
+    schema_name: Optional[str] = None
 
 
 @router.post("/{job_uuid}/deploy")
@@ -245,7 +267,9 @@ async def deploy_to_databricks(
         result = client.create_dashboard(
             display_name=job.source_filename.replace('.twbx', '').replace('.twb', ''),
             serialized_dashboard=serialized_json,
-            warehouse_id=req.warehouse_id
+            warehouse_id=req.warehouse_id,
+            dataset_catalog=req.catalog or None,
+            dataset_schema=req.schema_name or None,
         )
 
         job.status = "DEPLOYED"

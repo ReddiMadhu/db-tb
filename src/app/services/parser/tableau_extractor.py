@@ -98,6 +98,67 @@ def _clean_field(s: str, ds_prefixes: list) -> str:
     return s
 
 
+# ── Tableau pseudo-field detection ─────────────────────────────────────────
+
+TABLEAU_PSEUDO_FIELDS = {
+    ':Measure Names', ':Measure Values',
+    'Measure Names', 'Measure Values',
+    ':measure names', ':measure values',
+    'measure names', 'measure values',
+    'Number of Records',
+}
+
+TABLEAU_GENERATED_FIELD_RE = re.compile(
+    r'(Longitude|Latitude)\s*\(generated\)',
+    re.IGNORECASE
+)
+
+TABLEAU_INTERNAL_PREFIX_RE = re.compile(
+    r'^(ctd|usr):', re.IGNORECASE
+)
+
+TABLEAU_INTERNAL_FILTER_RE = re.compile(
+    r'^\[?(excel-direct|textscan|hyper|dataengine)\.',
+    re.IGNORECASE
+)
+
+TABLEAU_INTERNAL_VALUE_RE = re.compile(
+    r'^\[?(sum|cnt|cntd|avg|min|max|attr|med|usr|yr|qr|mn|dy|wk):.*:(nk|qk|ok|tk)\]?$',
+    re.IGNORECASE
+)
+
+
+def is_tableau_pseudo_field(field_name: str) -> bool:
+    """Returns True if the field is a Tableau-internal pseudo-field that has
+    no corresponding column in real data."""
+    if not field_name:
+        return False
+    name = field_name.strip()
+    if name in TABLEAU_PSEUDO_FIELDS or name.lower() in {f.lower() for f in TABLEAU_PSEUDO_FIELDS}:
+        return True
+    if TABLEAU_GENERATED_FIELD_RE.search(name):
+        return True
+    if TABLEAU_INTERNAL_PREFIX_RE.match(name):
+        return True
+    if name.endswith('(bin)') or name.endswith(' (bin)'):
+        return True
+    if TABLEAU_INTERNAL_FILTER_RE.match(name):
+        return True
+    return False
+
+
+def is_tableau_internal_filter_value(value: str) -> bool:
+    """Returns True if a filter value is a Tableau internal reference, not a real data value."""
+    if not value:
+        return False
+    v = value.strip()
+    if TABLEAU_INTERNAL_FILTER_RE.match(v):
+        return True
+    if TABLEAU_INTERNAL_VALUE_RE.match(v):
+        return True
+    return False
+
+
 def _build_caption_map(root: etree._Element) -> dict:
     """Build map from internal Calculation_ID or name to friendly caption."""
     caption_map = {}
@@ -295,7 +356,21 @@ def _extract_worksheet_filters(ws_el, ds_prefixes: list) -> list:
         max_val = filt.get("max")
         
         is_context = filt.get("context", "false") == "true"
-        
+
+        # Skip filters on pseudo-fields or with internal references
+        if is_tableau_pseudo_field(clean_field):
+            continue
+        if TABLEAU_INTERNAL_FILTER_RE.match(field):
+            continue
+
+        # Sanitize include/exclude values — remove Tableau internal references
+        include_vals = [v for v in include_vals if not is_tableau_internal_filter_value(v)]
+        exclude_vals = [v for v in exclude_vals if not is_tableau_internal_filter_value(v)]
+
+        # Skip filter entirely if no valid values remain for categorical filters
+        if ftype == "categorical" and not include_vals and not exclude_vals and min_val is None:
+            continue
+
         filters.append(FilterMetadata(
             field_name=clean_field,
             filter_type=ftype,

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import Dict, List, Any
 from app.models.lakeview_model import LakeviewDashboard
 
@@ -14,6 +15,26 @@ except ImportError:
     sqlglot = None
 
 SCHEMA_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "24_json_schema.json")
+
+# Patterns for semantic validation
+UNRESOLVED_TABLE_RE = re.compile(
+    r'(?:FROM|JOIN)\s+[`"]?(Sheet\d*\$\d*|sample_table|Extract)[`"]?(?:\s|$|,)',
+    re.IGNORECASE
+)
+PSEUDO_FIELD_PATTERNS = [
+    re.compile(r':?Measure\s+(Names|Values)', re.IGNORECASE),
+    re.compile(r'(Longitude|Latitude)\s*\(generated\)', re.IGNORECASE),
+    re.compile(r'\w+\s*\(bin\)', re.IGNORECASE),
+    re.compile(r'\bctd:', re.IGNORECASE),
+]
+TABLEAU_INTERNAL_RE = re.compile(
+    r'\[?(excel-direct|textscan)\.[^\]]*\]?', re.IGNORECASE
+)
+SUPPORTED_WIDGET_TYPES = {
+    'bar', 'line', 'area', 'scatter', 'pie', 'counter', 'table',
+    'filter-multi-select', 'filter-single-select', 'filter-date-range-picker',
+    'pivot', 'heatmap',
+}
 
 
 def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, Any]:
@@ -96,6 +117,54 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
     if len(all_widget_ids) != len(set(all_widget_ids)):
         errors.append("Duplicate widget IDs detected.")
 
+    # Tier 7: Datasource Resolution — reject unresolved table references
+    for ds in lakeview_dash.datasets:
+        if ds.query and UNRESOLVED_TABLE_RE.search(ds.query):
+            match = UNRESOLVED_TABLE_RE.search(ds.query)
+            errors.append(
+                f"Dataset '{ds.displayName}' contains unresolved table reference "
+                f"'{match.group()}'. Provide a table_mapping or set DEFAULT_CATALOG/DEFAULT_SCHEMA."
+            )
+
+    # Tier 8: Pseudo-Field Detection — reject Tableau-only fields in SQL
+    for ds in lakeview_dash.datasets:
+        if not ds.query:
+            continue
+        for pattern in PSEUDO_FIELD_PATTERNS:
+            m = pattern.search(ds.query)
+            if m:
+                errors.append(
+                    f"Dataset '{ds.displayName}' contains Tableau pseudo-field '{m.group()}' "
+                    f"which does not exist in real data."
+                )
+        if TABLEAU_INTERNAL_RE.search(ds.query):
+            m = TABLEAU_INTERNAL_RE.search(ds.query)
+            errors.append(
+                f"Dataset '{ds.displayName}' contains Tableau internal reference '{m.group()}'."
+            )
+
+    # Tier 9: Widget Spec Compatibility — validate widgetType
+    for page in lakeview_dash.pages:
+        for layout_item in page.layout:
+            widget = layout_item.widget
+            if widget.spec:
+                wt = widget.spec.get("widgetType", "")
+                if wt and wt not in SUPPORTED_WIDGET_TYPES:
+                    warnings.append(
+                        f"Widget '{widget.name}' uses unsupported widgetType '{wt}'. "
+                        f"May cause specLoadError in Databricks."
+                    )
+
+    # Tier 10: Filter Sanity — reject Tableau internal IDs in filter values
+    for ds in lakeview_dash.datasets:
+        if not ds.query:
+            continue
+        if TABLEAU_INTERNAL_RE.search(ds.query):
+            m = TABLEAU_INTERNAL_RE.search(ds.query)
+            errors.append(
+                f"Dataset '{ds.displayName}' SQL contains Tableau internal filter value '{m.group()}'."
+            )
+
     is_valid = len(errors) == 0
     return {
         "valid": is_valid,
@@ -107,6 +176,10 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
             "reference_validation": not any("references" in e for e in errors),
             "layout_validation": not any("boundary" in e or "grid" in e for e in errors),
             "widget_validation": not any("spec" in e for e in errors),
-            "integrity_validation": not any("Duplicate" in e for e in errors)
+            "integrity_validation": not any("Duplicate" in e for e in errors),
+            "datasource_resolution": not any("unresolved table" in e.lower() for e in errors),
+            "pseudo_field_detection": not any("pseudo-field" in e.lower() for e in errors),
+            "widget_spec_compat": not any("specLoadError" in e for e in warnings),
+            "filter_sanity": not any("internal filter" in e.lower() for e in errors),
         }
     }

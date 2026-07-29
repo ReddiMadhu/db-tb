@@ -240,8 +240,78 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     "frame": {"title": title, "showTitle": True}
                 }
 
+            elif w_ubim.chart_type == ChartType.HEATMAP:
+                spec = {
+                    "version": 3,
+                    "widgetType": "bar",
+                    "encodings": {
+                        "x": {
+                            "fieldName": x_field,
+                            "displayName": x_field.replace('_', ' ').title(),
+                            "scale": {"type": "categorical"},
+                            "axis": {"title": x_field.replace('_', ' ').title()}
+                        },
+                        "y": {
+                            "fieldName": y_field,
+                            "displayName": y_field.replace('_', ' ').title(),
+                            "scale": {"type": "quantitative"},
+                            "axis": {"title": y_field.replace('_', ' ').title()}
+                        },
+                        "label": {"show": False}
+                    },
+                    "frame": {"title": title, "showTitle": True},
+                    "mark": {"colors": DEFAULT_COLORS}
+                }
+
+            elif w_ubim.chart_type == ChartType.HISTOGRAM:
+                spec = {
+                    "version": 3,
+                    "widgetType": "bar",
+                    "encodings": {
+                        "x": {
+                            "fieldName": x_field,
+                            "displayName": x_field.replace('_', ' ').title(),
+                            "scale": {"type": "categorical"},
+                            "axis": {"title": x_field.replace('_', ' ').title()}
+                        },
+                        "y": {
+                            "fieldName": y_field,
+                            "displayName": y_field.replace('_', ' ').title(),
+                            "scale": {"type": "quantitative"},
+                            "axis": {"title": y_field.replace('_', ' ').title()}
+                        },
+                        "label": {"show": False}
+                    },
+                    "frame": {"title": title, "showTitle": True},
+                    "mark": {"colors": DEFAULT_COLORS}
+                }
+
+            elif w_ubim.chart_type in (ChartType.MAP, ChartType.BOXPLOT, ChartType.COMBO):
+                # MAP/BOXPLOT/COMBO: Lakeview doesn't support these natively — degrade to table
+                cols_list = []
+                for idx, qf in enumerate(query_fields_list):
+                    col_name = qf["name"]
+                    cols_list.append({
+                        "fieldName": col_name,
+                        "displayName": col_name.replace('_', ' ').title(),
+                        "title": col_name.replace('_', ' ').title(),
+                        "type": "string",
+                        "displayAs": "string",
+                        "alignContent": "left",
+                        "visible": True,
+                        "order": 100000 + idx
+                    })
+                spec = {
+                    "version": 1,
+                    "widgetType": "table",
+                    "encodings": {"columns": cols_list},
+                    "frame": {"title": f"{title} (converted from {w_ubim.chart_type.value})", "showTitle": True},
+                    "condensed": True,
+                    "itemsPerPage": 25
+                }
+
             else:
-                # Table Spec (Version 1)
+                # Table Spec (Version 1) — default fallback
                 cols_list = []
                 for idx, qf in enumerate(query_fields_list):
                     col_name = qf["name"]

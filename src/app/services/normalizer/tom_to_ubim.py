@@ -29,6 +29,10 @@ from app.models.universal_model import (
 )
 from app.services.parser.mark_type_resolver import resolve_mark_type
 from app.services.compiler.expression_compiler import compile_expression_to_sql
+from app.services.parser.tableau_extractor import is_tableau_pseudo_field
+from app.services.mapper.datasource_mapper import (
+    build_table_mapping, resolve_table_in_sql, is_unresolved_table
+)
 
 
 # ── Aggregation derivation mapping ──────────────────────────────────────────
@@ -136,9 +140,10 @@ def _classify_shelf_field(sf: ShelfField, ds: Optional[DatasourceMetadata]) -> A
     return AggregationType.NONE
 
 
-def _build_dataset_sql(ds: DatasourceMetadata, catalog_schema: str = "") -> str:
-    """Build the base FROM clause for a datasource."""
-    # Check if there is a custom SQL table
+def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = None, catalog_schema: str = "") -> str:
+    """Build the base FROM clause for a datasource, resolving table names via mapping."""
+    table_mapping = table_mapping or {}
+
     custom_sql_table = next((t for t in ds.tables if t.type == "custom_sql" and t.sql), None)
     if custom_sql_table:
         dialect_map = {
@@ -149,23 +154,27 @@ def _build_dataset_sql(ds: DatasourceMetadata, catalog_schema: str = "") -> str:
         src_dialect = dialect_map.get((ds.connection_type or "").lower(), "tsql")
         transpiled_res = translate_sql_dialect(custom_sql_table.sql, source_dialect=src_dialect, target_dialect="databricks")
         clean_sql = transpiled_res["translated_sql"].strip().rstrip(";")
+        clean_sql = resolve_table_in_sql(clean_sql, table_mapping)
         return f"({clean_sql}) AS {custom_sql_table.name}"
 
     table_names = [t.name for t in ds.tables]
     if not table_names:
         return "sample_table"
-    
-    from_clause = table_names[0]
-    if catalog_schema:
+
+    raw_name = table_names[0]
+    from_clause = table_mapping.get(raw_name, raw_name)
+    # Fallback: if still unresolved, try catalog_schema prefix
+    if is_unresolved_table(from_clause) and catalog_schema:
         from_clause = f"{catalog_schema}.{from_clause}"
-    
+
     if len(table_names) > 1 and ds.joins:
         for j in ds.joins:
-            right = j.right_table
-            if catalog_schema:
+            right = table_mapping.get(j.right_table, j.right_table)
+            if is_unresolved_table(right) and catalog_schema:
                 right = f"{catalog_schema}.{right}"
-            from_clause += f" {j.join_type.upper()} JOIN {right} ON {j.left_table}.{j.left_column} = {j.right_table}.{j.right_column}"
-    
+            left_ref = table_mapping.get(j.left_table, j.left_table)
+            from_clause += f" {j.join_type.upper()} JOIN {right} ON {left_ref}.{j.left_column} = {right}.{j.right_column}"
+
     return from_clause
 
 
@@ -188,8 +197,50 @@ def _build_where_clause(filters: List[FilterMetadata]) -> str:
     return " AND ".join(conditions) if conditions else ""
 
 
-def normalize_tom_to_ubim(workbook_meta: WorkbookMetadata) -> IntermediateDashboard:
+def _get_real_measure_columns(ds: DatasourceMetadata) -> List[str]:
+    """Get actual measure column names from datasource metadata (for Measure Names/Values expansion)."""
+    measures = []
+    for col in ds.columns:
+        if col.role == 'measure' and not col.hidden and col.datatype in ('real', 'integer', 'float', 'number', ''):
+            name = col.caption or col.internal_name
+            if not is_tableau_pseudo_field(name):
+                measures.append(name)
+    return measures[:10]  # Cap to avoid huge queries
+
+
+def _filter_pseudo_fields(fields: List[str]) -> List[str]:
+    """Remove Tableau pseudo-fields from a list of field names."""
+    return [f for f in fields if not is_tableau_pseudo_field(f)]
+
+
+def _filter_pseudo_shelf_fields(shelf_fields: List[ShelfField]) -> List[ShelfField]:
+    """Remove Tableau pseudo-fields from structured shelf fields."""
+    return [sf for sf in shelf_fields if not is_tableau_pseudo_field(sf.field_name)]
+
+
+def normalize_tom_to_ubim(
+    workbook_meta: WorkbookMetadata,
+    table_mapping: Dict[str, str] = None,
+    default_catalog: str = "",
+    default_schema: str = "",
+) -> IntermediateDashboard:
     """Stage 6 Normalizer: Maps Tableau Object Model (TOM) to Universal BI Model (UBIM)."""
+    table_mapping = table_mapping or {}
+
+    # Auto-build table mapping if not provided
+    if not table_mapping:
+        auto_mapping, unresolved = build_table_mapping(
+            workbook_meta.datasources,
+            user_mapping=table_mapping,
+            default_catalog=default_catalog,
+            default_schema=default_schema,
+        )
+        table_mapping = auto_mapping
+
+    catalog_schema = ""
+    if default_catalog and default_schema:
+        catalog_schema = f"{default_catalog}.{default_schema}"
+
     ubim_dash = IntermediateDashboard(
         dashboard_id=uuid.uuid4().hex[:8],
         title=workbook_meta.source_file.replace('.twbx', '').replace('.twb', ''),
@@ -197,30 +248,36 @@ def normalize_tom_to_ubim(workbook_meta: WorkbookMetadata) -> IntermediateDashbo
         datasets=[]
     )
 
-    # Build datasource lookup
     ds_lookup: Dict[str, DatasourceMetadata] = {}
     for ds in workbook_meta.datasources:
         ds_lookup[ds.name] = ds
         if ds.caption:
             ds_lookup[ds.caption] = ds
 
-    # ── Create per-worksheet datasets with proper SQL ───────────────────────
-    ws_dataset_map: Dict[str, str] = {}  # worksheet_name -> dataset_name
+    ws_dataset_map: Dict[str, str] = {}
 
     for ws in workbook_meta.worksheets:
         ds = _resolve_datasource(ws, workbook_meta)
         if not ds:
             continue
-        
+
         ds_id = uuid.uuid4().hex[:8]
-        from_clause = _build_dataset_sql(ds)
-        
-        # Classify all shelf fields
+        from_clause = _build_dataset_sql(ds, table_mapping=table_mapping, catalog_schema=catalog_schema)
+
         dimensions = []
         measures = []
-        
-        # Process structured shelves if available, else fall back to flat lists
-        all_shelves = ws.columns_shelves + ws.rows_shelves
+        has_measure_names = False
+
+        # Process structured shelves — filter pseudo-fields
+        cols_shelves = _filter_pseudo_shelf_fields(ws.columns_shelves)
+        rows_shelves = _filter_pseudo_shelf_fields(ws.rows_shelves)
+        all_shelves = cols_shelves + rows_shelves
+
+        # Detect Measure Names / Measure Values usage
+        for sf in ws.columns_shelves + ws.rows_shelves:
+            if sf.field_name.lower().replace(':', '').strip() in ('measure names', 'measure values'):
+                has_measure_names = True
+
         if all_shelves:
             for sf in all_shelves:
                 agg = _classify_shelf_field(sf, ds)
@@ -229,14 +286,23 @@ def normalize_tom_to_ubim(workbook_meta: WorkbookMetadata) -> IntermediateDashbo
                 else:
                     dimensions.append(sf.field_name)
         else:
-            # Fallback: use flat column/row lists
-            for col_name in ws.columns:
+            cols_clean = _filter_pseudo_fields(ws.columns)
+            rows_clean = _filter_pseudo_fields(ws.rows)
+            for col_name in cols_clean:
                 dimensions.append(col_name)
-            for row_name in ws.rows:
+            for row_name in rows_clean:
                 measures.append((row_name, AggregationType.SUM))
-        
-        # Add color/size/detail encoding fields as additional dimensions/measures
+
+        # Handle Measure Names/Values: expand into actual measure columns
+        if has_measure_names and not measures:
+            real_measures = _get_real_measure_columns(ds)
+            for m in real_measures:
+                measures.append((m, AggregationType.SUM))
+
+        # Add color/size/detail encoding fields (filtered)
         for enc in ws.encodings:
+            if is_tableau_pseudo_field(enc.field_name):
+                continue
             if enc.channel in ('color', 'shape'):
                 if enc.field_name not in dimensions:
                     dimensions.append(enc.field_name)
@@ -244,7 +310,7 @@ def normalize_tom_to_ubim(workbook_meta: WorkbookMetadata) -> IntermediateDashbo
                 agg = DERIV_TO_AGG.get(enc.aggregation.lower(), AggregationType.SUM)
                 if (enc.field_name, agg) not in measures:
                     measures.append((enc.field_name, agg))
-        
+
         # Build SQL
         select_parts = []
         for dim in dimensions:
@@ -253,35 +319,37 @@ def normalize_tom_to_ubim(workbook_meta: WorkbookMetadata) -> IntermediateDashbo
             expr = _build_field_expression(mname, magg)
             alias = mname.replace(' ', '_').replace('/', '_')
             select_parts.append(f"{expr} AS `{alias}`")
-        
+
         if not select_parts:
-            # No fields identified — select all columns
-            select_parts = [f"`{c.caption or c.internal_name}`" for c in ds.columns[:20]]
-        
+            non_pseudo_cols = [c for c in ds.columns if not is_tableau_pseudo_field(c.caption or c.internal_name)]
+            select_parts = [f"`{c.caption or c.internal_name}`" for c in non_pseudo_cols[:20]]
+
         sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
-        
-        # WHERE clause from filters
+
+        # WHERE clause from filters (already sanitized by parser)
         where = _build_where_clause(ws.filters)
         if where:
             sql += f" WHERE {where}"
-        
-        # GROUP BY for aggregated queries
+
         if dimensions and measures:
             group_by_indices = ", ".join(str(i + 1) for i in range(len(dimensions)))
             sql += f" GROUP BY {group_by_indices}"
-        
-        # ORDER BY from sorts
+
         if ws.sorts:
-            order_parts = [f"`{s.field_name}` {s.direction}" for s in ws.sorts]
-            sql += f" ORDER BY {', '.join(order_parts)}"
+            clean_sorts = [s for s in ws.sorts if not is_tableau_pseudo_field(s.field_name)]
+            if clean_sorts:
+                order_parts = [f"`{s.field_name}` {s.direction}" for s in clean_sorts]
+                sql += f" ORDER BY {', '.join(order_parts)}"
+            elif dimensions:
+                sql += f" ORDER BY 1"
         elif dimensions:
             sql += f" ORDER BY 1"
-        
+
         ubim_ds = IntermediateDataset(
             name=ds_id,
             sql_query=sql,
             tables_referenced=[t.name for t in ds.tables],
-            fields=[{"name": d, "type": "string"} for d in dimensions] + 
+            fields=[{"name": d, "type": "string"} for d in dimensions] +
                    [{"name": m[0], "type": "number"} for m in measures]
         )
         ubim_dash.datasets.append(ubim_ds)
@@ -342,14 +410,16 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     encodings = []
     query_fields = []
     
-    # Process structured shelves
-    all_shelves = ws.columns_shelves + ws.rows_shelves
+    # Process structured shelves (filtered)
+    cols_shelves = _filter_pseudo_shelf_fields(ws.columns_shelves)
+    rows_shelves = _filter_pseudo_shelf_fields(ws.rows_shelves)
+    all_shelves = cols_shelves + rows_shelves
     if all_shelves:
-        for sf in ws.columns_shelves:
+        for sf in cols_shelves:
             agg = _classify_shelf_field(sf, ds)
             expr = _build_field_expression(sf.field_name, agg)
             alias = sf.field_name.replace(' ', '_').replace('/', '_')
-            
+
             encodings.append(IntermediateEncoding(
                 channel=EncodingChannel.X,
                 field_name=alias,
@@ -363,12 +433,12 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 name=alias,
                 data_type="string" if agg == AggregationType.NONE else "number"
             ))
-        
-        for sf in ws.rows_shelves:
+
+        for sf in rows_shelves:
             agg = _classify_shelf_field(sf, ds)
             expr = _build_field_expression(sf.field_name, agg)
             alias = sf.field_name.replace(' ', '_').replace('/', '_')
-            
+
             encodings.append(IntermediateEncoding(
                 channel=EncodingChannel.Y,
                 field_name=alias,
@@ -383,8 +453,9 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 data_type="string" if agg == AggregationType.NONE else "number"
             ))
     else:
-        # Fallback: flat field lists
-        for col_name in ws.columns:
+        cols_clean = _filter_pseudo_fields(ws.columns)
+        rows_clean = _filter_pseudo_fields(ws.rows)
+        for col_name in cols_clean:
             encodings.append(IntermediateEncoding(
                 channel=EncodingChannel.X,
                 field_name=col_name,
@@ -396,7 +467,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 expression=f"`{col_name}`",
                 name=col_name
             ))
-        for row_name in ws.rows:
+        for row_name in rows_clean:
             encodings.append(IntermediateEncoding(
                 channel=EncodingChannel.Y,
                 field_name=row_name,
@@ -409,9 +480,9 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 name=row_name
             ))
     
-    # Add color encoding from Tableau encodings
+    # Add color encoding from Tableau encodings (filtered)
     for enc in ws.encodings:
-        if enc.channel == 'color':
+        if enc.channel == 'color' and not is_tableau_pseudo_field(enc.field_name):
             alias = enc.field_name.replace(' ', '_').replace('/', '_')
             encodings.append(IntermediateEncoding(
                 channel=EncodingChannel.COLOR,
