@@ -64,10 +64,10 @@ async def execute_migration_pipeline(
     if not job:
         raise HTTPException(status_code=404, detail="Migration job not found.")
 
-    if job.status not in ("PARSED", "FAILED"):
+    if job.status not in ("PARSED", "NEEDS_MAPPING", "FAILED"):
         raise HTTPException(
             status_code=400,
-            detail=f"Job is in state '{job.status}', expected 'PARSED' or 'FAILED'."
+            detail=f"Job is in state '{job.status}', expected 'PARSED', 'NEEDS_MAPPING', or 'FAILED'."
         )
 
     upload_path = (job.pipeline_config or {}).get("upload_path")

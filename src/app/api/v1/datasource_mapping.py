@@ -459,6 +459,7 @@ async def save_mappings(
         job.mapping_status = "PARTIAL"
     else:
         job.mapping_status = "COMPLETE"
+        job.status = "PARSED"
 
     db.commit()
 
@@ -611,6 +612,7 @@ async def validate_mappings(
         job.mapping_status = "PARTIAL"
     else:
         job.mapping_status = "COMPLETE"
+        job.status = "PARSED"
 
     db.commit()
 
