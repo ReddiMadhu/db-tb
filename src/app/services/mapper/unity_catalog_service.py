@@ -1,23 +1,31 @@
 """
-unity_catalog_service.py — Databricks Unity Catalog REST API Client
+unity_catalog_service.py — Databricks Unity Catalog Client (SDK)
 ====================================================================
 Connects to Databricks workspace and reads Unity Catalog metadata:
 catalogs, schemas, tables. Also supports SQL statement execution
 and file upload to UC Volumes for auto-table-creation.
 
+Uses the official Databricks Python SDK instead of raw REST calls.
 All methods are stateless — host/token passed per-call so the service
 can work with multiple Databricks connections simultaneously.
 """
 
-import requests
-import time
+import io
 import logging
+import time
 from typing import Any, Dict, List, Optional
+
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import (
+    DatabricksError,
+    NotFound,
+    PermissionDenied,
+    Unauthenticated,
+)
+from databricks.sdk.service.sql import Disposition, StatementState
 
 logger = logging.getLogger(__name__)
 
-# Timeout for REST API calls (seconds)
-API_TIMEOUT = 30
 # Timeout for SQL statement execution polling (seconds)
 SQL_POLL_TIMEOUT = 120
 SQL_POLL_INTERVAL = 2
@@ -31,19 +39,44 @@ class UnityCatalogError(Exception):
 
 
 class UnityCatalogService:
-    """Stateless REST client for Databricks Unity Catalog APIs."""
+    """Stateless client for Databricks Unity Catalog APIs using the SDK."""
 
     @staticmethod
-    def _headers(token: str) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+    def _client(host: str, token: str) -> WorkspaceClient:
+        """Create a WorkspaceClient for the given host/token pair."""
+        return WorkspaceClient(
+            host=host.rstrip("/"),
+            token=token,
+        )
 
     @staticmethod
-    def _base(host: str) -> str:
-        return host.rstrip("/")
+    def _handle_error(operation: str, e: Exception) -> None:
+        """Convert SDK exceptions to UnityCatalogError with clear messages."""
+        if isinstance(e, Unauthenticated):
+            raise UnityCatalogError(
+                f"{operation}: Authentication failed. Check your PAT token.",
+                status_code=401,
+            ) from e
+        elif isinstance(e, PermissionDenied):
+            raise UnityCatalogError(
+                f"{operation}: Permission denied. Ensure the token has sufficient privileges.",
+                status_code=403,
+            ) from e
+        elif isinstance(e, NotFound):
+            raise UnityCatalogError(
+                f"{operation}: Resource not found. Verify Unity Catalog is enabled "
+                "and a metastore is attached to the workspace.",
+                status_code=404,
+            ) from e
+        elif isinstance(e, DatabricksError):
+            raise UnityCatalogError(
+                f"{operation}: {str(e)}",
+                status_code=getattr(e, 'status_code', 0),
+            ) from e
+        else:
+            raise UnityCatalogError(
+                f"{operation}: Connection error — {str(e)}",
+            ) from e
 
     # ── Catalog / Schema / Table Listing ──────────────────────────────
 
@@ -53,22 +86,14 @@ class UnityCatalogService:
 
         Returns list of dicts with keys: name, comment, owner, etc.
         """
-        url = f"{UnityCatalogService._base(host)}/api/2.1/unity-catalog/catalogs"
         try:
-            resp = requests.get(
-                url,
-                headers=UnityCatalogService._headers(token),
-                timeout=API_TIMEOUT,
-            )
-            resp.raise_for_status()
-            return resp.json().get("catalogs", [])
-        except requests.exceptions.HTTPError as e:
-            raise UnityCatalogError(
-                f"Failed to list catalogs: {e.response.text if e.response else str(e)}",
-                status_code=e.response.status_code if e.response else 0,
-            )
-        except requests.exceptions.RequestException as e:
-            raise UnityCatalogError(f"Connection error listing catalogs: {str(e)}")
+            w = UnityCatalogService._client(host, token)
+            catalogs = list(w.catalogs.list())
+            return [c.as_dict() for c in catalogs]
+        except UnityCatalogError:
+            raise
+        except Exception as e:
+            UnityCatalogService._handle_error("Failed to list catalogs", e)
 
     @staticmethod
     def list_schemas(host: str, token: str, catalog: str) -> List[Dict[str, Any]]:
@@ -76,24 +101,16 @@ class UnityCatalogService:
 
         Returns list of dicts with keys: name, catalog_name, comment, etc.
         """
-        url = f"{UnityCatalogService._base(host)}/api/2.1/unity-catalog/schemas"
-        params = {"catalog_name": catalog}
         try:
-            resp = requests.get(
-                url,
-                headers=UnityCatalogService._headers(token),
-                params=params,
-                timeout=API_TIMEOUT,
+            w = UnityCatalogService._client(host, token)
+            schemas = list(w.schemas.list(catalog_name=catalog))
+            return [s.as_dict() for s in schemas]
+        except UnityCatalogError:
+            raise
+        except Exception as e:
+            UnityCatalogService._handle_error(
+                f"Failed to list schemas in '{catalog}'", e
             )
-            resp.raise_for_status()
-            return resp.json().get("schemas", [])
-        except requests.exceptions.HTTPError as e:
-            raise UnityCatalogError(
-                f"Failed to list schemas in '{catalog}': {e.response.text if e.response else str(e)}",
-                status_code=e.response.status_code if e.response else 0,
-            )
-        except requests.exceptions.RequestException as e:
-            raise UnityCatalogError(f"Connection error listing schemas: {str(e)}")
 
     @staticmethod
     def list_tables(
@@ -104,25 +121,16 @@ class UnityCatalogService:
         Returns list of dicts with keys: name, catalog_name, schema_name,
         table_type, columns, etc.
         """
-        url = f"{UnityCatalogService._base(host)}/api/2.1/unity-catalog/tables"
-        params = {"catalog_name": catalog, "schema_name": schema}
         try:
-            resp = requests.get(
-                url,
-                headers=UnityCatalogService._headers(token),
-                params=params,
-                timeout=API_TIMEOUT,
+            w = UnityCatalogService._client(host, token)
+            tables = list(w.tables.list(catalog_name=catalog, schema_name=schema))
+            return [t.as_dict() for t in tables]
+        except UnityCatalogError:
+            raise
+        except Exception as e:
+            UnityCatalogService._handle_error(
+                f"Failed to list tables in '{catalog}.{schema}'", e
             )
-            resp.raise_for_status()
-            return resp.json().get("tables", [])
-        except requests.exceptions.HTTPError as e:
-            raise UnityCatalogError(
-                f"Failed to list tables in '{catalog}.{schema}': "
-                f"{e.response.text if e.response else str(e)}",
-                status_code=e.response.status_code if e.response else 0,
-            )
-        except requests.exceptions.RequestException as e:
-            raise UnityCatalogError(f"Connection error listing tables: {str(e)}")
 
     @staticmethod
     def table_exists(host: str, token: str, full_name: str) -> bool:
@@ -134,17 +142,13 @@ class UnityCatalogService:
         Returns:
             True if table exists, False otherwise.
         """
-        url = (
-            f"{UnityCatalogService._base(host)}/api/2.1/unity-catalog/tables/{full_name}"
-        )
         try:
-            resp = requests.get(
-                url,
-                headers=UnityCatalogService._headers(token),
-                timeout=API_TIMEOUT,
-            )
-            return resp.status_code == 200
-        except requests.exceptions.RequestException:
+            w = UnityCatalogService._client(host, token)
+            w.tables.get(full_name=full_name)
+            return True
+        except NotFound:
+            return False
+        except Exception:
             return False
 
     @staticmethod
@@ -156,20 +160,13 @@ class UnityCatalogService:
         Returns dict with keys: name, catalog_name, schema_name, columns, etc.
         Returns None if table does not exist.
         """
-        url = (
-            f"{UnityCatalogService._base(host)}/api/2.1/unity-catalog/tables/{full_name}"
-        )
         try:
-            resp = requests.get(
-                url,
-                headers=UnityCatalogService._headers(token),
-                timeout=API_TIMEOUT,
-            )
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.RequestException:
+            w = UnityCatalogService._client(host, token)
+            table = w.tables.get(full_name=full_name)
+            return table.as_dict()
+        except NotFound:
+            return None
+        except Exception:
             return None
 
     # ── Search ────────────────────────────────────────────────────────
@@ -242,61 +239,45 @@ class UnityCatalogService:
     ) -> Dict[str, Any]:
         """Execute a SQL statement on a Databricks SQL Warehouse.
 
-        Uses the SQL Statement Execution API. Polls for completion.
+        Uses the SDK Statement Execution API. Polls for completion.
 
         Returns:
             Dict with keys: status, result (if SELECT), statement_id
         """
-        url = f"{UnityCatalogService._base(host)}/api/2.0/sql/statements"
-        payload = {
-            "warehouse_id": warehouse_id,
-            "statement": sql,
-            "wait_timeout": "0s",  # Async — we poll
-        }
         try:
-            resp = requests.post(
-                url,
-                headers=UnityCatalogService._headers(token),
-                json=payload,
-                timeout=API_TIMEOUT,
+            w = UnityCatalogService._client(host, token)
+            response = w.statement_execution.execute_statement(
+                statement=sql,
+                warehouse_id=warehouse_id,
+                wait_timeout="0s",  # Async — we poll
             )
-            resp.raise_for_status()
-            result = resp.json()
 
-            statement_id = result.get("statement_id", "")
-            status = result.get("status", {}).get("state", "")
+            statement_id = response.statement_id or ""
+            status = response.status.state if response.status else None
 
             # Poll until completion
             elapsed = 0
-            while status in ("PENDING", "RUNNING") and elapsed < SQL_POLL_TIMEOUT:
+            while status in (StatementState.PENDING, StatementState.RUNNING) and elapsed < SQL_POLL_TIMEOUT:
                 time.sleep(SQL_POLL_INTERVAL)
                 elapsed += SQL_POLL_INTERVAL
-                poll_url = f"{url}/{statement_id}"
-                poll_resp = requests.get(
-                    poll_url,
-                    headers=UnityCatalogService._headers(token),
-                    timeout=API_TIMEOUT,
-                )
-                poll_resp.raise_for_status()
-                result = poll_resp.json()
-                status = result.get("status", {}).get("state", "")
+                response = w.statement_execution.get_statement(statement_id)
+                status = response.status.state if response.status else None
 
-            if status == "FAILED":
-                error_msg = result.get("status", {}).get("error", {}).get("message", "Unknown SQL error")
+            if status == StatementState.FAILED:
+                error_msg = "Unknown SQL error"
+                if response.status and response.status.error:
+                    error_msg = response.status.error.message or error_msg
                 raise UnityCatalogError(f"SQL execution failed: {error_msg}")
 
             return {
-                "status": status,
+                "status": status.value if status else "UNKNOWN",
                 "statement_id": statement_id,
-                "result": result.get("result", {}),
+                "result": response.result.as_dict() if response.result else {},
             }
-        except requests.exceptions.HTTPError as e:
-            raise UnityCatalogError(
-                f"SQL execution API error: {e.response.text if e.response else str(e)}",
-                status_code=e.response.status_code if e.response else 0,
-            )
-        except requests.exceptions.RequestException as e:
-            raise UnityCatalogError(f"Connection error executing SQL: {str(e)}")
+        except UnityCatalogError:
+            raise
+        except Exception as e:
+            UnityCatalogService._handle_error("SQL execution error", e)
 
     # ── Volume File Upload ────────────────────────────────────────────
 
@@ -321,29 +302,19 @@ class UnityCatalogService:
             Volume path string: /Volumes/{catalog}/{schema}/{volume}/{filename}
         """
         volume_path = f"/Volumes/{catalog}/{schema}/{volume}/{filename}"
-        url = f"{UnityCatalogService._base(host)}/api/2.0/fs/files{volume_path}"
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/octet-stream",
-        }
         try:
-            resp = requests.put(
-                url,
-                headers=headers,
-                data=file_bytes,
-                timeout=120,  # Large file uploads may take longer
+            w = UnityCatalogService._client(host, token)
+            w.files.upload(
+                file_path=volume_path,
+                contents=io.BytesIO(file_bytes),
+                overwrite=True,
             )
-            resp.raise_for_status()
             logger.info("Uploaded file to volume: %s", volume_path)
             return volume_path
-        except requests.exceptions.HTTPError as e:
-            raise UnityCatalogError(
-                f"Volume upload failed: {e.response.text if e.response else str(e)}",
-                status_code=e.response.status_code if e.response else 0,
-            )
-        except requests.exceptions.RequestException as e:
-            raise UnityCatalogError(f"Connection error uploading to volume: {str(e)}")
+        except UnityCatalogError:
+            raise
+        except Exception as e:
+            UnityCatalogService._handle_error("Volume upload failed", e)
 
     @staticmethod
     def create_table_from_volume(
