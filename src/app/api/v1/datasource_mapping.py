@@ -326,10 +326,11 @@ async def auto_upload_from_twbx(
 async def browse_catalog(
     host: str = Query(...),
     token: str = Query(...),
+    warehouse_id: Optional[str] = Query(None),
     catalog: Optional[str] = Query(None),
     schema_name: Optional[str] = Query(None),
 ):
-    """Browse Unity Catalog hierarchy: catalogs → schemas → tables.
+    """Browse Unity Catalog / Hive Metastore hierarchy: catalogs → schemas → tables.
 
     Without params: returns catalogs.
     With catalog: returns schemas in that catalog.
@@ -337,7 +338,7 @@ async def browse_catalog(
     """
     try:
         if catalog and schema_name:
-            tables = UnityCatalogService.list_tables(host, token, catalog, schema_name)
+            tables = UnityCatalogService.list_tables(host, token, catalog, schema_name, warehouse_id=warehouse_id)
             return {
                 "level": "tables",
                 "catalog": catalog,
@@ -353,7 +354,7 @@ async def browse_catalog(
                 ],
             }
         elif catalog:
-            schemas = UnityCatalogService.list_schemas(host, token, catalog)
+            schemas = UnityCatalogService.list_schemas(host, token, catalog, warehouse_id=warehouse_id)
             return {
                 "level": "schemas",
                 "catalog": catalog,
@@ -367,7 +368,7 @@ async def browse_catalog(
                 ],
             }
         else:
-            catalogs = UnityCatalogService.list_catalogs(host, token)
+            catalogs = UnityCatalogService.list_catalogs(host, token, warehouse_id=warehouse_id)
             return {
                 "level": "catalogs",
                 "items": [
@@ -392,11 +393,12 @@ async def browse_catalog(
 async def search_catalog(
     host: str = Query(...),
     token: str = Query(...),
+    warehouse_id: Optional[str] = Query(None),
     q: str = Query(..., min_length=1),
 ):
     """Search Unity Catalog tables by keyword."""
     try:
-        results = UnityCatalogService.search_tables(host, token, q)
+        results = UnityCatalogService.search_tables(host, token, q, warehouse_id=warehouse_id)
         return {"query": q, "results": results, "count": len(results)}
     except UnityCatalogError as e:
         raise HTTPException(status_code=502, detail=f"Search failed: {str(e)}")

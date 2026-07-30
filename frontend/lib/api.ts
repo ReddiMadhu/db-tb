@@ -158,10 +158,12 @@ export async function autoUploadEmbedded(
 export async function browseCatalog(
   host: string,
   token: string,
+  warehouseId?: string,
   catalog?: string,
   schemaName?: string
 ): Promise<CatalogBrowseResponse> {
   const params = new URLSearchParams({ host, token });
+  if (warehouseId) params.append("warehouse_id", warehouseId);
   if (catalog) params.append("catalog", catalog);
   if (schemaName) params.append("schema_name", schemaName);
   return apiFetch(`/mapping/catalog/browse?${params.toString()}`);
@@ -170,9 +172,11 @@ export async function browseCatalog(
 export async function searchCatalog(
   host: string,
   token: string,
-  query: string
+  query: string,
+  warehouseId?: string
 ): Promise<{ query: string; results: { catalog: string; schema: string; table: string; full_name: string; table_type: string }[]; count: number }> {
   const params = new URLSearchParams({ host, token, q: query });
+  if (warehouseId) params.append("warehouse_id", warehouseId);
   return apiFetch(`/mapping/catalog/search?${params.toString()}`);
 }
 

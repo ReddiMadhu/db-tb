@@ -9,6 +9,7 @@ import styles from "./CatalogBrowser.module.css";
 interface CatalogBrowserProps {
   host: string;
   token: string;
+  warehouseId?: string;
   selectedTable?: string;
   onSelectTable: (fullName: string) => void;
 }
@@ -24,6 +25,7 @@ interface LoadedChildren {
 export default function CatalogBrowser({
   host,
   token,
+  warehouseId,
   selectedTable,
   onSelectTable,
 }: CatalogBrowserProps) {
@@ -44,7 +46,7 @@ export default function CatalogBrowser({
     setLoading(true);
     setError(null);
     try {
-      const res = await browseCatalog(host, token);
+      const res = await browseCatalog(host, token, warehouseId);
       setCatalogs(res.items || []);
     } catch (err: any) {
       setError(err.message || "Failed to load Unity Catalog.");
@@ -55,7 +57,7 @@ export default function CatalogBrowser({
 
   useEffect(() => {
     loadCatalogs();
-  }, [host, token]);
+  }, [host, token, warehouseId]);
 
   const toggleCatalog = async (catName: string) => {
     const isExp = !!expanded[catName];
@@ -63,7 +65,7 @@ export default function CatalogBrowser({
 
     if (!isExp && !children[catName]) {
       try {
-        const res = await browseCatalog(host, token, catName);
+        const res = await browseCatalog(host, token, warehouseId, catName);
         setChildren((prev) => ({ ...prev, [catName]: res.items || [] }));
       } catch (err) {
         console.error("Failed to load schemas:", err);
@@ -78,7 +80,7 @@ export default function CatalogBrowser({
 
     if (!isExp && !children[key]) {
       try {
-        const res = await browseCatalog(host, token, catName, schemaName);
+        const res = await browseCatalog(host, token, warehouseId, catName, schemaName);
         setChildren((prev) => ({ ...prev, [key]: res.items || [] }));
       } catch (err) {
         console.error("Failed to load tables:", err);
@@ -97,7 +99,7 @@ export default function CatalogBrowser({
     const timer = setTimeout(async () => {
       setSearching(true);
       try {
-        const res = await searchCatalog(host, token, search);
+        const res = await searchCatalog(host, token, search, warehouseId);
         setSearchResults(res.results || []);
       } catch {
         setSearchResults([]);
@@ -107,7 +109,7 @@ export default function CatalogBrowser({
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [search, host, token]);
+  }, [search, host, token, warehouseId]);
 
   return (
     <div className={styles.container}>

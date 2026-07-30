@@ -1,13 +1,12 @@
 """
-unity_catalog_service.py — Databricks Unity Catalog Client (SDK)
-====================================================================
+unity_catalog_service.py — Databricks Unity Catalog Client (SDK & Hive Metastore Fallback)
+========================================================================================
 Connects to Databricks workspace and reads Unity Catalog metadata:
 catalogs, schemas, tables. Also supports SQL statement execution
 and file upload to UC Volumes for auto-table-creation.
 
-Uses the official Databricks Python SDK instead of raw REST calls.
-All methods are stateless — host/token passed per-call so the service
-can work with multiple Databricks connections simultaneously.
+Uses the official Databricks Python SDK with transparent fallback to
+hive_metastore (via SQL Warehouse execution) when Unity Catalog is not enabled.
 """
 
 import io
@@ -39,7 +38,7 @@ class UnityCatalogError(Exception):
 
 
 class UnityCatalogService:
-    """Stateless client for Databricks Unity Catalog APIs using the SDK."""
+    """Stateless client for Databricks Unity Catalog APIs using the SDK with hive_metastore fallback."""
 
     @staticmethod
     def _client(host: str, token: str) -> WorkspaceClient:
@@ -78,66 +77,138 @@ class UnityCatalogService:
                 f"{operation}: Connection error — {str(e)}",
             ) from e
 
+    # ── SQL Fallback Helpers ─────────────────────────────────────────
+
+    @staticmethod
+    def _list_schemas_via_sql(
+        host: str, token: str, warehouse_id: str, catalog: str
+    ) -> List[Dict[str, Any]]:
+        """Fallback to list schemas using SQL execution if UC API fails."""
+        try:
+            res = UnityCatalogService.execute_sql(host, token, warehouse_id, f"SHOW SCHEMAS IN `{catalog}`")
+            rows = res.get("result", {}).get("data_array", [])
+            schemas = []
+            for r in rows:
+                if r and len(r) > 0:
+                    name = r[0]
+                    if name != "information_schema":
+                        schemas.append({"name": name, "catalog_name": catalog})
+            return schemas if schemas else [{"name": "default", "catalog_name": catalog}]
+        except Exception as e:
+            logger.warning("Failed to list schemas via SQL fallback: %s", str(e))
+            return [{"name": "default", "catalog_name": catalog}]
+
+    @staticmethod
+    def _list_tables_via_sql(
+        host: str, token: str, warehouse_id: str, catalog: str, schema: str
+    ) -> List[Dict[str, Any]]:
+        """Fallback to list tables using SQL execution if UC API fails."""
+        try:
+            res = UnityCatalogService.execute_sql(host, token, warehouse_id, f"SHOW TABLES IN `{catalog}`.`{schema}`")
+            rows = res.get("result", {}).get("data_array", [])
+            tables = []
+            for r in rows:
+                if r and len(r) >= 2:
+                    # SHOW TABLES returns (database, tableName, isTemporary) or (tableName, isTemporary)
+                    tbl_name = r[1] if len(r) >= 3 else r[0]
+                    tables.append({
+                        "name": tbl_name,
+                        "catalog_name": catalog,
+                        "schema_name": schema,
+                        "table_type": "MANAGED",
+                    })
+            return tables
+        except Exception as e:
+            logger.warning("Failed to list tables via SQL fallback: %s", str(e))
+            return []
+
     # ── Catalog / Schema / Table Listing ──────────────────────────────
 
     @staticmethod
-    def list_catalogs(host: str, token: str) -> List[Dict[str, Any]]:
+    def list_catalogs(host: str, token: str, warehouse_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """List all catalogs in the workspace.
 
-        Returns list of dicts with keys: name, comment, owner, etc.
+        Falls back to hive_metastore if Unity Catalog is not enabled.
         """
         try:
             w = UnityCatalogService._client(host, token)
             catalogs = list(w.catalogs.list())
             return [c.as_dict() for c in catalogs]
-        except UnityCatalogError:
+        except (NotFound, UnityCatalogError) as e:
+            status_code = getattr(e, "status_code", 0)
+            if isinstance(e, NotFound) or status_code == 404 or "not found" in str(e).lower():
+                logger.info("Unity Catalog not found on workspace. Falling back to hive_metastore.")
+                return [{"name": "hive_metastore", "comment": "Legacy Hive Metastore (Fallback)"}]
             raise
         except Exception as e:
             UnityCatalogService._handle_error("Failed to list catalogs", e)
 
     @staticmethod
-    def list_schemas(host: str, token: str, catalog: str) -> List[Dict[str, Any]]:
+    def list_schemas(
+        host: str, token: str, catalog: str, warehouse_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """List all schemas in a catalog.
 
-        Returns list of dicts with keys: name, catalog_name, comment, etc.
+        Falls back to SQL execution if Unity Catalog API fails.
         """
+        if catalog == "hive_metastore" and warehouse_id:
+            return UnityCatalogService._list_schemas_via_sql(host, token, warehouse_id, catalog)
+
         try:
             w = UnityCatalogService._client(host, token)
             schemas = list(w.schemas.list(catalog_name=catalog))
             return [s.as_dict() for s in schemas]
-        except UnityCatalogError:
+        except (NotFound, UnityCatalogError) as e:
+            status_code = getattr(e, "status_code", 0)
+            if warehouse_id and (isinstance(e, NotFound) or status_code == 404 or "not found" in str(e).lower()):
+                return UnityCatalogService._list_schemas_via_sql(host, token, warehouse_id, catalog)
+            if isinstance(e, NotFound) or status_code == 404 or "not found" in str(e).lower():
+                return [{"name": "default", "catalog_name": catalog}]
             raise
         except Exception as e:
+            if warehouse_id:
+                return UnityCatalogService._list_schemas_via_sql(host, token, warehouse_id, catalog)
             UnityCatalogService._handle_error(
                 f"Failed to list schemas in '{catalog}'", e
             )
 
     @staticmethod
     def list_tables(
-        host: str, token: str, catalog: str, schema: str
+        host: str, token: str, catalog: str, schema: str, warehouse_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """List all tables in a schema.
 
-        Returns list of dicts with keys: name, catalog_name, schema_name,
-        table_type, columns, etc.
+        Falls back to SQL execution if Unity Catalog API fails.
         """
+        if catalog == "hive_metastore" and warehouse_id:
+            return UnityCatalogService._list_tables_via_sql(host, token, warehouse_id, catalog, schema)
+
         try:
             w = UnityCatalogService._client(host, token)
             tables = list(w.tables.list(catalog_name=catalog, schema_name=schema))
             return [t.as_dict() for t in tables]
-        except UnityCatalogError:
+        except (NotFound, UnityCatalogError) as e:
+            status_code = getattr(e, "status_code", 0)
+            if warehouse_id and (isinstance(e, NotFound) or status_code == 404 or "not found" in str(e).lower()):
+                return UnityCatalogService._list_tables_via_sql(host, token, warehouse_id, catalog, schema)
+            if isinstance(e, NotFound) or status_code == 404 or "not found" in str(e).lower():
+                return []
             raise
         except Exception as e:
+            if warehouse_id:
+                return UnityCatalogService._list_tables_via_sql(host, token, warehouse_id, catalog, schema)
             UnityCatalogService._handle_error(
                 f"Failed to list tables in '{catalog}.{schema}'", e
             )
 
     @staticmethod
-    def table_exists(host: str, token: str, full_name: str) -> bool:
-        """Check if a table exists in Unity Catalog.
+    def table_exists(
+        host: str, token: str, full_name: str, warehouse_id: Optional[str] = None
+    ) -> bool:
+        """Check if a table exists in Unity Catalog or Hive Metastore.
 
         Args:
-            full_name: Three-part name like 'catalog.schema.table'
+            full_name: Three-part or two-part name like 'catalog.schema.table'
 
         Returns:
             True if table exists, False otherwise.
@@ -146,9 +217,19 @@ class UnityCatalogService:
             w = UnityCatalogService._client(host, token)
             w.tables.get(full_name=full_name)
             return True
-        except NotFound:
-            return False
         except Exception:
+            if warehouse_id:
+                try:
+                    parts = full_name.split(".")
+                    if len(parts) == 3:
+                        cat, sch, tbl = parts
+                        res = UnityCatalogService.execute_sql(
+                            host, token, warehouse_id, f"SHOW TABLES IN `{cat}`.`{sch}` LIKE '{tbl}'"
+                        )
+                        data = res.get("result", {}).get("data_array", [])
+                        return len(data) > 0
+                except Exception:
+                    pass
             return False
 
     @staticmethod
@@ -173,31 +254,26 @@ class UnityCatalogService:
 
     @staticmethod
     def search_tables(
-        host: str, token: str, query: str, max_results: int = 20
+        host: str, token: str, query: str, max_results: int = 20, warehouse_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Search for tables across all catalogs by name keyword.
-
-        Iterates catalogs → schemas → tables and filters by query string.
-        Returns list of matching tables with full_name.
-        """
+        """Search for tables across all catalogs by name keyword."""
         query_lower = query.lower().strip()
         if not query_lower:
             return []
 
         results: List[Dict[str, Any]] = []
         try:
-            catalogs = UnityCatalogService.list_catalogs(host, token)
+            catalogs = UnityCatalogService.list_catalogs(host, token, warehouse_id=warehouse_id)
         except UnityCatalogError:
             return []
 
         for cat in catalogs:
             cat_name = cat.get("name", "")
-            # Skip system catalogs
             if cat_name in ("system", "__databricks_internal"):
                 continue
 
             try:
-                schemas = UnityCatalogService.list_schemas(host, token, cat_name)
+                schemas = UnityCatalogService.list_schemas(host, token, cat_name, warehouse_id=warehouse_id)
             except UnityCatalogError:
                 continue
 
@@ -208,7 +284,7 @@ class UnityCatalogService:
 
                 try:
                     tables = UnityCatalogService.list_tables(
-                        host, token, cat_name, sch_name
+                        host, token, cat_name, sch_name, warehouse_id=warehouse_id
                     )
                 except UnityCatalogError:
                     continue

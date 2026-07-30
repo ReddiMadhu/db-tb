@@ -420,6 +420,7 @@ export default function DatasourceMappingPage({
           <CatalogBrowser
             host={host}
             token={token}
+            warehouseId={warehouseId}
             selectedTable={activeMappingTable ? mappings[activeMappingTable]?.target_full_name : undefined}
             onSelectTable={(fullName) => {
               if (activeMappingTable) {
