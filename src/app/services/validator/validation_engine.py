@@ -165,6 +165,86 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                 f"Dataset '{ds.displayName}' SQL contains Tableau internal filter value '{m.group()}'."
             )
 
+    # P2.1: Tier 11 — Encoding-Field Binding Validation
+    # Ensures every spec.encodings.*.fieldName matches a query.fields[].name
+    PLACEHOLDER_FIELDS = {'x', 'y', 'value', 'filter_col', 'X', 'Y', 'Value', '0', ''}
+    for page in lakeview_dash.pages:
+        for layout_item in page.layout:
+            widget = layout_item.widget
+            if not widget.spec or not widget.queries:
+                continue
+
+            # Collect all field names from widget queries
+            query_field_names = set()
+            for q in widget.queries:
+                for field in q.query.get("fields", []):
+                    query_field_names.add(field.get("name", ""))
+
+            # Check encoding fieldNames against query fields
+            encodings = widget.spec.get("encodings", {})
+            for channel_key in ('x', 'y', 'color', 'value'):
+                channel = encodings.get(channel_key)
+                if channel and isinstance(channel, dict):
+                    field_name = channel.get("fieldName", "")
+                    if field_name and field_name not in query_field_names and query_field_names:
+                        warnings.append(
+                            f"Widget '{widget.name}' encoding channel '{channel_key}' references "
+                            f"field '{field_name}' which is not in query fields: {query_field_names}."
+                        )
+
+    # P2.2: Tier 12 — Widget Completeness Validation
+    for page in lakeview_dash.pages:
+        for layout_item in page.layout:
+            widget = layout_item.widget
+            if widget.textbox_spec is not None:
+                continue  # Text widgets are always valid
+
+            # Check for empty query fields
+            if widget.queries:
+                for q in widget.queries:
+                    fields = q.query.get("fields", [])
+                    if not fields:
+                        warnings.append(
+                            f"Widget '{widget.name}' has empty query fields list — may render blank."
+                        )
+
+            # Check for placeholder fieldNames in encodings
+            if widget.spec:
+                encodings = widget.spec.get("encodings", {})
+                for channel_key in ('x', 'y', 'value'):
+                    channel = encodings.get(channel_key)
+                    if channel and isinstance(channel, dict):
+                        fn = channel.get("fieldName", "")
+                        if fn in PLACEHOLDER_FIELDS:
+                            errors.append(
+                                f"Widget '{widget.name}' has placeholder fieldName '{fn}' in "
+                                f"'{channel_key}' encoding — will render blank in Databricks."
+                            )
+
+                # Check for empty table columns
+                wt = widget.spec.get("widgetType", "")
+                if wt == "table":
+                    cols = encodings.get("columns", [])
+                    if not cols:
+                        warnings.append(
+                            f"Widget '{widget.name}' (table) has empty columns list — will render blank."
+                        )
+
+    # P2.2: Tier 13 — Layout Density Validation
+    for page in lakeview_dash.pages:
+        if not page.layout:
+            continue
+        all_width_one = all(
+            layout_item.position.width == 1
+            for layout_item in page.layout
+            if not (layout_item.widget.textbox_spec is not None)
+        )
+        if all_width_one and len(page.layout) > 2:
+            warnings.append(
+                f"Page '{page.displayName}' has all non-text widgets with width=1 — "
+                f"dashboard will appear squeezed. Consider wider widget layouts."
+            )
+
     is_valid = len(errors) == 0
     return {
         "valid": is_valid,
@@ -181,5 +261,9 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
             "pseudo_field_detection": not any("pseudo-field" in e.lower() for e in errors),
             "widget_spec_compat": not any("specLoadError" in e for e in warnings),
             "filter_sanity": not any("internal filter" in e.lower() for e in errors),
+            "encoding_field_binding": not any("encoding channel" in e.lower() for e in warnings),
+            "widget_completeness": not any("placeholder fieldName" in e for e in errors),
+            "layout_density": not any("width=1" in w for w in warnings),
         }
     }
+

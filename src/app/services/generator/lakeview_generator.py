@@ -28,6 +28,23 @@ DEFAULT_COLORS = [
     "#919191", "#BF7080"
 ]
 
+# P0.3: Placeholder field names that indicate unresolved data binding
+PLACEHOLDER_FIELDS = {'x', 'y', 'value', 'filter_col', 'X', 'Y', 'Value', '0', ''}
+
+# P1.3: Minimum query fields required per chart type
+MIN_FIELDS_FOR_CHART = {
+    ChartType.BAR: 1,
+    ChartType.LINE: 1,
+    ChartType.AREA: 1,
+    ChartType.SCATTER: 2,
+    ChartType.PIE: 2,
+    ChartType.COUNTER: 1,
+    ChartType.TABLE: 1,
+    ChartType.FILTER_MULTI: 1,
+    ChartType.FILTER_SINGLE: 1,
+    ChartType.FILTER_DATE: 1,
+}
+
 
 def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboard:
     """Stage 8 Lakeview Generator: Converts Universal BI Model (UBIM) to Databricks Lakeview AST model."""
@@ -120,6 +137,60 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     y_field = query_fields_list[0]["name"]
                 else:
                     y_field = x_field
+
+            # ── P0.3: Skip widgets with empty fields or placeholder encodings ──
+            has_real_fields = len(query_fields_list) > 0
+            has_placeholder_x = x_field in PLACEHOLDER_FIELDS
+            has_placeholder_y = y_field in PLACEHOLDER_FIELDS
+
+            # If no real query fields exist, skip the widget entirely
+            if not has_real_fields:
+                import logging
+                logging.warning(
+                    f"Skipping widget '{w_ubim.title or w_ubim.name}' — no query fields resolved. "
+                    f"Original chart_type={w_ubim.chart_type.value}"
+                )
+                continue
+
+            # If all encoding field names are placeholders, skip the widget
+            if has_placeholder_x and has_placeholder_y:
+                import logging
+                logging.warning(
+                    f"Skipping widget '{w_ubim.title or w_ubim.name}' — placeholder encodings "
+                    f"(x='{x_field}', y='{y_field}'). chart_type={w_ubim.chart_type.value}"
+                )
+                continue
+
+            # ── P1.3: Chart-type-specific validation and demotion ──
+            # Scatter requires 2 distinct quantitative fields
+            if w_ubim.chart_type == ChartType.SCATTER and x_field == y_field:
+                import logging
+                logging.warning(
+                    f"Demoting widget '{w_ubim.title or w_ubim.name}' from scatter to bar — "
+                    f"x and y reference the same field '{x_field}'"
+                )
+                w_ubim.chart_type = ChartType.BAR
+
+            # Pie requires a categorical X and quantitative Y
+            if w_ubim.chart_type == ChartType.PIE:
+                if has_placeholder_x or has_placeholder_y:
+                    import logging
+                    logging.warning(
+                        f"Demoting widget '{w_ubim.title or w_ubim.name}' from pie to bar — "
+                        f"missing valid categorical or quantitative field"
+                    )
+                    w_ubim.chart_type = ChartType.BAR
+
+            # Counter requires at least one real value field
+            if w_ubim.chart_type == ChartType.COUNTER:
+                val_field_candidate = query_fields_list[0]["name"] if query_fields_list else "value"
+                if val_field_candidate in PLACEHOLDER_FIELDS:
+                    import logging
+                    logging.warning(
+                        f"Skipping counter widget '{w_ubim.title or w_ubim.name}' — "
+                        f"no valid value field"
+                    )
+                    continue
 
             if w_ubim.chart_type == ChartType.BAR:
                 encodings_cfg: Dict[str, Any] = {
@@ -246,6 +317,14 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     filt_type = "filter-date-range-picker"
                 
                 f_field = query_fields_list[0]["name"] if query_fields_list else "filter_col"
+                # P0.3: Skip filter widgets with placeholder fields
+                if f_field in PLACEHOLDER_FIELDS:
+                    import logging
+                    logging.warning(
+                        f"Skipping filter widget '{w_ubim.title or w_ubim.name}' — "
+                        f"no valid filter field resolved"
+                    )
+                    continue
                 spec = {
                     "version": 2,
                     "widgetType": filt_type,

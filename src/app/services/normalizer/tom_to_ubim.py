@@ -33,6 +33,10 @@ from app.services.parser.tableau_extractor import is_tableau_pseudo_field
 from app.services.mapper.datasource_mapper import (
     build_table_mapping, resolve_table_in_sql, is_unresolved_table, clean_table_name_for_catalog
 )
+from app.services.compiler.field_classifier import (
+    classify_field, semantic_to_aggregation, is_aggregatable, is_groupable,
+    FieldSemantic
+)
 
 
 # ── Aggregation derivation mapping ──────────────────────────────────────────
@@ -94,11 +98,17 @@ def _resolve_datasource(ws: WorksheetMetadata, workbook: WorkbookMetadata) -> Op
     return workbook.datasources[0] if workbook.datasources else None
 
 
+def _make_safe_alias(field_name: str) -> str:
+    """Create a safe SQL alias from a field name (replace spaces/special chars with underscores)."""
+    return re.sub(r'[^a-zA-Z0-9_]', '_', field_name).strip('_') or field_name
+
+
 def _build_field_expression(field_name: str, aggregation: AggregationType) -> str:
     """Build a Lakeview-compatible field expression.
     
-    For aggregated queries: SUM(`field`), COUNT(DISTINCT `field`), etc.
-    For dimensions (no agg): `field`
+    Uses the ORIGINAL field name (with spaces) inside backticks for SQL correctness.
+    For aggregated queries: SUM(`field name`), COUNT(DISTINCT `field name`), etc.
+    For dimensions (no agg): `field name`
     """
     backtick_name = f"`{field_name}`"
     if aggregation == AggregationType.NONE:
@@ -120,24 +130,66 @@ def _build_field_expression(field_name: str, aggregation: AggregationType) -> st
     return backtick_name
 
 
+def _get_column_metadata(field_name: str, ds: Optional[DatasourceMetadata]) -> dict:
+    """Look up column metadata from datasource for a given field name."""
+    if not ds:
+        return {}
+    for col in ds.columns:
+        clean_caption = (col.caption or col.internal_name).strip()
+        if clean_caption == field_name:
+            return {
+                'datatype': col.datatype or '',
+                'role': col.role or '',
+                'default_aggregation': col.default_aggregation or '',
+                'type': col.type or '',
+                'formula': col.formula,
+            }
+    return {}
+
+
 def _classify_shelf_field(sf: ShelfField, ds: Optional[DatasourceMetadata]) -> AggregationType:
-    """Determine the aggregation type for a shelf field."""
+    """Determine the aggregation type for a shelf field using the semantic classifier.
+    
+    Classification hierarchy:
+      1. Explicit Tableau shelf derivation (sum:, avg:, cnt:, etc.)
+      2. Semantic field classification (identifier, ratio, date, etc.)
+      3. Tableau column metadata fallback
+    """
+    # 1. Trust explicit Tableau shelf derivation first
     if sf.derivation:
         agg = DERIV_TO_AGG.get(sf.derivation.lower(), AggregationType.NONE)
         if agg != AggregationType.NONE:
+            # Even with explicit derivation, override SUM for identifiers/ratios
+            col_meta = _get_column_metadata(sf.field_name, ds)
+            semantic = classify_field(
+                field_name=sf.field_name,
+                datatype=col_meta.get('datatype', ''),
+                role=col_meta.get('role', ''),
+                default_aggregation=col_meta.get('default_aggregation', ''),
+                field_type=col_meta.get('type', ''),
+                formula=col_meta.get('formula'),
+            )
+            if semantic == FieldSemantic.IDENTIFIER:
+                return AggregationType.NONE  # Never aggregate identifiers
+            if semantic == FieldSemantic.MEASURE_RATIO and agg == AggregationType.SUM:
+                return AggregationType.AVG  # Don't SUM ratios
             return agg
     
-    # Check column metadata for role
-    if ds:
-        for col in ds.columns:
-            clean_caption = (col.caption or col.internal_name).strip()
-            if clean_caption == sf.field_name:
-                if col.role == 'measure' and col.default_aggregation:
-                    return DERIV_TO_AGG.get(col.default_aggregation.lower(), AggregationType.SUM)
-                elif col.role == 'measure':
-                    return AggregationType.SUM
+    # 2. Use semantic field classifier
+    col_meta = _get_column_metadata(sf.field_name, ds)
+    semantic = classify_field(
+        field_name=sf.field_name,
+        datatype=col_meta.get('datatype', ''),
+        role=col_meta.get('role', ''),
+        default_aggregation=col_meta.get('default_aggregation', ''),
+        field_type=col_meta.get('type', ''),
+        formula=col_meta.get('formula'),
+    )
     
-    return AggregationType.NONE
+    return semantic_to_aggregation(
+        semantic,
+        tableau_aggregation=col_meta.get('default_aggregation'),
+    )
 
 
 def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = None, catalog_schema: str = "") -> str:
@@ -283,6 +335,8 @@ def normalize_tom_to_ubim(
 
         dimensions = []
         measures = []
+        seen_dim_names = set()    # P1.2: deduplication tracking
+        seen_measure_names = set()  # P1.2: deduplication tracking
         has_measure_names = False
 
         # Process structured shelves — filter pseudo-fields
@@ -299,43 +353,96 @@ def normalize_tom_to_ubim(
             for sf in all_shelves:
                 agg = _classify_shelf_field(sf, ds)
                 if agg != AggregationType.NONE:
-                    measures.append((sf.field_name, agg))
+                    if sf.field_name not in seen_measure_names:  # P1.2: deduplicate
+                        measures.append((sf.field_name, agg))
+                        seen_measure_names.add(sf.field_name)
                 else:
-                    dimensions.append(sf.field_name)
+                    if sf.field_name not in seen_dim_names:  # P1.2: deduplicate
+                        dimensions.append(sf.field_name)
+                        seen_dim_names.add(sf.field_name)
         else:
+            # Fallback: use flat field names with semantic classification (P0.1)
             cols_clean = _filter_pseudo_fields(ws.columns)
             rows_clean = _filter_pseudo_fields(ws.rows)
             for col_name in cols_clean:
-                dimensions.append(col_name)
+                if col_name not in seen_dim_names:
+                    col_meta = _get_column_metadata(col_name, ds)
+                    semantic = classify_field(
+                        field_name=col_name,
+                        datatype=col_meta.get('datatype', ''),
+                        role=col_meta.get('role', ''),
+                        default_aggregation=col_meta.get('default_aggregation', ''),
+                        field_type=col_meta.get('type', ''),
+                    )
+                    if is_aggregatable(semantic):
+                        agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
+                        if col_name not in seen_measure_names:
+                            measures.append((col_name, agg))
+                            seen_measure_names.add(col_name)
+                    else:
+                        dimensions.append(col_name)
+                        seen_dim_names.add(col_name)
             for row_name in rows_clean:
-                measures.append((row_name, AggregationType.SUM))
+                col_meta = _get_column_metadata(row_name, ds)
+                semantic = classify_field(
+                    field_name=row_name,
+                    datatype=col_meta.get('datatype', ''),
+                    role=col_meta.get('role', ''),
+                    default_aggregation=col_meta.get('default_aggregation', ''),
+                    field_type=col_meta.get('type', ''),
+                )
+                if is_aggregatable(semantic):
+                    agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
+                    if row_name not in seen_measure_names:
+                        measures.append((row_name, agg))
+                        seen_measure_names.add(row_name)
+                else:
+                    if row_name not in seen_dim_names:
+                        dimensions.append(row_name)
+                        seen_dim_names.add(row_name)
 
         # Handle Measure Names/Values: expand into actual measure columns
         if has_measure_names and not measures:
             real_measures = _get_real_measure_columns(ds)
             for m in real_measures:
-                measures.append((m, AggregationType.SUM))
+                if m not in seen_measure_names:
+                    # Classify each real measure with the semantic classifier
+                    col_meta = _get_column_metadata(m, ds)
+                    semantic = classify_field(
+                        field_name=m,
+                        datatype=col_meta.get('datatype', ''),
+                        role=col_meta.get('role', ''),
+                        default_aggregation=col_meta.get('default_aggregation', ''),
+                    )
+                    agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
+                    measures.append((m, agg))
+                    seen_measure_names.add(m)
 
         # Add color/size/detail encoding fields (filtered)
         for enc in ws.encodings:
             if is_tableau_pseudo_field(enc.field_name):
                 continue
             if enc.channel in ('color', 'shape'):
-                if enc.field_name not in dimensions:
+                if enc.field_name not in seen_dim_names:
                     dimensions.append(enc.field_name)
+                    seen_dim_names.add(enc.field_name)
             elif enc.channel in ('size', 'tooltip', 'label') and enc.aggregation:
                 agg = DERIV_TO_AGG.get(enc.aggregation.lower(), AggregationType.SUM)
-                if (enc.field_name, agg) not in measures:
+                if enc.field_name not in seen_measure_names:
                     measures.append((enc.field_name, agg))
+                    seen_measure_names.add(enc.field_name)
 
-        # Build SQL
+        # Build SQL — P0.2: preserve original column names in backtick-quoted SQL
         select_parts = []
         for dim in dimensions:
             select_parts.append(f"`{dim}`")
         for mname, magg in measures:
-            expr = _build_field_expression(mname, magg)
-            alias = mname.replace(' ', '_').replace('/', '_')
-            select_parts.append(f"{expr} AS `{alias}`")
+            expr = _build_field_expression(mname, magg)  # Uses original name with spaces
+            alias = _make_safe_alias(mname)  # P0.2: safe alias for encoding references
+            if alias != mname:
+                select_parts.append(f"{expr} AS `{alias}`")
+            else:
+                select_parts.append(f"{expr} AS `{alias}`")
 
         if not select_parts:
             non_pseudo_cols = [c for c in ds.columns if not is_tableau_pseudo_field(c.caption or c.internal_name)]
@@ -367,7 +474,7 @@ def normalize_tom_to_ubim(
             sql_query=sql,
             tables_referenced=[t.name for t in ds.tables],
             fields=[{"name": d, "type": "string"} for d in dimensions] +
-                   [{"name": m[0], "type": "number"} for m in measures]
+                   [{"name": _make_safe_alias(m[0]), "type": "number"} for m in measures]
         )
         ubim_dash.datasets.append(ubim_ds)
         ws_dataset_map[ws.name] = ds_id
@@ -426,6 +533,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     # Build encodings and query fields from shelves
     encodings = []
     query_fields = []
+    seen_encoding_fields = set()  # P1.2: deduplication
     
     # Process structured shelves (filtered)
     cols_shelves = _filter_pseudo_shelf_fields(ws.columns_shelves)
@@ -435,103 +543,149 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         for sf in cols_shelves:
             agg = _classify_shelf_field(sf, ds)
             expr = _build_field_expression(sf.field_name, agg)
-            alias = sf.field_name.replace(' ', '_').replace('/', '_')
+            alias = _make_safe_alias(sf.field_name)  # P0.2: safe alias
 
-            encodings.append(IntermediateEncoding(
-                channel=EncodingChannel.X,
-                field_name=alias,
-                dataset_name=dataset_id,
-                aggregation=agg,
-                expression_sql=expr,
-                data_type="string" if agg == AggregationType.NONE else "number"
-            ))
-            query_fields.append(IntermediateQueryField(
-                expression=expr,
-                name=alias,
-                data_type="string" if agg == AggregationType.NONE else "number"
-            ))
+            if alias not in seen_encoding_fields:  # P1.2: deduplicate
+                seen_encoding_fields.add(alias)
+                encodings.append(IntermediateEncoding(
+                    channel=EncodingChannel.X,
+                    field_name=alias,
+                    dataset_name=dataset_id,
+                    aggregation=agg,
+                    expression_sql=expr,
+                    data_type="string" if agg == AggregationType.NONE else "number"
+                ))
+                query_fields.append(IntermediateQueryField(
+                    expression=expr,
+                    name=alias,
+                    data_type="string" if agg == AggregationType.NONE else "number"
+                ))
 
         for sf in rows_shelves:
             agg = _classify_shelf_field(sf, ds)
             expr = _build_field_expression(sf.field_name, agg)
-            alias = sf.field_name.replace(' ', '_').replace('/', '_')
+            alias = _make_safe_alias(sf.field_name)  # P0.2: safe alias
 
-            encodings.append(IntermediateEncoding(
-                channel=EncodingChannel.Y,
-                field_name=alias,
-                dataset_name=dataset_id,
-                aggregation=agg,
-                expression_sql=expr,
-                data_type="string" if agg == AggregationType.NONE else "number"
-            ))
-            query_fields.append(IntermediateQueryField(
-                expression=expr,
-                name=alias,
-                data_type="string" if agg == AggregationType.NONE else "number"
-            ))
-
-        if not rows_shelves and ds:
-            real_measures = _get_real_measure_columns(ds)
-            for mname in real_measures:
-                alias = mname.replace(' ', '_').replace('/', '_')
-                expr = f"SUM(`{mname}`)"
+            if alias not in seen_encoding_fields:  # P1.2: deduplicate
+                seen_encoding_fields.add(alias)
                 encodings.append(IntermediateEncoding(
                     channel=EncodingChannel.Y,
                     field_name=alias,
                     dataset_name=dataset_id,
-                    aggregation=AggregationType.SUM,
+                    aggregation=agg,
                     expression_sql=expr,
-                    data_type="number"
+                    data_type="string" if agg == AggregationType.NONE else "number"
                 ))
-                if not any(qf.name == alias for qf in query_fields):
-                    query_fields.append(IntermediateQueryField(
-                        expression=expr,
-                        name=alias,
+                query_fields.append(IntermediateQueryField(
+                    expression=expr,
+                    name=alias,
+                    data_type="string" if agg == AggregationType.NONE else "number"
+                ))
+
+        if not rows_shelves and ds:
+            real_measures = _get_real_measure_columns(ds)
+            for mname in real_measures:
+                alias = _make_safe_alias(mname)  # P0.2: safe alias
+                # P0.1: use semantic classifier instead of blind SUM
+                col_meta = _get_column_metadata(mname, ds)
+                semantic = classify_field(
+                    field_name=mname,
+                    datatype=col_meta.get('datatype', ''),
+                    role=col_meta.get('role', ''),
+                    default_aggregation=col_meta.get('default_aggregation', ''),
+                )
+                agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
+                if agg == AggregationType.NONE:
+                    agg = AggregationType.SUM  # Measures must be aggregated for charts
+                expr = _build_field_expression(mname, agg)
+                if alias not in seen_encoding_fields:
+                    seen_encoding_fields.add(alias)
+                    encodings.append(IntermediateEncoding(
+                        channel=EncodingChannel.Y,
+                        field_name=alias,
+                        dataset_name=dataset_id,
+                        aggregation=agg,
+                        expression_sql=expr,
                         data_type="number"
                     ))
+                    if not any(qf.name == alias for qf in query_fields):
+                        query_fields.append(IntermediateQueryField(
+                            expression=expr,
+                            name=alias,
+                            data_type="number"
+                        ))
     else:
+        # Fallback: use flat field names with semantic classification (P0.1)
         cols_clean = _filter_pseudo_fields(ws.columns)
         rows_clean = _filter_pseudo_fields(ws.rows)
         for col_name in cols_clean:
-            encodings.append(IntermediateEncoding(
-                channel=EncodingChannel.X,
+            col_meta = _get_column_metadata(col_name, ds)
+            semantic = classify_field(
                 field_name=col_name,
-                dataset_name=dataset_id,
-                aggregation=AggregationType.NONE,
-                expression_sql=f"`{col_name}`"
-            ))
-            query_fields.append(IntermediateQueryField(
-                expression=f"`{col_name}`",
-                name=col_name
-            ))
+                datatype=col_meta.get('datatype', ''),
+                role=col_meta.get('role', ''),
+                default_aggregation=col_meta.get('default_aggregation', ''),
+            )
+            agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
+            alias = _make_safe_alias(col_name) if agg != AggregationType.NONE else col_name
+            expr = _build_field_expression(col_name, agg) if agg != AggregationType.NONE else f"`{col_name}`"
+            if alias not in seen_encoding_fields:
+                seen_encoding_fields.add(alias)
+                encodings.append(IntermediateEncoding(
+                    channel=EncodingChannel.X,
+                    field_name=alias,
+                    dataset_name=dataset_id,
+                    aggregation=agg,
+                    expression_sql=expr
+                ))
+                query_fields.append(IntermediateQueryField(
+                    expression=expr,
+                    name=alias
+                ))
         for row_name in rows_clean:
-            encodings.append(IntermediateEncoding(
-                channel=EncodingChannel.Y,
+            col_meta = _get_column_metadata(row_name, ds)
+            semantic = classify_field(
                 field_name=row_name,
-                dataset_name=dataset_id,
-                aggregation=AggregationType.SUM,
-                expression_sql=f"SUM(`{row_name}`)"
-            ))
-            query_fields.append(IntermediateQueryField(
-                expression=f"SUM(`{row_name}`)",
-                name=row_name
-            ))
+                datatype=col_meta.get('datatype', ''),
+                role=col_meta.get('role', ''),
+                default_aggregation=col_meta.get('default_aggregation', ''),
+            )
+            agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
+            if agg == AggregationType.NONE and is_aggregatable(semantic):
+                agg = AggregationType.SUM
+            alias = _make_safe_alias(row_name)
+            expr = _build_field_expression(row_name, agg)
+            if alias not in seen_encoding_fields:
+                seen_encoding_fields.add(alias)
+                encodings.append(IntermediateEncoding(
+                    channel=EncodingChannel.Y,
+                    field_name=alias,
+                    dataset_name=dataset_id,
+                    aggregation=agg,
+                    expression_sql=expr
+                ))
+                query_fields.append(IntermediateQueryField(
+                    expression=expr,
+                    name=alias
+                ))
     
     # Add color encoding from Tableau encodings (filtered)
     for enc in ws.encodings:
         if enc.channel == 'color' and not is_tableau_pseudo_field(enc.field_name):
-            alias = enc.field_name.replace(' ', '_').replace('/', '_')
-            encodings.append(IntermediateEncoding(
-                channel=EncodingChannel.COLOR,
-                field_name=alias,
-                dataset_name=dataset_id,
-                aggregation=AggregationType.NONE
-            ))
-            if not any(qf.name == alias for qf in query_fields):
-                query_fields.append(IntermediateQueryField(
-                    expression=f"`{enc.field_name}`",
-                    name=alias
+            alias = _make_safe_alias(enc.field_name)  # P0.2: safe alias
+            if alias not in seen_encoding_fields:  # P1.2: deduplicate
+                seen_encoding_fields.add(alias)
+                encodings.append(IntermediateEncoding(
+                    channel=EncodingChannel.COLOR,
+                    field_name=alias,
+                    dataset_name=dataset_id,
+                    aggregation=AggregationType.NONE
                 ))
+                if not any(qf.name == alias for qf in query_fields):
+                    query_fields.append(IntermediateQueryField(
+                        expression=f"`{enc.field_name}`",
+                        name=alias
+                    ))
     
     # Compute layout position from zone geometry if available
     pos = IntermediatePosition(
