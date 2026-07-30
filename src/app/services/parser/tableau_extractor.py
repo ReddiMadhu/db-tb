@@ -24,10 +24,17 @@ from app.models.metadata import (
 # ── Tableau shelf derivation constants ─────────────────────────────────────────
 TABLEAU_DERIVATIONS = (
     'none', 'sum', 'usr', 'yr', 'qr', 'wk', 'mn', 'dy',
-    'cnt', 'cntd', 'min', 'max', 'attr', 'avg', 'med',
+    'cnt', 'cntd', 'ctd', 'min', 'max', 'attr', 'avg', 'med',
     'var', 'varp', 'stdev', 'stdevp', 'collect', 'percentile'
 )
 DERIV_RE = re.compile(r'^(' + '|'.join(TABLEAU_DERIVATIONS) + r'):', re.IGNORECASE)
+
+# Named encoding element tags used by Tableau (channel = tag name).
+# Tableau stores these as <color column="..."/>, not <encoding type="color"/>.
+TABLEAU_ENCODING_CHANNELS = frozenset({
+    'color', 'size', 'text', 'tooltip', 'detail', 'shape', 'path',
+    'angle', 'wedge-size', 'lod', 'label',
+})
 
 
 def _load_xml(path: str) -> etree._Element:
@@ -115,8 +122,10 @@ TABLEAU_GENERATED_FIELD_RE = re.compile(
     re.IGNORECASE
 )
 
+# Only treat unresolved usr: refs as pseudo after derivation strip fails.
+# ctd: is a real COUNTD derivation (alias of cntd) and must not be dropped here.
 TABLEAU_INTERNAL_PREFIX_RE = re.compile(
-    r'^(ctd|usr):', re.IGNORECASE
+    r'^usr:', re.IGNORECASE
 )
 
 TABLEAU_INTERNAL_FILTER_RE = re.compile(
@@ -252,64 +261,140 @@ def _parse_shelf_fields(shelf_text: str, ds_prefixes: list) -> list:
     return fields
 
 
-def _extract_worksheet_encodings(ws_el, ds_prefixes: list) -> list:
-    """Extract visual encoding shelves from worksheet panes.
-    
-    Tableau stores encodings in:
-      <worksheet>/<table>/<panes>/<pane>/<encodings>/<encoding>
-    Each <encoding> has type (color, size, detail, tooltip, label, shape, path)
-    and field references.
+def _parse_encoding_column_ref(column_ref: str, ds_prefixes: list, caption_map: dict = None) -> tuple:
+    """Parse a Tableau encoding @column value into (clean_name, derivation, aggregation).
+
+    Example: [excel-direct...].[sum:Total Claim:qk]
+      → ('Total Claim', 'sum', 'SUM')
     """
+    caption_map = caption_map or {}
+    raw = column_ref.strip()
+    # Prefer the innermost [deriv:field:qual] segment
+    bracket_refs = re.findall(r'\[([^\]]+)\]', raw)
+    field_ref = bracket_refs[-1] if bracket_refs else raw.strip('[]')
+
+    derivation = None
+    aggregation = None
+    deriv_match = re.match(
+        r'^(' + '|'.join(TABLEAU_DERIVATIONS) + r'):(.+?)(?::(nk|qk|ok|tk))?$',
+        field_ref,
+        re.IGNORECASE,
+    )
+    if deriv_match:
+        derivation = deriv_match.group(1).lower()
+        field_name = deriv_match.group(2).strip()
+        if derivation not in ('none',):
+            aggregation = derivation.upper()
+            if derivation == 'ctd':
+                aggregation = 'COUNTD'
+            elif derivation == 'cntd':
+                aggregation = 'COUNTD'
+            elif derivation == 'cnt':
+                aggregation = 'COUNT'
+            elif derivation == 'med':
+                aggregation = 'MEDIAN'
+            elif derivation == 'avg':
+                aggregation = 'AVG'
+            elif derivation == 'sum':
+                aggregation = 'SUM'
+    else:
+        field_name = field_ref.strip()
+
+    clean = _clean_field(f"[{field_name}]", ds_prefixes)
+    # Resolve internal column names / Calculation_* to captions when available
+    if re.match(r'^Calculation_\d+$', clean, re.IGNORECASE):
+        clean = caption_map.get(clean, clean)
+    elif clean in caption_map:
+        clean = caption_map[clean]
+    return clean, derivation, aggregation
+
+
+def _extract_worksheet_encodings(ws_el, ds_prefixes: list, caption_map: dict = None) -> list:
+    """Extract visual encoding shelves from worksheet panes.
+
+    Tableau encodes channels in two shapes:
+      1) Named children with @column (common): <color column="[ds].[none:Region:nk]"/>
+      2) Legacy <encoding type="color" field="..."/> / field-ref children
+    """
+    caption_map = caption_map or {}
     encodings = []
-    # Try multiple XPaths for different Tableau versions
+    seen = set()
+
+    def _append(channel: str, field_name: str, aggregation=None, derivation=None):
+        if not channel or not field_name:
+            return
+        # Normalize Tableau pie wedge + LOD aliases
+        ch = channel.lower()
+        if ch == 'wedge-size':
+            ch = 'size'
+        elif ch == 'lod':
+            ch = 'detail'
+        elif ch == 'label':
+            ch = 'text'
+        key = (ch, field_name)
+        if key in seen:
+            return
+        seen.add(key)
+        encodings.append(EncodingMetadata(
+            channel=ch,
+            field_name=field_name,
+            field_type="",
+            aggregation=aggregation,
+            derivation=derivation,
+        ))
+
+    # Shape 1: <encodings>/<color|size|text|... column="..."/>
+    for enc_parent in (
+        ws_el.xpath(".//panes/pane/encodings")
+        + ws_el.xpath(".//table/panes/pane/encodings")
+        + ws_el.xpath(".//view/panes/pane/encodings")
+    ):
+        for child in enc_parent:
+            tag = etree.QName(child).localname.lower() if isinstance(child.tag, str) else ""
+            if tag not in TABLEAU_ENCODING_CHANNELS:
+                continue
+            col_ref = child.get("column") or child.get("field") or ""
+            if not col_ref:
+                continue
+            clean, derivation, aggregation = _parse_encoding_column_ref(
+                col_ref, ds_prefixes, caption_map
+            )
+            _append(tag, clean, aggregation=aggregation, derivation=derivation)
+
+    # Shape 2: legacy <encoding type="..." field="..."> / field-ref
     encoding_nodes = (
-        ws_el.xpath(".//panes/pane/encodings/encoding") or
-        ws_el.xpath(".//table/panes/pane/encodings/encoding") or
-        ws_el.xpath(".//view/panes/pane/encodings/encoding")
+        ws_el.xpath(".//panes/pane/encodings/encoding")
+        + ws_el.xpath(".//table/panes/pane/encodings/encoding")
+        + ws_el.xpath(".//view/panes/pane/encodings/encoding")
     )
     for enc in encoding_nodes:
         channel = enc.get("type", enc.get("attr", ""))
         if not channel:
             continue
-        # Field references inside encoding
         for field_ref in enc.xpath(".//field-ref") + enc.xpath(".//datasource-column-ref"):
             fname = field_ref.get("field", field_ref.get("name", ""))
             if fname:
-                clean = _clean_field(fname, ds_prefixes)
-                encodings.append(EncodingMetadata(
-                    channel=channel.lower(),
-                    field_name=clean,
-                    field_type="",
-                    aggregation=None,
-                    derivation=None
-                ))
-        # Also check for direct @field attribute on encoding
-        enc_field = enc.get("field", "")
+                clean, derivation, aggregation = _parse_encoding_column_ref(
+                    fname, ds_prefixes, caption_map
+                )
+                _append(channel, clean, aggregation=aggregation, derivation=derivation)
+        enc_field = enc.get("field", "") or enc.get("column", "")
         if enc_field and not enc.xpath(".//field-ref") and not enc.xpath(".//datasource-column-ref"):
-            clean = _clean_field(enc_field, ds_prefixes)
-            encodings.append(EncodingMetadata(
-                channel=channel.lower(),
-                field_name=clean,
-                field_type="",
-                aggregation=None,
-                derivation=None
-            ))
-    
-    # Also extract from mark encodings: <mark class="..."><encoding .../>
+            clean, derivation, aggregation = _parse_encoding_column_ref(
+                enc_field, ds_prefixes, caption_map
+            )
+            _append(channel, clean, aggregation=aggregation, derivation=derivation)
+
+    # Mark encodings: <mark class="..."><encoding .../>
     for mark_enc in ws_el.xpath(".//panes/pane/mark/encoding") + ws_el.xpath(".//mark-encodings/encoding"):
         channel = mark_enc.get("type", mark_enc.get("attr", ""))
-        field = mark_enc.get("field", "")
+        field = mark_enc.get("field", "") or mark_enc.get("column", "")
         if channel and field:
-            clean = _clean_field(field, ds_prefixes)
-            deriv_m = DERIV_RE.match(field.strip("[]"))
-            encodings.append(EncodingMetadata(
-                channel=channel.lower(),
-                field_name=clean,
-                field_type="",
-                aggregation=deriv_m.group(1).upper() if deriv_m else None,
-                derivation=None
-            ))
-    
+            clean, derivation, aggregation = _parse_encoding_column_ref(
+                field, ds_prefixes, caption_map
+            )
+            _append(channel, clean, aggregation=aggregation, derivation=derivation)
+
     return encodings
 
 
@@ -935,22 +1020,24 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         cols_shelves = _parse_shelf_fields(cols_text, ds_prefixes)
         rows_shelves = _parse_shelf_fields(rows_text, ds_prefixes)
 
-        # Resolve Calculation_* IDs to captions in shelf fields
+        # Resolve Calculation_* IDs and internal column names to captions
         for sf in cols_shelves + rows_shelves:
             if re.match(r'^Calculation_\d+$', sf.field_name, re.IGNORECASE):
                 resolved = caption_map.get(sf.field_name)
                 if resolved:
                     sf.field_name = resolved
+            elif sf.field_name in caption_map:
+                sf.field_name = caption_map[sf.field_name]
         
         # Legacy flat field name lists (backward compat) — resolve Calculation_* IDs
         cols_flat = [sf.field_name for sf in cols_shelves] if cols_shelves else re.findall(r'\[([^\]]+)\]', cols_text)
         rows_flat = [sf.field_name for sf in rows_shelves] if rows_shelves else re.findall(r'\[([^\]]+)\]', rows_text)
-        cols_flat = [caption_map.get(f, f) if re.match(r'^Calculation_\d+$', f) else f for f in cols_flat]
-        rows_flat = [caption_map.get(f, f) if re.match(r'^Calculation_\d+$', f) else f for f in rows_flat]
+        cols_flat = [caption_map.get(f, f) for f in cols_flat]
+        rows_flat = [caption_map.get(f, f) for f in rows_flat]
         
         # Extract all the rich metadata
         mark_type = _extract_mark_type(ws_el)
-        encodings = _extract_worksheet_encodings(ws_el, ds_prefixes)
+        encodings = _extract_worksheet_encodings(ws_el, ds_prefixes, caption_map)
         filters = _extract_worksheet_filters(ws_el, ds_prefixes)
         sorts = _extract_worksheet_sorts(ws_el, ds_prefixes)
         datasource_name = _resolve_worksheet_datasource(ws_el, ds_name_list)
@@ -960,10 +1047,10 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         # Build measure bindings from shelf derivations
         measure_bindings = []
         for sf in cols_shelves + rows_shelves:
-            if sf.derivation and sf.derivation in ('sum', 'avg', 'cnt', 'cntd', 'min', 'max', 'attr', 'med'):
+            if sf.derivation and sf.derivation in ('sum', 'avg', 'cnt', 'cntd', 'ctd', 'min', 'max', 'attr', 'med'):
                 measure_bindings.append({
                     "field": sf.field_name,
-                    "aggregation": sf.derivation.upper(),
+                    "aggregation": "COUNTD" if sf.derivation == 'ctd' else sf.derivation.upper(),
                     "shelf": "columns" if sf in cols_shelves else "rows"
                 })
         

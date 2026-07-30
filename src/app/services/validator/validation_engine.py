@@ -16,6 +16,9 @@ except ImportError:
 
 SCHEMA_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "24_json_schema.json")
 
+def _make_safe_alias_local(field_name: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9_]', '_', field_name).strip('_') or field_name
+
 # Patterns for semantic validation
 UNRESOLVED_TABLE_RE = re.compile(
     r'(?:FROM|JOIN)\s+[`"]?(Sheet\d*\$\d*|sample_table|Extract)[`"]?(?:\s|$|,)',
@@ -193,20 +196,27 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                         )
 
     # P2.2: Tier 12 — Widget Completeness Validation
+    CHART_WIDGET_TYPES = {'bar', 'line', 'area', 'scatter', 'pie', 'counter'}
     for page in lakeview_dash.pages:
         for layout_item in page.layout:
             widget = layout_item.widget
             if widget.textbox_spec is not None:
                 continue  # Text widgets are always valid
 
-            # Check for empty query fields
+            wt = (widget.spec or {}).get("widgetType", "") if widget.spec else ""
+
+            # Check for empty query fields — ERROR for chart widgets
             if widget.queries:
                 for q in widget.queries:
                     fields = q.query.get("fields", [])
                     if not fields:
-                        warnings.append(
+                        msg = (
                             f"Widget '{widget.name}' has empty query fields list — may render blank."
                         )
+                        if wt in CHART_WIDGET_TYPES:
+                            errors.append(msg)
+                        else:
+                            warnings.append(msg)
 
             # Check for placeholder fieldNames in encodings
             if widget.spec:
@@ -221,14 +231,74 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                                 f"'{channel_key}' encoding — will render blank in Databricks."
                             )
 
+                # Pie/bar/scatter require both x and y with real fieldNames
+                if wt in ('pie', 'bar', 'scatter', 'line', 'area'):
+                    x_ch = encodings.get('x') if isinstance(encodings.get('x'), dict) else None
+                    y_ch = encodings.get('y') if isinstance(encodings.get('y'), dict) else None
+                    if not x_ch or not x_ch.get('fieldName'):
+                        errors.append(
+                            f"Widget '{widget.name}' ({wt}) missing required 'x' encoding fieldName."
+                        )
+                    if not y_ch or not y_ch.get('fieldName'):
+                        errors.append(
+                            f"Widget '{widget.name}' ({wt}) missing required 'y' encoding fieldName."
+                        )
+                    if (
+                        x_ch and y_ch
+                        and x_ch.get('fieldName')
+                        and y_ch.get('fieldName')
+                        and x_ch.get('fieldName') == y_ch.get('fieldName')
+                        and wt in ('pie', 'scatter')
+                    ):
+                        errors.append(
+                            f"Widget '{widget.name}' ({wt}) has identical x/y fieldName "
+                            f"'{x_ch.get('fieldName')}' — chart is incomplete."
+                        )
+
                 # Check for empty table columns
-                wt = widget.spec.get("widgetType", "")
                 if wt == "table":
                     cols = encodings.get("columns", [])
                     if not cols:
                         warnings.append(
                             f"Widget '{widget.name}' (table) has empty columns list — will render blank."
                         )
+
+    # Tier 12b — Dataset SQL incompleteness / binding subset mismatch
+    ds_by_name = {ds.name: ds for ds in lakeview_dash.datasets}
+    for page in lakeview_dash.pages:
+        for layout_item in page.layout:
+            widget = layout_item.widget
+            if not widget.queries:
+                continue
+            for q in widget.queries:
+                ds_name = q.query.get("datasetName")
+                ds = ds_by_name.get(ds_name) if ds_name else None
+                if not ds or not ds.query:
+                    continue
+                if "__incomplete_projection__" in ds.query:
+                    errors.append(
+                        f"Widget '{widget.name}' references dataset with incomplete SQL projection "
+                        f"(no real fields resolved from shelves/encodings)."
+                    )
+                # Binding mismatch: widget field names should appear as SQL result aliases
+                sql_idents = set(re.findall(r'`([^`]+)`', ds.query))
+                for field in q.query.get("fields", []):
+                    fname = field.get("name", "")
+                    expr = field.get("expression", "") or ""
+                    if not fname:
+                        continue
+                    if fname in sql_idents:
+                        continue
+                    # Expression may reference spaced original: `Demographics Gender`
+                    expr_idents = set(re.findall(r'`([^`]+)`', expr))
+                    if fname in expr_idents or _make_safe_alias_local(fname) in sql_idents:
+                        continue
+                    if any(_make_safe_alias_local(i) == fname for i in sql_idents):
+                        continue
+                    warnings.append(
+                        f"Widget '{widget.name}' field '{fname}' not found in dataset SQL "
+                        f"identifiers {sorted(sql_idents)[:12]}."
+                    )
 
     # P2.2: Tier 13 — Layout Density Validation
     for page in lakeview_dash.pages:
@@ -262,7 +332,14 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
             "widget_spec_compat": not any("specLoadError" in e for e in warnings),
             "filter_sanity": not any("internal filter" in e.lower() for e in errors),
             "encoding_field_binding": not any("encoding channel" in e.lower() for e in warnings),
-            "widget_completeness": not any("placeholder fieldName" in e for e in errors),
+            "widget_completeness": not any(
+                ("placeholder fieldName" in e)
+                or ("empty query fields" in e)
+                or ("missing required" in e)
+                or ("incomplete SQL projection" in e)
+                or ("identical x/y" in e)
+                for e in errors
+            ),
             "layout_density": not any("width=1" in w for w in warnings),
         }
     }

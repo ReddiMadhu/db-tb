@@ -45,10 +45,25 @@ DERIV_TO_AGG = {
     'avg': AggregationType.AVG,
     'cnt': AggregationType.COUNT,
     'cntd': AggregationType.COUNT_DISTINCT,
+    'ctd': AggregationType.COUNT_DISTINCT,  # Tableau COUNTD alias
     'min': AggregationType.MIN,
     'max': AggregationType.MAX,
     'attr': AggregationType.NONE,
     'med': AggregationType.MEDIAN,
+}
+
+# Encoding aggregation strings from parser → AggregationType
+ENC_AGG_TO_TYPE = {
+    'SUM': AggregationType.SUM,
+    'AVG': AggregationType.AVG,
+    'COUNT': AggregationType.COUNT,
+    'COUNTD': AggregationType.COUNT_DISTINCT,
+    'COUNT_DISTINCT': AggregationType.COUNT_DISTINCT,
+    'MIN': AggregationType.MIN,
+    'MAX': AggregationType.MAX,
+    'MEDIAN': AggregationType.MEDIAN,
+    'ATTR': AggregationType.NONE,
+    'NONE': AggregationType.NONE,
 }
 
 # Chart types that show aggregated data (disaggregated=False)
@@ -135,16 +150,24 @@ def _get_column_metadata(field_name: str, ds: Optional[DatasourceMetadata]) -> d
     if not ds:
         return {}
     for col in ds.columns:
-        clean_caption = (col.caption or col.internal_name).strip()
-        if clean_caption == field_name:
+        caption = (col.caption or "").strip()
+        internal = (col.internal_name or "").strip()
+        if field_name in (caption, internal) or caption == field_name or internal == field_name:
             return {
                 'datatype': col.datatype or '',
                 'role': col.role or '',
                 'default_aggregation': col.default_aggregation or '',
                 'type': col.type or '',
                 'formula': col.formula,
+                'sql_name': caption or internal,
             }
     return {}
+
+
+def _resolve_sql_field_name(field_name: str, ds: Optional[DatasourceMetadata]) -> str:
+    """Prefer datasource caption for SQL identifiers when available."""
+    meta = _get_column_metadata(field_name, ds)
+    return meta.get('sql_name') or field_name
 
 
 def _classify_shelf_field(sf: ShelfField, ds: Optional[DatasourceMetadata]) -> AggregationType:
@@ -422,33 +445,47 @@ def normalize_tom_to_ubim(
         for enc in ws.encodings:
             if is_tableau_pseudo_field(enc.field_name):
                 continue
-            if enc.channel in ('color', 'shape'):
-                if enc.field_name not in seen_dim_names:
-                    dimensions.append(enc.field_name)
+            sql_name = _resolve_sql_field_name(enc.field_name, ds)
+            if enc.channel in ('color', 'shape', 'detail'):
+                if sql_name not in seen_dim_names and enc.field_name not in seen_dim_names:
+                    dimensions.append(sql_name)
+                    seen_dim_names.add(sql_name)
                     seen_dim_names.add(enc.field_name)
-            elif enc.channel in ('size', 'tooltip', 'label') and enc.aggregation:
-                agg = DERIV_TO_AGG.get(enc.aggregation.lower(), AggregationType.SUM)
-                if enc.field_name not in seen_measure_names:
-                    measures.append((enc.field_name, agg))
+            elif enc.channel in ('size', 'tooltip', 'label', 'text', 'angle'):
+                agg = AggregationType.NONE
+                if enc.aggregation:
+                    agg = ENC_AGG_TO_TYPE.get(enc.aggregation.upper(), AggregationType.SUM)
+                elif enc.derivation:
+                    agg = DERIV_TO_AGG.get(enc.derivation.lower(), AggregationType.NONE)
+                if agg == AggregationType.NONE:
+                    # Size/angle on charts imply a measure — default SUM when role is measure
+                    col_meta = _get_column_metadata(enc.field_name, ds)
+                    if col_meta.get('role') == 'measure' or not col_meta:
+                        agg = AggregationType.SUM
+                if sql_name not in seen_measure_names and enc.field_name not in seen_measure_names:
+                    measures.append((sql_name, agg))
+                    seen_measure_names.add(sql_name)
                     seen_measure_names.add(enc.field_name)
 
-        # Build SQL — P0.2: preserve original column names in backtick-quoted SQL
+        # Build SQL — preserve original column names in backtick-quoted SQL
         select_parts = []
         for dim in dimensions:
-            select_parts.append(f"`{dim}`")
-        for mname, magg in measures:
-            expr = _build_field_expression(mname, magg)  # Uses original name with spaces
-            alias = _make_safe_alias(mname)  # P0.2: safe alias for encoding references
-            if alias != mname:
-                select_parts.append(f"{expr} AS `{alias}`")
+            alias = _make_safe_alias(dim)
+            if alias != dim:
+                select_parts.append(f"`{dim}` AS `{alias}`")
             else:
-                select_parts.append(f"{expr} AS `{alias}`")
+                select_parts.append(f"`{dim}`")
+        for mname, magg in measures:
+            expr = _build_field_expression(mname, magg)
+            alias = _make_safe_alias(mname)
+            select_parts.append(f"{expr} AS `{alias}`")
 
-        if not select_parts:
-            non_pseudo_cols = [c for c in ds.columns if not is_tableau_pseudo_field(c.caption or c.internal_name)]
-            select_parts = [f"`{c.caption or c.internal_name}`" for c in non_pseudo_cols[:20]]
-
-        sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
+        if select_parts:
+            sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
+        else:
+            # Do NOT fabricate SELECT of first N datasource columns — that invents
+            # unrelated schemas and feeds the Lakeview invent-binder cascade.
+            sql = f"SELECT 1 AS `__incomplete_projection__` FROM {from_clause}"
 
         # WHERE clause from filters (already sanitized by parser)
         where = _build_where_clause(ws.filters)
@@ -669,22 +706,99 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                     name=alias
                 ))
     
-    # Add color encoding from Tableau encodings (filtered)
+    # Add encodings from Tableau pane channels (color/size/detail/text)
+    has_x = any(e.channel == EncodingChannel.X for e in encodings)
+    has_y = any(e.channel == EncodingChannel.Y for e in encodings)
+
     for enc in ws.encodings:
-        if enc.channel == 'color' and not is_tableau_pseudo_field(enc.field_name):
-            alias = _make_safe_alias(enc.field_name)  # P0.2: safe alias
-            if alias not in seen_encoding_fields:  # P1.2: deduplicate
+        if is_tableau_pseudo_field(enc.field_name):
+            continue
+        sql_name = _resolve_sql_field_name(enc.field_name, ds)
+        alias = _make_safe_alias(sql_name)
+
+        if enc.channel == 'color':
+            if alias not in seen_encoding_fields:
                 seen_encoding_fields.add(alias)
                 encodings.append(IntermediateEncoding(
                     channel=EncodingChannel.COLOR,
                     field_name=alias,
                     dataset_name=dataset_id,
-                    aggregation=AggregationType.NONE
+                    aggregation=AggregationType.NONE,
+                    expression_sql=f"`{sql_name}`",
+                    data_type="string",
                 ))
                 if not any(qf.name == alias for qf in query_fields):
                     query_fields.append(IntermediateQueryField(
-                        expression=f"`{enc.field_name}`",
-                        name=alias
+                        expression=f"`{sql_name}`",
+                        name=alias,
+                        data_type="string",
+                    ))
+            # Pie/bar category: promote color → X when columns shelf was empty/pseudo
+            if not has_x and chart_type in (ChartType.PIE, ChartType.BAR, ChartType.LINE, ChartType.AREA):
+                if not any(e.channel == EncodingChannel.X and e.field_name == alias for e in encodings):
+                    encodings.append(IntermediateEncoding(
+                        channel=EncodingChannel.X,
+                        field_name=alias,
+                        dataset_name=dataset_id,
+                        aggregation=AggregationType.NONE,
+                        expression_sql=f"`{sql_name}`",
+                        data_type="string",
+                    ))
+                    has_x = True
+
+        elif enc.channel in ('size', 'angle', 'text'):
+            agg = AggregationType.NONE
+            if enc.aggregation:
+                agg = ENC_AGG_TO_TYPE.get(enc.aggregation.upper(), AggregationType.SUM)
+            elif enc.derivation:
+                agg = DERIV_TO_AGG.get(enc.derivation.lower(), AggregationType.NONE)
+            if agg == AggregationType.NONE:
+                col_meta = _get_column_metadata(enc.field_name, ds)
+                if col_meta.get('role') == 'measure' or not col_meta:
+                    agg = AggregationType.SUM
+            expr = _build_field_expression(sql_name, agg)
+            if alias not in seen_encoding_fields:
+                seen_encoding_fields.add(alias)
+                channel = EncodingChannel.SIZE if enc.channel == 'size' else EncodingChannel.Y
+                # Prefer Y for pie/scatter quantitative bindings
+                if not has_y and chart_type in (
+                    ChartType.PIE, ChartType.BAR, ChartType.SCATTER, ChartType.LINE, ChartType.AREA, ChartType.COUNTER
+                ):
+                    channel = EncodingChannel.Y
+                    has_y = True
+                encodings.append(IntermediateEncoding(
+                    channel=channel,
+                    field_name=alias,
+                    dataset_name=dataset_id,
+                    aggregation=agg,
+                    expression_sql=expr,
+                    data_type="number",
+                ))
+                if not any(qf.name == alias for qf in query_fields):
+                    query_fields.append(IntermediateQueryField(
+                        expression=expr,
+                        name=alias,
+                        data_type="number",
+                    ))
+            elif not has_y and chart_type in (ChartType.PIE, ChartType.SCATTER, ChartType.BAR):
+                encodings.append(IntermediateEncoding(
+                    channel=EncodingChannel.Y,
+                    field_name=alias,
+                    dataset_name=dataset_id,
+                    aggregation=agg,
+                    expression_sql=expr,
+                    data_type="number",
+                ))
+                has_y = True
+
+        elif enc.channel == 'detail':
+            if alias not in seen_encoding_fields:
+                seen_encoding_fields.add(alias)
+                if not any(qf.name == alias for qf in query_fields):
+                    query_fields.append(IntermediateQueryField(
+                        expression=f"`{sql_name}`",
+                        name=alias,
+                        data_type="string",
                     ))
     
     # Compute layout position from zone geometry if available
