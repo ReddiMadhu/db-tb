@@ -218,16 +218,12 @@ class UnityCatalogService:
             w.tables.get(full_name=full_name)
             return True
         except Exception:
-            if warehouse_id:
+            parts = full_name.split(".")
+            if len(parts) == 3:
+                cat, sch, tbl = parts
                 try:
-                    parts = full_name.split(".")
-                    if len(parts) == 3:
-                        cat, sch, tbl = parts
-                        res = UnityCatalogService.execute_sql(
-                            host, token, warehouse_id, f"SHOW TABLES IN `{cat}`.`{sch}` LIKE '{tbl}'"
-                        )
-                        data = res.get("result", {}).get("data_array", [])
-                        return len(data) > 0
+                    tbls = UnityCatalogService.list_tables(host, token, cat, sch, warehouse_id=warehouse_id)
+                    return any(t.get("name", "").lower() == tbl.lower() for t in tbls)
                 except Exception:
                     pass
             return False

@@ -64,6 +64,7 @@ class SaveMappingsRequest(PydanticBaseModel):
 class ValidateMappingsRequest(PydanticBaseModel):
     host: str
     token: str
+    warehouse_id: Optional[str] = None
 
 
 class AutoUploadRequest(PydanticBaseModel):
@@ -576,8 +577,8 @@ async def validate_mappings(
             })
             continue
 
-        # Live check: does the table exist in UC?
-        exists = UnityCatalogService.table_exists(req.host, req.token, m.target_full_name)
+        # Live check: does the table exist in UC / Metastore?
+        exists = UnityCatalogService.table_exists(req.host, req.token, m.target_full_name, warehouse_id=req.warehouse_id)
 
         if exists:
             confirmed_count += 1
@@ -591,7 +592,7 @@ async def validate_mappings(
         else:
             m.status = "FAILED"
             errors.append(
-                f"Table '{m.target_full_name}' does not exist in Unity Catalog."
+                f"Table '{m.target_full_name}' does not exist in Databricks metastore."
             )
             details.append({
                 "tableau_table": m.tableau_table_name,

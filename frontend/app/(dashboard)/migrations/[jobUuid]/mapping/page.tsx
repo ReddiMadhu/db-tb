@@ -233,10 +233,10 @@ export default function DatasourceMappingPage({
       // 1. Save mappings
       await saveMappings(jobUuid, list);
 
-      // 2. Validate mappings live against UC if credentials provided
+      // 2. Validate mappings live against UC / Metastore if credentials provided
       if (host && token) {
-        updateProgress(opId, 30, "Validating Tables", "Verifying mapped tables exist in Unity Catalog...");
-        const valRes = await validateMappings(jobUuid, host, token);
+        updateProgress(opId, 30, "Validating Tables", "Verifying mapped tables exist in Databricks metastore...");
+        const valRes = await validateMappings(jobUuid, host, token, warehouseId);
         if (!valRes.valid) {
           finishError(opId, {
             title: "Validation Failed",

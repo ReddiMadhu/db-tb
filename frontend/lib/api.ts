@@ -201,11 +201,12 @@ export async function getSavedMappings(jobUuid: string): Promise<{
 export async function validateMappings(
   jobUuid: string,
   host: string,
-  token: string
+  token: string,
+  warehouseId?: string
 ): Promise<MappingValidationResponse> {
   return apiFetch(`/mapping/${jobUuid}/mapping/validate`, {
     method: "POST",
-    body: JSON.stringify({ host, token }),
+    body: JSON.stringify({ host, token, warehouse_id: warehouseId }),
   });
 }
 
