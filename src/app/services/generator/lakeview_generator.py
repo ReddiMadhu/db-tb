@@ -319,6 +319,16 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                             "fieldName": y_field,
                             "displayName": y_field.replace('_', ' ').title(),
                             "scale": {"type": "quantitative"}
+                        },
+                        "color": {
+                            "fieldName": x_field,
+                            "displayName": x_field.replace('_', ' ').title(),
+                            "scale": {"type": "categorical"}
+                        },
+                        "angle": {
+                            "fieldName": y_field,
+                            "displayName": y_field.replace('_', ' ').title(),
+                            "scale": {"type": "quantitative"}
                         }
                     },
                     "frame": {"title": title, "showTitle": True},

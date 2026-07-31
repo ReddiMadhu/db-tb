@@ -519,6 +519,18 @@ def normalize_tom_to_ubim(
                     seen_measure_names.add(physical_name)
                     seen_measure_names.add(enc.field_name)
 
+        # Enforce SQL GROUP BY Integrity:
+        # Any non-aggregated field (magg == NONE) projected in an aggregated query must be
+        # placed in dimensions so it is included in GROUP BY 1, 2, ..., N.
+        # This completely eliminates Databricks MISSING_AGGREGATION errors.
+        unaggregated_measures = [m for m in measures if m[1] == AggregationType.NONE]
+        if unaggregated_measures:
+            measures = [m for m in measures if m[1] != AggregationType.NONE]
+            for mname, _ in unaggregated_measures:
+                if mname not in seen_dim_names:
+                    dimensions.append(mname)
+                    seen_dim_names.add(mname)
+
         # Build SQL — preserve original column names in backtick-quoted SQL
         select_parts = []
         for dim in dimensions:
