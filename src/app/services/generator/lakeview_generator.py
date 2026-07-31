@@ -310,16 +310,6 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     "version": 3,
                     "widgetType": "pie",
                     "encodings": {
-                        "x": {
-                            "fieldName": x_field,
-                            "displayName": x_field.replace('_', ' ').title(),
-                            "scale": {"type": "categorical"}
-                        },
-                        "y": {
-                            "fieldName": y_field,
-                            "displayName": y_field.replace('_', ' ').title(),
-                            "scale": {"type": "quantitative"}
-                        },
                         "color": {
                             "fieldName": x_field,
                             "displayName": x_field.replace('_', ' ').title(),

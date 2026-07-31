@@ -232,8 +232,19 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                                 f"'{channel_key}' encoding — will render blank in Databricks."
                             )
 
-                # Pie/bar/scatter require both x and y with real fieldNames
-                if wt in ('pie', 'bar', 'scatter', 'line', 'area'):
+                # Pie charts require 'angle' and 'color' encodings; bar/scatter/line/area require 'x' and 'y'
+                if wt == 'pie':
+                    angle_ch = encodings.get('angle') if isinstance(encodings.get('angle'), dict) else None
+                    color_ch = encodings.get('color') if isinstance(encodings.get('color'), dict) else None
+                    if not angle_ch or not angle_ch.get('fieldName'):
+                        errors.append(
+                            f"Widget '{widget.name}' (pie) missing required 'angle' encoding fieldName."
+                        )
+                    if not color_ch or not color_ch.get('fieldName'):
+                        errors.append(
+                            f"Widget '{widget.name}' (pie) missing required 'color' encoding fieldName."
+                        )
+                elif wt in ('bar', 'scatter', 'line', 'area'):
                     x_ch = encodings.get('x') if isinstance(encodings.get('x'), dict) else None
                     y_ch = encodings.get('y') if isinstance(encodings.get('y'), dict) else None
                     if not x_ch or not x_ch.get('fieldName'):
