@@ -112,7 +112,35 @@ async def execute_migration_pipeline(
         report = result["report"]
         error_bag = result["error_bag"]
 
-        # Save generated Lakeview JSON to disk
+        # Fail-closed: never persist blank chart shells (pipeline already pruned;
+        # re-check as a hard gate before write).
+        from app.services.validator.validation_engine import (
+            prune_incomplete_widgets,
+            _widget_is_incomplete_chart,
+        )
+        extra_removed = prune_incomplete_widgets(lakeview_dash)
+        if extra_removed:
+            for title in extra_removed:
+                error_bag.append({
+                    "level": "ERROR",
+                    "message": f"Blocked incomplete widget '{title}' from save.",
+                })
+            val_res["valid"] = False
+            result["status"] = "FAILED_VALIDATION"
+
+        still_incomplete = any(
+            _widget_is_incomplete_chart(item.widget)
+            for page in lakeview_dash.pages
+            for item in page.layout
+        )
+        if still_incomplete:
+            raise HTTPException(
+                status_code=500,
+                detail="Refusing to save dashboard containing incomplete chart widgets "
+                       "(empty encodings or queries).",
+            )
+
+        # Save generated Lakeview JSON to disk (pruned; no blank shells)
         job_output_dir = os.path.join(OUTPUT_DIR, job_uuid)
         os.makedirs(job_output_dir, exist_ok=True)
         output_filename = f"{job_uuid}.lvdash.json"

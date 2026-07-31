@@ -622,6 +622,52 @@ def normalize_tom_to_ubim(
     return ubim_dash
 
 
+def _promote_extra_categorical_dims_to_color(
+    encodings: List[IntermediateEncoding],
+) -> List[IntermediateEncoding]:
+    """Keep first categorical X (and first categorical Y) as axes; extra dims → COLOR.
+
+    Tableau often places multiple dimensions on Columns/Rows. Lakeview bar/line
+    charts expose only one categorical axis plus optional color, so surplus
+    non-aggregated dimensions must become COLOR rather than duplicate X/Y.
+    """
+    has_explicit_color = any(e.channel == EncodingChannel.COLOR for e in encodings)
+    seen_x_dim = False
+    seen_y_dim = False
+    result: List[IntermediateEncoding] = []
+
+    for enc in encodings:
+        if enc.channel == EncodingChannel.X and enc.aggregation == AggregationType.NONE:
+            if not seen_x_dim:
+                seen_x_dim = True
+                result.append(enc)
+            elif not has_explicit_color:
+                has_explicit_color = True
+                result.append(enc.model_copy(update={"channel": EncodingChannel.COLOR}))
+            else:
+                # Already have color — keep as query-only via COLOR duplicate skip;
+                # still record as COLOR so field stays visible in encodings list.
+                result.append(enc.model_copy(update={"channel": EncodingChannel.COLOR}))
+            continue
+
+        if enc.channel == EncodingChannel.Y and enc.aggregation == AggregationType.NONE:
+            # Categorical on rows: first becomes Y only when no X dim yet (horizontal
+            # category); otherwise promote to COLOR for dual-dimension charts.
+            if not seen_x_dim and not seen_y_dim:
+                seen_y_dim = True
+                result.append(enc)
+            elif not has_explicit_color:
+                has_explicit_color = True
+                result.append(enc.model_copy(update={"channel": EncodingChannel.COLOR}))
+            else:
+                result.append(enc.model_copy(update={"channel": EncodingChannel.COLOR}))
+            continue
+
+        result.append(enc)
+
+    return result
+
+
 def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str,
                   y_offset: int, dashboard=None,
                   resolver: Optional[CanonicalFieldResolver] = None) -> IntermediateWidget:
@@ -636,6 +682,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     encodings = []
     query_fields = []
     seen_encoding_fields = set()  # P1.2: deduplication
+    assigned_x_dim = False  # first categorical columns shelf → X; extras → COLOR
     
     # Process structured shelves (filtered)
     cols_shelves = _filter_pseudo_shelf_fields(ws.columns_shelves)
@@ -654,8 +701,16 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
 
             if alias not in seen_encoding_fields:  # P1.2: deduplicate
                 seen_encoding_fields.add(alias)
+                if agg == AggregationType.NONE:
+                    if not assigned_x_dim:
+                        channel = EncodingChannel.X
+                        assigned_x_dim = True
+                    else:
+                        channel = EncodingChannel.COLOR
+                else:
+                    channel = EncodingChannel.X
                 encodings.append(IntermediateEncoding(
-                    channel=EncodingChannel.X,
+                    channel=channel,
                     field_name=alias,
                     dataset_name=dataset_id,
                     aggregation=agg,
@@ -676,8 +731,13 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
 
             if alias not in seen_encoding_fields:  # P1.2: deduplicate
                 seen_encoding_fields.add(alias)
+                # Extra categorical dims on rows → COLOR when X already filled
+                if agg == AggregationType.NONE and assigned_x_dim:
+                    channel = EncodingChannel.COLOR
+                else:
+                    channel = EncodingChannel.Y
                 encodings.append(IntermediateEncoding(
-                    channel=EncodingChannel.Y,
+                    channel=channel,
                     field_name=alias,
                     dataset_name=dataset_id,
                     aggregation=agg,
@@ -739,8 +799,16 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
             expr = _build_field_expression(col_name, agg) if agg != AggregationType.NONE else f"`{col_name}`"
             if alias not in seen_encoding_fields:
                 seen_encoding_fields.add(alias)
+                if agg == AggregationType.NONE:
+                    if not assigned_x_dim:
+                        channel = EncodingChannel.X
+                        assigned_x_dim = True
+                    else:
+                        channel = EncodingChannel.COLOR
+                else:
+                    channel = EncodingChannel.X
                 encodings.append(IntermediateEncoding(
-                    channel=EncodingChannel.X,
+                    channel=channel,
                     field_name=alias,
                     dataset_name=dataset_id,
                     aggregation=agg,
@@ -765,8 +833,12 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
             expr = _build_field_expression(row_name, agg)
             if alias not in seen_encoding_fields:
                 seen_encoding_fields.add(alias)
+                if agg == AggregationType.NONE and assigned_x_dim:
+                    channel = EncodingChannel.COLOR
+                else:
+                    channel = EncodingChannel.Y
                 encodings.append(IntermediateEncoding(
-                    channel=EncodingChannel.Y,
+                    channel=channel,
                     field_name=alias,
                     dataset_name=dataset_id,
                     aggregation=agg,
@@ -899,6 +971,12 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 grid_h=max(2, min(12, round((zone.h / dashboard.size_y) * 12)))
             )
     
+    # Surplus categorical dims on X/Y → COLOR for Lakeview cartesian charts
+    if chart_type in (
+        ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER, ChartType.HEATMAP
+    ):
+        encodings = _promote_extra_categorical_dims_to_color(encodings)
+
     # Counter special case: single measure, no dimensions
     if chart_type == ChartType.COUNTER and not any(
         e.aggregation == AggregationType.NONE for e in encodings

@@ -12,7 +12,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.models.universal_model import IntermediateDashboard, ChartType, EncodingChannel
+from app.models.universal_model import (
+    IntermediateDashboard, ChartType, EncodingChannel, AggregationType,
+)
 from app.models.lakeview_model import (
     LakeviewDashboard, Dataset, Page, Position, LayoutItem, generate_lakeview_id,
 )
@@ -41,23 +43,110 @@ def _enc_by_channel(encodings, channel: EncodingChannel):
     return next((e for e in encodings if e.channel == channel), None)
 
 
+def _encodings_by_channel(encodings, channel: EncodingChannel):
+    return [e for e in encodings if e.channel == channel]
+
+
+def _is_aggregated_expression(expr: str) -> bool:
+    if not expr:
+        return False
+    upper = expr.upper().strip()
+    return any(
+        upper.startswith(fn)
+        for fn in ("SUM(", "AVG(", "COUNT(", "MIN(", "MAX(", "MEDIAN(", "PERCENTILE(", "STDDEV(")
+    )
+
+
+def _recover_axes_from_query_fields(
+    query_fields_list: List[Dict[str, str]],
+    x_field: Optional[str],
+    y_field: Optional[str],
+    color_field: Optional[str],
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Fill missing x/y/color from query field names using aggregation hints."""
+    if not query_fields_list:
+        return x_field, y_field, color_field
+
+    dims: List[str] = []
+    measures: List[str] = []
+    for qf in query_fields_list:
+        name = qf.get("name") or ""
+        if not name or name in PLACEHOLDER_FIELDS:
+            continue
+        if _is_aggregated_expression(qf.get("expression") or ""):
+            measures.append(name)
+        else:
+            dims.append(name)
+
+    if x_field is None or x_field in PLACEHOLDER_FIELDS:
+        for d in dims:
+            if d != y_field and d != color_field:
+                x_field = d
+                break
+        if (x_field is None or x_field in PLACEHOLDER_FIELDS) and measures:
+            # last resort: first unused field
+            for qf in query_fields_list:
+                n = qf.get("name")
+                if n and n not in PLACEHOLDER_FIELDS and n != y_field:
+                    x_field = n
+                    break
+
+    if y_field is None or y_field in PLACEHOLDER_FIELDS:
+        for m in measures:
+            if m != x_field and m != color_field:
+                y_field = m
+                break
+        if (y_field is None or y_field in PLACEHOLDER_FIELDS) and dims:
+            for d in dims:
+                if d != x_field and d != color_field:
+                    y_field = d
+                    break
+
+    if color_field is None or color_field in PLACEHOLDER_FIELDS:
+        for d in dims:
+            if d != x_field and d != y_field:
+                color_field = d
+                break
+
+    return x_field, y_field, color_field
+
+
 def _resolve_xy_fields(
     w_ubim,
     query_fields_list: List[Dict[str, str]],
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Resolve dimension / measure / color field names from UBIM encodings."""
-    x_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.X)
-    y_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.Y)
+    x_encs = _encodings_by_channel(w_ubim.encodings, EncodingChannel.X)
+    y_encs = _encodings_by_channel(w_ubim.encodings, EncodingChannel.Y)
     color_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.COLOR)
     size_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.SIZE)
 
-    x_field = x_enc.field_name if x_enc else None
-    y_field = y_enc.field_name if y_enc else None
+    x_field = x_encs[0].field_name if x_encs else None
+    y_field = y_encs[0].field_name if y_encs else None
     color_field = color_enc.field_name if color_enc else None
+
+    # Extra X dims (legacy UBIM) → color when COLOR channel absent
+    if color_field is None and len(x_encs) > 1:
+        for extra in x_encs[1:]:
+            if extra.aggregation == AggregationType.NONE or not _is_aggregated_expression(
+                extra.expression_sql or ""
+            ):
+                color_field = extra.field_name
+                break
+        if color_field is None:
+            color_field = x_encs[1].field_name
+
+    # Extra categorical Y dims → color when still unbound
+    if color_field is None and len(y_encs) > 1:
+        for extra in y_encs[1:]:
+            if extra.aggregation == AggregationType.NONE:
+                color_field = extra.field_name
+                break
 
     # Pie / shelf-less charts: color acts as category, size as measure
     if x_field is None and color_enc:
         x_field = color_enc.field_name
+        # Keep color_field for pie factory path (category); pie uses x as category
     if y_field is None and size_enc:
         y_field = size_enc.field_name
 
@@ -66,6 +155,16 @@ def _resolve_xy_fields(
     if y_field is None and query_fields_list and w_ubim.chart_type == ChartType.TABLE:
         others = [qf["name"] for qf in query_fields_list if qf["name"] != x_field]
         y_field = others[0] if others else x_field
+
+    # Recover missing axes from query fields for all chart types
+    if w_ubim.chart_type != ChartType.TABLE:
+        x_field, y_field, color_field = _recover_axes_from_query_fields(
+            query_fields_list, x_field, y_field, color_field
+        )
+
+    # Color must not collide with primary axes
+    if color_field and (color_field == x_field or color_field == y_field):
+        color_field = None
 
     return x_field, y_field, color_field
 
@@ -98,27 +197,41 @@ def _create_widget_via_factory(
     query_fields_list: List[Dict[str, str]],
 ):
     """Dispatch to WidgetFactory. Returns Widget or None if incomplete."""
+    # Attempt recovery again at dispatch boundary (belt + suspenders)
+    x_field, y_field, color_field = _recover_axes_from_query_fields(
+        query_fields_list, x_field, y_field, color_field
+    )
+
     has_placeholder_x = (x_field is None) or (x_field in PLACEHOLDER_FIELDS)
     has_placeholder_y = (y_field is None) or (y_field in PLACEHOLDER_FIELDS)
 
-    # Single-measure worksheets that look like KPIs → counter
+    # True single-measure KPI: only one real field and one axis missing → counter
     if chart_type in (ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER):
-        if (
-            (has_placeholder_x and not has_placeholder_y)
-            or (not has_placeholder_x and has_placeholder_y)
-            or (x_field and y_field and x_field == y_field)
-        ):
-            # Prefer demoting to counter when only one real quantitative field exists
+        real_names = [
+            qf["name"] for qf in query_fields_list
+            if qf.get("name") and qf["name"] not in PLACEHOLDER_FIELDS
+        ]
+        distinct_real = list(dict.fromkeys(real_names))
+        identical_axes = bool(x_field and y_field and x_field == y_field)
+        single_measure_kpi = (
+            len(distinct_real) <= 1
+            and (
+                (has_placeholder_x and not has_placeholder_y)
+                or (not has_placeholder_x and has_placeholder_y)
+                or identical_axes
+            )
+        )
+        if single_measure_kpi:
             value_field = None
             if y_field and y_field not in PLACEHOLDER_FIELDS:
                 value_field = y_field
             elif x_field and x_field not in PLACEHOLDER_FIELDS:
                 value_field = x_field
-            elif query_fields_list:
-                value_field = query_fields_list[0]["name"]
+            elif distinct_real:
+                value_field = distinct_real[0]
             if value_field and value_field not in PLACEHOLDER_FIELDS:
                 logger.info(
-                    "Demoting widget '%s' (%s) → counter — incomplete/identical axes "
+                    "Demoting widget '%s' (%s) → counter — single-measure KPI "
                     "(x=%r, y=%r)",
                     title, chart_type.value, x_field, y_field,
                 )
@@ -128,6 +241,8 @@ def _create_widget_via_factory(
                     title=title,
                     query_fields=query_fields_list or None,
                 )
+
+        if has_placeholder_x or has_placeholder_y or identical_axes:
             logger.warning(
                 "Skipping widget '%s' — incomplete cartesian bindings (x=%r, y=%r)",
                 title, x_field, y_field,
@@ -197,7 +312,9 @@ def _create_widget_via_factory(
     if chart_type == ChartType.HEATMAP:
         # Prefer color measure; fall back to y as color intensity
         color_measure = color_field or y_field
-        row_field = y_field if color_field else (query_fields_list[1]["name"] if len(query_fields_list) > 1 else y_field)
+        row_field = y_field if color_field else (
+            query_fields_list[1]["name"] if len(query_fields_list) > 1 else y_field
+        )
         if has_placeholder_x or not color_measure or color_measure in PLACEHOLDER_FIELDS:
             # Degrade to bar when heatmap bindings incomplete
             if not has_placeholder_x and y_field and x_field != y_field:

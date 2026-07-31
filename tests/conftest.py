@@ -29,8 +29,33 @@ def sample_workbook_metadata():
 def sample_lakeview_dashboard():
     widget = Widget(
         name="a1b2c3d4",
-        queries=[WidgetQuery.from_dataset("ds1")],
-        spec={"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "Order_Date"}}},
+        queries=[
+            WidgetQuery.from_dataset(
+                "ds1",
+                fields=[
+                    {"name": "Order_Date", "expression": "`Order_Date`"},
+                    {"name": "Sales", "expression": "SUM(`Sales`)"},
+                ],
+                disaggregated=False,
+            )
+        ],
+        spec={
+            "version": 3,
+            "widgetType": "line",
+            "encodings": {
+                "x": {
+                    "fieldName": "Order_Date",
+                    "displayName": "Order Date",
+                    "scale": {"type": "temporal"},
+                },
+                "y": {
+                    "fieldName": "Sales",
+                    "displayName": "Sales",
+                    "scale": {"type": "quantitative"},
+                },
+            },
+            "frame": {"title": "Sales Trend", "showTitle": True},
+        },
     )
     return LakeviewDashboard(
         datasets=[Dataset(name="ds1", displayName="Sales", query="SELECT Order_Date, Sales FROM orders")],
@@ -41,9 +66,9 @@ def sample_lakeview_dashboard():
                 layout=[
                     LayoutItem(
                         widget=widget,
-                        position=Position(x=0, y=0, width=6, height=4)
+                        position=Position(x=0, y=0, width=6, height=4),
                     )
-                ]
+                ],
             )
-        ]
+        ],
     )

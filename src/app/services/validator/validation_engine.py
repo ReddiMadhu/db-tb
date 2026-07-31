@@ -51,7 +51,7 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
     5. Widget Spec Validation (version & widgetType checks)
     6. ID Uniqueness & Cycle Validation
     """
-    dash_dict = lakeview_dash.to_dict()
+    dash_dict = lakeview_dash.to_dict(allow_incomplete=True)
     errors = []
     warnings = []
 
@@ -190,17 +190,26 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                 for field in q.query.get("fields", []):
                     query_field_names.add(field.get("name", ""))
 
-            # Check encoding fieldNames against query fields
+            # Check encoding fieldNames against query fields — ERROR for charts
             encodings = widget.spec.get("encodings", {})
+            wt = widget.spec.get("widgetType", "")
+            CHART_TYPES_FOR_BINDING = {
+                'bar', 'line', 'area', 'scatter', 'pie', 'counter',
+                'heatmap', 'histogram',
+            }
             for channel_key in ('x', 'y', 'color', 'value', 'angle'):
                 channel = encodings.get(channel_key)
                 if channel and isinstance(channel, dict):
                     field_name = channel.get("fieldName", "")
                     if field_name and field_name not in query_field_names and query_field_names:
-                        warnings.append(
+                        msg = (
                             f"Widget '{widget.name}' encoding channel '{channel_key}' references "
                             f"field '{field_name}' which is not in query fields: {query_field_names}."
                         )
+                        if wt in CHART_TYPES_FOR_BINDING:
+                            errors.append(msg)
+                        else:
+                            warnings.append(msg)
 
     # P2.2: Tier 12 — Widget Completeness Validation
     CHART_WIDGET_TYPES = {'bar', 'line', 'area', 'scatter', 'pie', 'counter'}
@@ -408,16 +417,59 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
             "pseudo_field_detection": not any("pseudo-field" in e.lower() for e in errors),
             "widget_spec_compat": not any("specLoadError" in e for e in warnings),
             "filter_sanity": not any("internal filter" in e.lower() for e in errors),
-            "encoding_field_binding": not any("encoding channel" in e.lower() for e in warnings),
+            "encoding_field_binding": not any("encoding channel" in e.lower() for e in errors + warnings),
             "widget_completeness": not any(
                 ("placeholder fieldName" in e)
                 or ("empty query fields" in e)
+                or ("empty encodings" in e)
                 or ("missing required" in e)
                 or ("incomplete SQL projection" in e)
-                or ("identical x/y" in e)
+                or ("identical field" in e)
+                or ("has no queries" in e)
                 for e in errors
             ),
             "layout_density": not any("width=1" in w for w in warnings),
         }
     }
+
+
+_INCOMPLETE_CHART_TYPES = {
+    "bar", "line", "area", "scatter", "pie", "counter", "heatmap", "histogram", "table",
+}
+
+
+def _widget_is_incomplete_chart(widget) -> bool:
+    """True when a viz widget would render blank (empty encodings / queries / fields)."""
+    if widget.textbox_spec is not None:
+        return False
+    if not widget.spec:
+        return True
+    wt = widget.spec.get("widgetType", "")
+    if wt not in _INCOMPLETE_CHART_TYPES and not (wt or "").startswith("filter-"):
+        return False
+    encodings = widget.spec.get("encodings") or {}
+    if not encodings:
+        return True
+    if not widget.queries:
+        return True
+    for q in widget.queries:
+        if not (q.query or {}).get("fields"):
+            return True
+    ok, _ = validate_widget_spec(widget.spec)
+    return not ok
+
+
+def prune_incomplete_widgets(lakeview_dash: LakeviewDashboard) -> List[str]:
+    """Remove chart widgets that would serialize as blank shells. Returns removed titles/ids."""
+    removed: List[str] = []
+    for page in lakeview_dash.pages:
+        kept = []
+        for item in page.layout:
+            if _widget_is_incomplete_chart(item.widget):
+                title = ((item.widget.spec or {}).get("frame") or {}).get("title") or item.widget.name
+                removed.append(title)
+            else:
+                kept.append(item)
+        page.layout = kept
+    return removed
 

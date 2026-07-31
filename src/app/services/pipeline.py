@@ -6,7 +6,10 @@ from app.services.parser.dependency_graph import DependencyGraphEngine
 from app.services.normalizer.tom_to_ubim import normalize_tom_to_ubim
 from app.services.normalizer.optimizer import optimize_ubim
 from app.services.generator.lakeview_generator import generate_lakeview_dashboard
-from app.services.validator.validation_engine import validate_lakeview_dashboard
+from app.services.validator.validation_engine import (
+    validate_lakeview_dashboard,
+    prune_incomplete_widgets,
+)
 from app.services.reporter.migration_report import generate_migration_report
 from app.services.mapper.datasource_mapper import build_table_mapping
 
@@ -86,13 +89,34 @@ class MigrationPipeline:
         self.log("INFO", "Stage 8: Generating Lakeview JSON & projecting 6-column layout grid")
         lakeview_dash = generate_lakeview_dashboard(ubim_opt)
 
-        # Stage 9: 6-Tier Validation Engine
-        self.log("INFO", "Stage 9: Executing 6-tier validation suite")
+        # Stage 9: Validation + fail-closed prune of blank chart shells
+        self.log("INFO", "Stage 9: Executing validation suite & pruning incomplete widgets")
         val_res = validate_lakeview_dashboard(lakeview_dash)
         for err in val_res.get("errors", []):
             self.log("ERROR", err)
         for warn in val_res.get("warnings", []):
             self.log("WARNING", warn)
+
+        removed = prune_incomplete_widgets(lakeview_dash)
+        for title in removed:
+            self.log(
+                "ERROR",
+                f"Pruned incomplete widget '{title}' — empty encodings/queries would render blank.",
+            )
+            val_res.setdefault("errors", []).append(
+                f"Pruned incomplete widget '{title}' — empty encodings/queries would render blank."
+            )
+        if removed:
+            val_res["valid"] = False
+            # Re-validate pruned dashboard so remaining widgets still pass
+            post = validate_lakeview_dashboard(lakeview_dash)
+            # Keep prune errors; merge any new post-prune issues
+            for err in post.get("errors", []):
+                if err not in val_res["errors"]:
+                    val_res["errors"].append(err)
+                    self.log("ERROR", err)
+            val_res["valid"] = len(val_res["errors"]) == 0
+            val_res["warnings"] = post.get("warnings", val_res.get("warnings", []))
 
         # Stage 10: Reporting & Telemetry
         self.log("INFO", "Stage 10: Assembling migration report")
@@ -104,5 +128,6 @@ class MigrationPipeline:
             "lakeview_dashboard": lakeview_dash,
             "validation_results": val_res,
             "report": report,
-            "error_bag": self.error_bag
+            "error_bag": self.error_bag,
+            "persist_allowed": True,  # pruned dashboard is safe to write (no blank shells)
         }
