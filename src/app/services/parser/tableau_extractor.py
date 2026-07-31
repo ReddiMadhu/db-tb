@@ -125,7 +125,7 @@ TABLEAU_GENERATED_FIELD_RE = re.compile(
 # Only treat unresolved usr: refs as pseudo after derivation strip fails.
 # ctd: is a real COUNTD derivation (alias of cntd) and must not be dropped here.
 TABLEAU_INTERNAL_PREFIX_RE = re.compile(
-    r'^usr:', re.IGNORECASE
+    r'^(usr|ctd):', re.IGNORECASE
 )
 
 TABLEAU_INTERNAL_FILTER_RE = re.compile(
@@ -965,6 +965,9 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         groups=extract_groups(root, ds_prefixes),
         sets=extract_sets(root, ds_prefixes),
         bins=extract_bins(root, ds_prefixes),
+        # Bidirectional caption maps for canonical field resolution
+        internal_to_caption_map=dict(caption_map),  # internal_name → caption
+        caption_to_internal_map={v: k for k, v in caption_map.items()},  # caption → internal_name
     )
 
     # Build set of all calculated field names for reference detection

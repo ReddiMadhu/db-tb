@@ -120,13 +120,14 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
     if len(all_widget_ids) != len(set(all_widget_ids)):
         errors.append("Duplicate widget IDs detected.")
 
-    # Tier 7: Datasource Resolution — warn for unresolved table references
+    # Tier 7: Datasource Resolution — flag unresolved table references
     for ds in lakeview_dash.datasets:
         if ds.query and UNRESOLVED_TABLE_RE.search(ds.query):
             match = UNRESOLVED_TABLE_RE.search(ds.query)
+            msg = f"Dataset '{ds.displayName}' contains unmapped table reference '{match.group().strip()}'."
+            errors.append(msg)
             warnings.append(
-                f"Dataset '{ds.displayName}' contains unmapped table reference "
-                f"'{match.group()}'. On Unity Catalog clusters, provide a table_mapping (e.g. catalog.schema.table)."
+                f"{msg} On Unity Catalog clusters, provide a table_mapping (e.g. catalog.schema.table)."
             )
 
     # Tier 8: Pseudo-Field Detection — reject Tableau-only fields in SQL

@@ -15,6 +15,7 @@ Maps the Tableau Object Model (WorkbookMetadata) to the Universal BI Model
 
 import uuid
 import re
+import logging
 from typing import Dict, List, Any, Optional
 from app.models.metadata import (
     WorkbookMetadata, WorksheetMetadata, DatasourceMetadata,
@@ -37,6 +38,9 @@ from app.services.compiler.field_classifier import (
     classify_field, semantic_to_aggregation, is_aggregatable, is_groupable,
     FieldSemantic
 )
+from app.services.compiler.canonical_field_resolver import CanonicalFieldResolver
+
+logger = logging.getLogger(__name__)
 
 
 # ── Aggregation derivation mapping ──────────────────────────────────────────
@@ -118,6 +122,31 @@ def _make_safe_alias(field_name: str) -> str:
     return re.sub(r'[^a-zA-Z0-9_]', '_', field_name).strip('_') or field_name
 
 
+def _resolve_field_for_sql(field_name: str, resolver: Optional[CanonicalFieldResolver] = None,
+                           ds: Optional[DatasourceMetadata] = None) -> str:
+    """Resolve a field name to its physical column name for SQL generation.
+
+    Priority:
+        1. Canonical resolver (caption→internal→physical)
+        2. Datasource column metadata fallback
+        3. Original name as-is
+    """
+    if resolver:
+        physical = resolver.resolve_to_physical(field_name)
+        if physical != field_name:
+            return physical
+    # Fallback: check datasource columns for internal name
+    if ds:
+        for col in ds.columns:
+            caption = (col.caption or "").strip()
+            internal = (col.internal_name or "").strip()
+            if field_name == caption and internal:
+                return internal
+            if field_name == internal:
+                return internal
+    return field_name
+
+
 def _build_field_expression(field_name: str, aggregation: AggregationType) -> str:
     """Build a Lakeview-compatible field expression.
     
@@ -153,21 +182,22 @@ def _get_column_metadata(field_name: str, ds: Optional[DatasourceMetadata]) -> d
         caption = (col.caption or "").strip()
         internal = (col.internal_name or "").strip()
         if field_name in (caption, internal) or caption == field_name or internal == field_name:
+            sql_name = _make_safe_alias(internal or caption)
             return {
                 'datatype': col.datatype or '',
                 'role': col.role or '',
                 'default_aggregation': col.default_aggregation or '',
                 'type': col.type or '',
                 'formula': col.formula,
-                'sql_name': caption or internal,
+                'sql_name': sql_name,
             }
     return {}
 
 
-def _resolve_sql_field_name(field_name: str, ds: Optional[DatasourceMetadata]) -> str:
-    """Prefer datasource caption for SQL identifiers when available."""
-    meta = _get_column_metadata(field_name, ds)
-    return meta.get('sql_name') or field_name
+def _resolve_sql_field_name(field_name: str, ds: Optional[DatasourceMetadata],
+                            resolver: Optional[CanonicalFieldResolver] = None) -> str:
+    """Resolve field_name to physical column name for SQL identifiers."""
+    return _resolve_field_for_sql(field_name, resolver, ds)
 
 
 def _classify_shelf_field(sf: ShelfField, ds: Optional[DatasourceMetadata]) -> AggregationType:
@@ -288,12 +318,16 @@ def _build_where_clause(filters: List[FilterMetadata]) -> str:
     return " AND ".join(conditions) if conditions else ""
 
 
-def _get_real_measure_columns(ds: DatasourceMetadata) -> List[str]:
+def _get_real_measure_columns(ds: DatasourceMetadata, resolver: Optional[CanonicalFieldResolver] = None) -> List[str]:
     """Get actual measure column names from datasource metadata (for Measure Names/Values expansion)."""
     measures = []
     for col in ds.columns:
         if col.role == 'measure' and not col.hidden and col.datatype in ('real', 'integer', 'float', 'number', ''):
-            name = col.caption or col.internal_name
+            name = col.internal_name
+            if resolver:
+                if resolver.is_excluded(name):
+                    continue
+                name = resolver.resolve_to_physical(name)
             if not is_tableau_pseudo_field(name):
                 measures.append(name)
     return measures[:10]  # Cap to avoid huge queries
@@ -314,9 +348,13 @@ def normalize_tom_to_ubim(
     table_mapping: Dict[str, str] = None,
     default_catalog: str = "",
     default_schema: str = "",
+    field_resolver: Optional[CanonicalFieldResolver] = None,
 ) -> IntermediateDashboard:
     """Stage 6 Normalizer: Maps Tableau Object Model (TOM) to Universal BI Model (UBIM)."""
     table_mapping = table_mapping or {}
+
+    # Build canonical field resolver if not provided
+    resolver = field_resolver or CanonicalFieldResolver(workbook_meta)
 
     # Auto-build table mapping from datasource metadata + config
     auto_mapping, unresolved = build_table_mapping(
@@ -362,9 +400,12 @@ def normalize_tom_to_ubim(
         seen_measure_names = set()  # P1.2: deduplication tracking
         has_measure_names = False
 
-        # Process structured shelves — filter pseudo-fields
+        # Process structured shelves — filter pseudo-fields and excluded calc fields
         cols_shelves = _filter_pseudo_shelf_fields(ws.columns_shelves)
         rows_shelves = _filter_pseudo_shelf_fields(ws.rows_shelves)
+        # Remove table calc fields that cannot be compiled to SQL
+        cols_shelves = [sf for sf in cols_shelves if not resolver.is_excluded(sf.field_name)]
+        rows_shelves = [sf for sf in rows_shelves if not resolver.is_excluded(sf.field_name)]
         all_shelves = cols_shelves + rows_shelves
 
         # Detect Measure Names / Measure Values usage
@@ -374,21 +415,26 @@ def normalize_tom_to_ubim(
 
         if all_shelves:
             for sf in all_shelves:
+                # Resolve to physical column name
+                physical_name = _resolve_field_for_sql(sf.field_name, resolver, ds)
                 agg = _classify_shelf_field(sf, ds)
                 if agg != AggregationType.NONE:
-                    if sf.field_name not in seen_measure_names:  # P1.2: deduplicate
-                        measures.append((sf.field_name, agg))
-                        seen_measure_names.add(sf.field_name)
+                    if physical_name not in seen_measure_names:  # P1.2: deduplicate
+                        measures.append((physical_name, agg))
+                        seen_measure_names.add(physical_name)
+                        seen_measure_names.add(sf.field_name)  # also track caption
                 else:
-                    if sf.field_name not in seen_dim_names:  # P1.2: deduplicate
-                        dimensions.append(sf.field_name)
-                        seen_dim_names.add(sf.field_name)
+                    if physical_name not in seen_dim_names:  # P1.2: deduplicate
+                        dimensions.append(physical_name)
+                        seen_dim_names.add(physical_name)
+                        seen_dim_names.add(sf.field_name)  # also track caption
         else:
             # Fallback: use flat field names with semantic classification (P0.1)
             cols_clean = _filter_pseudo_fields(ws.columns)
             rows_clean = _filter_pseudo_fields(ws.rows)
             for col_name in cols_clean:
-                if col_name not in seen_dim_names:
+                physical_name = _resolve_field_for_sql(col_name, resolver, ds)
+                if physical_name not in seen_dim_names:
                     col_meta = _get_column_metadata(col_name, ds)
                     semantic = classify_field(
                         field_name=col_name,
@@ -399,13 +445,14 @@ def normalize_tom_to_ubim(
                     )
                     if is_aggregatable(semantic):
                         agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
-                        if col_name not in seen_measure_names:
-                            measures.append((col_name, agg))
-                            seen_measure_names.add(col_name)
+                        if physical_name not in seen_measure_names:
+                            measures.append((physical_name, agg))
+                            seen_measure_names.add(physical_name)
                     else:
-                        dimensions.append(col_name)
-                        seen_dim_names.add(col_name)
+                        dimensions.append(physical_name)
+                        seen_dim_names.add(physical_name)
             for row_name in rows_clean:
+                physical_name = _resolve_field_for_sql(row_name, resolver, ds)
                 col_meta = _get_column_metadata(row_name, ds)
                 semantic = classify_field(
                     field_name=row_name,
@@ -416,17 +463,19 @@ def normalize_tom_to_ubim(
                 )
                 if is_aggregatable(semantic):
                     agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
-                    if row_name not in seen_measure_names:
-                        measures.append((row_name, agg))
-                        seen_measure_names.add(row_name)
+                    if agg == AggregationType.NONE and is_aggregatable(semantic):
+                        agg = AggregationType.SUM
+                    if physical_name not in seen_measure_names:
+                        measures.append((physical_name, agg))
+                        seen_measure_names.add(physical_name)
                 else:
-                    if row_name not in seen_dim_names:
-                        dimensions.append(row_name)
-                        seen_dim_names.add(row_name)
+                    if physical_name not in seen_dim_names:
+                        dimensions.append(physical_name)
+                        seen_dim_names.add(physical_name)
 
         # Handle Measure Names/Values: expand into actual measure columns
         if has_measure_names and not measures:
-            real_measures = _get_real_measure_columns(ds)
+            real_measures = _get_real_measure_columns(ds, resolver)
             for m in real_measures:
                 if m not in seen_measure_names:
                     # Classify each real measure with the semantic classifier
@@ -445,11 +494,14 @@ def normalize_tom_to_ubim(
         for enc in ws.encodings:
             if is_tableau_pseudo_field(enc.field_name):
                 continue
-            sql_name = _resolve_sql_field_name(enc.field_name, ds)
+            if resolver.is_excluded(enc.field_name):
+                continue
+            # Resolve to physical column name via canonical resolver
+            physical_name = _resolve_field_for_sql(enc.field_name, resolver, ds)
             if enc.channel in ('color', 'shape', 'detail'):
-                if sql_name not in seen_dim_names and enc.field_name not in seen_dim_names:
-                    dimensions.append(sql_name)
-                    seen_dim_names.add(sql_name)
+                if physical_name not in seen_dim_names and enc.field_name not in seen_dim_names:
+                    dimensions.append(physical_name)
+                    seen_dim_names.add(physical_name)
                     seen_dim_names.add(enc.field_name)
             elif enc.channel in ('size', 'tooltip', 'label', 'text', 'angle'):
                 agg = AggregationType.NONE
@@ -462,9 +514,9 @@ def normalize_tom_to_ubim(
                     col_meta = _get_column_metadata(enc.field_name, ds)
                     if col_meta.get('role') == 'measure' or not col_meta:
                         agg = AggregationType.SUM
-                if sql_name not in seen_measure_names and enc.field_name not in seen_measure_names:
-                    measures.append((sql_name, agg))
-                    seen_measure_names.add(sql_name)
+                if physical_name not in seen_measure_names and enc.field_name not in seen_measure_names:
+                    measures.append((physical_name, agg))
+                    seen_measure_names.add(physical_name)
                     seen_measure_names.add(enc.field_name)
 
         # Build SQL — preserve original column names in backtick-quoted SQL
@@ -536,7 +588,7 @@ def normalize_tom_to_ubim(
                 if not dataset_id or not ds:
                     continue
                 
-                widget = _build_widget(ws, ds, dataset_id, y_grid_acc, db)
+                widget = _build_widget(ws, ds, dataset_id, y_grid_acc, db, resolver=resolver)
                 page.widgets.append(widget)
                 y_grid_acc += widget.position.grid_h
             
@@ -550,7 +602,7 @@ def normalize_tom_to_ubim(
             dataset_id = ws_dataset_map.get(ws.name)
             if not dataset_id or not ds:
                 continue
-            widget = _build_widget(ws, ds, dataset_id, y_grid_acc, None)
+            widget = _build_widget(ws, ds, dataset_id, y_grid_acc, None, resolver=resolver)
             page.widgets.append(widget)
             y_grid_acc += widget.position.grid_h
         ubim_dash.pages.append(page)
@@ -559,7 +611,8 @@ def normalize_tom_to_ubim(
 
 
 def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str,
-                  y_offset: int, dashboard=None) -> IntermediateWidget:
+                  y_offset: int, dashboard=None,
+                  resolver: Optional[CanonicalFieldResolver] = None) -> IntermediateWidget:
     """Build an IntermediateWidget with proper encodings, query fields, and layout."""
     resolved_mark = resolve_mark_type(ws.mark_type, ws.columns, ws.rows, ws.measure_bindings)
     chart_type = MARK_TO_CHART.get(resolved_mark, ChartType.BAR)
@@ -575,12 +628,17 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     # Process structured shelves (filtered)
     cols_shelves = _filter_pseudo_shelf_fields(ws.columns_shelves)
     rows_shelves = _filter_pseudo_shelf_fields(ws.rows_shelves)
+    # Exclude table calcs that cannot be compiled
+    if resolver:
+        cols_shelves = [sf for sf in cols_shelves if not resolver.is_excluded(sf.field_name)]
+        rows_shelves = [sf for sf in rows_shelves if not resolver.is_excluded(sf.field_name)]
     all_shelves = cols_shelves + rows_shelves
     if all_shelves:
         for sf in cols_shelves:
+            physical_name = _resolve_field_for_sql(sf.field_name, resolver, ds)
             agg = _classify_shelf_field(sf, ds)
-            expr = _build_field_expression(sf.field_name, agg)
-            alias = _make_safe_alias(sf.field_name)  # P0.2: safe alias
+            expr = _build_field_expression(physical_name, agg)
+            alias = _make_safe_alias(physical_name)  # P0.2: safe alias from physical name
 
             if alias not in seen_encoding_fields:  # P1.2: deduplicate
                 seen_encoding_fields.add(alias)
@@ -599,9 +657,10 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 ))
 
         for sf in rows_shelves:
+            physical_name = _resolve_field_for_sql(sf.field_name, resolver, ds)
             agg = _classify_shelf_field(sf, ds)
-            expr = _build_field_expression(sf.field_name, agg)
-            alias = _make_safe_alias(sf.field_name)  # P0.2: safe alias
+            expr = _build_field_expression(physical_name, agg)
+            alias = _make_safe_alias(physical_name)  # P0.2: safe alias from physical name
 
             if alias not in seen_encoding_fields:  # P1.2: deduplicate
                 seen_encoding_fields.add(alias)
@@ -620,7 +679,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 ))
 
         if not rows_shelves and ds:
-            real_measures = _get_real_measure_columns(ds)
+            real_measures = _get_real_measure_columns(ds, resolver)
             for mname in real_measures:
                 alias = _make_safe_alias(mname)  # P0.2: safe alias
                 # P0.1: use semantic classifier instead of blind SUM
@@ -713,8 +772,11 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     for enc in ws.encodings:
         if is_tableau_pseudo_field(enc.field_name):
             continue
-        sql_name = _resolve_sql_field_name(enc.field_name, ds)
-        alias = _make_safe_alias(sql_name)
+        if resolver and resolver.is_excluded(enc.field_name):
+            continue
+        # Resolve to physical column name via canonical resolver
+        physical_name = _resolve_field_for_sql(enc.field_name, resolver, ds)
+        alias = _make_safe_alias(physical_name)
 
         if enc.channel == 'color':
             if alias not in seen_encoding_fields:
@@ -724,12 +786,12 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                     field_name=alias,
                     dataset_name=dataset_id,
                     aggregation=AggregationType.NONE,
-                    expression_sql=f"`{sql_name}`",
+                    expression_sql=f"`{physical_name}`",
                     data_type="string",
                 ))
                 if not any(qf.name == alias for qf in query_fields):
                     query_fields.append(IntermediateQueryField(
-                        expression=f"`{sql_name}`",
+                        expression=f"`{physical_name}`",
                         name=alias,
                         data_type="string",
                     ))
@@ -741,7 +803,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                         field_name=alias,
                         dataset_name=dataset_id,
                         aggregation=AggregationType.NONE,
-                        expression_sql=f"`{sql_name}`",
+                        expression_sql=f"`{physical_name}`",
                         data_type="string",
                     ))
                     has_x = True
@@ -756,7 +818,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 col_meta = _get_column_metadata(enc.field_name, ds)
                 if col_meta.get('role') == 'measure' or not col_meta:
                     agg = AggregationType.SUM
-            expr = _build_field_expression(sql_name, agg)
+            expr = _build_field_expression(physical_name, agg)
             if alias not in seen_encoding_fields:
                 seen_encoding_fields.add(alias)
                 channel = EncodingChannel.SIZE if enc.channel == 'size' else EncodingChannel.Y
@@ -796,7 +858,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 seen_encoding_fields.add(alias)
                 if not any(qf.name == alias for qf in query_fields):
                     query_fields.append(IntermediateQueryField(
-                        expression=f"`{sql_name}`",
+                        expression=f"`{physical_name}`",
                         name=alias,
                         data_type="string",
                     ))

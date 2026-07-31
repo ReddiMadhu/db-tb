@@ -202,3 +202,6 @@ class WorkbookMetadata(BaseModel):
     groups: List[GroupMetadata] = Field(default_factory=list)
     sets: List[SetMetadata] = Field(default_factory=list)
     bins: List[BinMetadata] = Field(default_factory=list)
+    # Field resolution maps — populated by parser for downstream stages
+    caption_to_internal_map: Dict[str, str] = Field(default_factory=dict)  # caption → internal_name
+    internal_to_caption_map: Dict[str, str] = Field(default_factory=dict)  # internal_name → caption

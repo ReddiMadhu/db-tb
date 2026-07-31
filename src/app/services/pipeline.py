@@ -60,8 +60,16 @@ class MigrationPipeline:
                     f"{{'{t['table']}': '<catalog>.<schema>.{t['suggested_name']}'}}"
                 )
 
-        # Stage 6: Expression & SQL Translation (handled in normalizer / compiler)
-        self.log("INFO", "Stage 6: Compiling expressions & transpiling SQL")
+        # Stage 6: Expression & SQL Translation — build canonical field resolver
+        self.log("INFO", "Stage 6: Compiling expressions & building canonical field resolver")
+        from app.services.compiler.canonical_field_resolver import CanonicalFieldResolver
+        field_resolver = CanonicalFieldResolver(workbook_meta)
+
+        # Log resolver diagnostics
+        excluded = [f for f in field_resolver.dump_registry() if f['is_excluded']]
+        if excluded:
+            for exc in excluded:
+                self.log("INFO", f"Excluding field '{exc['internal_name']}' ({exc['exclude_reason']})")
 
         # Stage 7: Universal BI Model Normalization & Optimization
         self.log("INFO", "Stage 7: Normalizing TOM to Universal BI Model (UBIM)")
@@ -70,6 +78,7 @@ class MigrationPipeline:
             table_mapping=self.table_mapping,
             default_catalog=self.default_catalog,
             default_schema=self.default_schema,
+            field_resolver=field_resolver,
         )
         ubim_opt = optimize_ubim(ubim)
 
