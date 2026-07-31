@@ -255,16 +255,15 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                         errors.append(
                             f"Widget '{widget.name}' ({wt}) missing required 'y' encoding fieldName."
                         )
-                    if (
+                    elif (
                         x_ch and y_ch
                         and x_ch.get('fieldName')
                         and y_ch.get('fieldName')
                         and x_ch.get('fieldName') == y_ch.get('fieldName')
-                        and wt in ('pie', 'scatter')
+                        and wt == 'scatter'
                     ):
                         errors.append(
-                            f"Widget '{widget.name}' ({wt}) has identical x/y fieldName "
-                            f"'{x_ch.get('fieldName')}' — chart is incomplete."
+                            f"Widget '{widget.name}' ({wt}) binds both x and y to identical field '{x_ch.get('fieldName')}'."
                         )
 
                 # Check for empty table columns
@@ -274,6 +273,31 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                         warnings.append(
                             f"Widget '{widget.name}' (table) has empty columns list — will render blank."
                         )
+
+    # Tier 12: SQL Aggregation & GROUP BY Validation
+    AGG_FUNC_RE = re.compile(r'\b(SUM|AVG|COUNT|MIN|MAX|PERCENTILE|MEDIAN|STDDEV)\s*\(', re.IGNORECASE)
+    for ds in lakeview_dash.datasets:
+        if not ds.query:
+            continue
+        query = ds.query
+        if AGG_FUNC_RE.search(query) and "GROUP BY" in query.upper():
+            parts = re.split(r'\bFROM\b', query, flags=re.IGNORECASE)
+            if len(parts) >= 2:
+                select_clause = parts[0].replace("SELECT", "", 1).strip()
+                group_by_part = query.upper().split("GROUP BY")[1].split("ORDER BY")[0].strip()
+                group_cols = [g.strip() for g in group_by_part.split(",")]
+
+                items = [item.strip() for item in select_clause.split(",")]
+                for idx, item in enumerate(items, 1):
+                    is_agg = bool(AGG_FUNC_RE.search(item))
+                    if not is_agg:
+                        idx_str = str(idx)
+                        col_match = re.search(r'`?([a-zA-Z0-9_]+)`?', item.split("AS")[0].strip())
+                        col_name = col_match.group(1) if col_match else ""
+                        if idx_str not in group_cols and col_name.upper() not in [g.strip('` ').upper() for g in group_cols]:
+                            errors.append(
+                                f"Dataset '{ds.displayName}' contains MISSING_AGGREGATION error: column '{col_name or item}' is not aggregated and not in GROUP BY."
+                            )
 
     # Tier 12b — Dataset SQL incompleteness / binding subset mismatch
     ds_by_name = {ds.name: ds for ds in lakeview_dash.datasets}
