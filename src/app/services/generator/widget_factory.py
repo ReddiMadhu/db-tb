@@ -1,42 +1,77 @@
 """
-widget_factory.py — Centralized Databricks AI/BI Version 3 Widget Schema Factory
-================================================================================
+widget_factory.py — Centralized Databricks AI/BI Widget Schema Factory
+======================================================================
 Single source of truth for constructing Databricks Lakeview AI/BI widgets.
-Guarantees Version 3 schema compliance, required encodings (scale.type),
+Guarantees schema-version compliance, required encodings (scale.type),
 valid queries & fields, and prevents schema drift across the repository.
 
-Supported Chart Types:
-  - Bar (x: categorical, y: quantitative, optional color: categorical)
-  - Pie (color: categorical, angle: quantitative — NO x/y)
-  - Line / Area (x: temporal/categorical, y: quantitative, optional color)
-  - Scatter (x: quantitative, y: quantitative)
-  - Table (columns encodings + disaggregated query fields)
-  - Counter / Stat (value: quantitative)
-  - Filter (multi-select, single-select, date-range)
+Version rules (verified against Lakeview serialized schema):
+  - Charts (bar/line/area/scatter/pie/heatmap/histogram/combo): version 3
+  - Counter / filters: version 2
+  - Table / pivot: version 1
+
+Encoding rules:
+  - Bar / Line / Area: x + y (+ optional color); every channel has scale.type
+  - Pie: color + angle (NEVER x/y)
+  - Scatter: x + y (quantitative)
+  - Heatmap: x + y + color
+  - Histogram: x + y
+  - Table: encodings.columns
+  - Counter: encodings.value
 """
 
+from __future__ import annotations
+
 import re
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 from app.models.lakeview_model import Widget, WidgetQuery, generate_lakeview_id
 
 DEFAULT_COLORS = [
     "#077A9D", "#FFAB00", "#00A972", "#FF3621", "#8BCAE7",
-    "#AB4057", "#99DDB4", "#FCA4A1", "#919191", "#BF7080"
+    "#AB4057", "#99DDB4", "#FCA4A1", "#919191", "#BF7080",
 ]
 
-PLACEHOLDER_FIELDS = {'x', 'y', 'value', 'filter_col', 'X', 'Y', 'Value', '0', ''}
+PLACEHOLDER_FIELDS = {"x", "y", "value", "filter_col", "X", "Y", "Value", "0", ""}
+
+# Chart widgetTypes that require version 3
+CHART_TYPES_V3 = {
+    "bar", "line", "area", "scatter", "pie",
+    "heatmap", "histogram", "combo", "boxplot", "map",
+}
+
+TEMPORAL_HINTS = re.compile(
+    r"(date|time|month|year|week|day|timestamp|datetime|period|dt_)",
+    re.IGNORECASE,
+)
 
 
 def _clean_title(name: str) -> str:
     """Format field name to clean title (e.g. Total_Claim -> Total Claim)."""
     if not name:
         return ""
-    return name.replace('_', ' ').strip().title()
+    return name.replace("_", " ").strip().title()
+
+
+def infer_scale_type(
+    field_name: str,
+    *,
+    role: str = "dimension",
+    explicit: Optional[str] = None,
+) -> str:
+    """Infer Lakeview scale.type for an encoding channel."""
+    if explicit in ("quantitative", "temporal", "categorical", "ordinal"):
+        return explicit
+    if role == "measure":
+        return "quantitative"
+    if field_name and TEMPORAL_HINTS.search(field_name):
+        return "temporal"
+    return "categorical"
 
 
 def sanitize_query_fields(fields: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Sanitize query field list to ensure no nulls or empty field definitions."""
-    sanitized = []
+    sanitized: List[Dict[str, str]] = []
     seen = set()
     for f in fields:
         name = (f.get("name") or "").strip()
@@ -48,77 +83,140 @@ def sanitize_query_fields(fields: List[Dict[str, str]]) -> List[Dict[str, str]]:
         seen.add(name)
         sanitized.append({
             "expression": expr or f"`{name}`",
-            "name": name
+            "name": name,
         })
     return sanitized
 
 
+def _axis_encoding(
+    field_name: str,
+    scale_type: str,
+    display_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    title = display_name or _clean_title(field_name)
+    return {
+        "fieldName": field_name,
+        "displayName": title,
+        "scale": {"type": scale_type},
+        "axis": {"title": title},
+    }
+
+
+def _channel_encoding(
+    field_name: str,
+    scale_type: str,
+    display_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    title = display_name or _clean_title(field_name)
+    return {
+        "fieldName": field_name,
+        "displayName": title,
+        "scale": {"type": scale_type},
+    }
+
+
 def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Validate a renderSpec object against Databricks AI/BI v3 rules."""
-    errors = []
+    """Validate a renderSpec / widget.spec object against Databricks AI/BI rules."""
+    errors: List[str] = []
     if not spec:
         return False, ["Widget spec is missing or null."]
 
     v = spec.get("version")
-    if v != 3 and v != 1 and v != 2:
-        errors.append(f"Invalid widget spec version '{v}' — expected version 3.")
-
     wt = spec.get("widgetType")
     if not wt:
         errors.append("Missing required 'widgetType' in spec.")
+        return False, errors
+
+    if wt in CHART_TYPES_V3 and v != 3:
+        errors.append(f"Chart widgetType '{wt}' requires version 3, got {v}.")
+    elif wt == "counter" and v != 2:
+        errors.append(f"Counter widget requires version 2, got {v}.")
+    elif wt and wt.startswith("filter-") and v != 2:
+        errors.append(f"Filter widget '{wt}' requires version 2, got {v}.")
+    elif wt in ("table", "pivot") and v != 1:
+        errors.append(f"Table/pivot widget requires version 1, got {v}.")
+    elif v not in (1, 2, 3):
+        errors.append(f"Invalid widget spec version '{v}'.")
 
     encodings = spec.get("encodings", {})
     if not isinstance(encodings, dict):
         errors.append("Invalid 'encodings' structure — must be an object.")
         return False, errors
 
-    if wt == "bar":
-        for ch_name in ('x', 'y'):
+    if not encodings and wt not in ("",):
+        errors.append(f"Widget '{wt}' has empty encodings object.")
+
+    def _require_channels(channels: Tuple[str, ...], require_scale: bool = True) -> None:
+        for ch_name in channels:
             ch = encodings.get(ch_name)
             if not isinstance(ch, dict) or not ch.get("fieldName"):
-                errors.append(f"Bar chart missing required '{ch_name}' encoding fieldName.")
-            elif not ch.get("scale", {}).get("type"):
-                errors.append(f"Bar chart '{ch_name}' encoding missing scale.type.")
+                errors.append(f"{wt} missing required '{ch_name}' encoding fieldName.")
+            elif require_scale and not (ch.get("scale") or {}).get("type"):
+                errors.append(f"{wt} '{ch_name}' encoding missing scale.type.")
+
+    if wt == "bar":
+        _require_channels(("x", "y"))
+        x_fn = (encodings.get("x") or {}).get("fieldName")
+        y_fn = (encodings.get("y") or {}).get("fieldName")
+        if x_fn and y_fn and x_fn == y_fn:
+            errors.append(f"Bar chart binds x and y to identical field '{x_fn}'.")
+        if "x" in encodings or "y" in encodings:
+            color = encodings.get("color")
+            if isinstance(color, dict) and color.get("fieldName") and not (color.get("scale") or {}).get("type"):
+                errors.append("Bar chart 'color' encoding missing scale.type.")
 
     elif wt == "pie":
         if "x" in encodings or "y" in encodings:
             errors.append("Pie chart must NOT use 'x' or 'y' encodings — use 'angle' and 'color'.")
-        for ch_name in ('angle', 'color'):
-            ch = encodings.get(ch_name)
-            if not isinstance(ch, dict) or not ch.get("fieldName"):
-                errors.append(f"Pie chart missing required '{ch_name}' encoding fieldName.")
-            elif not ch.get("scale", {}).get("type"):
-                errors.append(f"Pie chart '{ch_name}' encoding missing scale.type.")
+        _require_channels(("angle", "color"))
 
     elif wt in ("line", "area"):
-        for ch_name in ('x', 'y'):
-            ch = encodings.get(ch_name)
-            if not isinstance(ch, dict) or not ch.get("fieldName"):
-                errors.append(f"Line/Area chart missing required '{ch_name}' encoding fieldName.")
-            elif not ch.get("scale", {}).get("type"):
-                errors.append(f"Line/Area chart '{ch_name}' encoding missing scale.type.")
+        _require_channels(("x", "y"))
+        x_fn = (encodings.get("x") or {}).get("fieldName")
+        y_fn = (encodings.get("y") or {}).get("fieldName")
+        if x_fn and y_fn and x_fn == y_fn:
+            errors.append(f"{wt} chart binds x and y to identical field '{x_fn}'.")
 
     elif wt == "scatter":
-        for ch_name in ('x', 'y'):
-            ch = encodings.get(ch_name)
-            if not isinstance(ch, dict) or not ch.get("fieldName"):
-                errors.append(f"Scatter chart missing required '{ch_name}' encoding fieldName.")
-            elif not ch.get("scale", {}).get("type"):
-                errors.append(f"Scatter chart '{ch_name}' encoding missing scale.type.")
+        _require_channels(("x", "y"))
+        x_fn = (encodings.get("x") or {}).get("fieldName")
+        y_fn = (encodings.get("y") or {}).get("fieldName")
+        if x_fn and y_fn and x_fn == y_fn:
+            errors.append(f"Scatter binds x and y to identical field '{x_fn}'.")
+
+    elif wt == "heatmap":
+        _require_channels(("x", "y", "color"))
+
+    elif wt == "histogram":
+        _require_channels(("x", "y"))
 
     elif wt == "table":
         cols = encodings.get("columns")
         if not isinstance(cols, list) or not cols:
             errors.append("Table widget missing required 'columns' encodings list.")
 
+    elif wt == "counter":
+        value = encodings.get("value")
+        if not isinstance(value, dict) or not value.get("fieldName"):
+            errors.append("Counter widget missing required 'value' encoding fieldName.")
+
+    elif wt and wt.startswith("filter-"):
+        fields = encodings.get("fields")
+        if not isinstance(fields, list) or not fields:
+            errors.append(f"Filter widget '{wt}' missing required 'fields' encodings list.")
+
     return len(errors) == 0, errors
 
 
 class WidgetFactory:
-    """Centralized Factory for building Databricks AI/BI v3 widgets."""
+    """Centralized Factory for building Databricks AI/BI widgets."""
 
     @staticmethod
-    def _create_widget_query(dataset_name: str, fields: List[Dict[str, str]], disaggregated: bool = False) -> WidgetQuery:
+    def _create_widget_query(
+        dataset_name: str,
+        fields: List[Dict[str, str]],
+        disaggregated: bool = False,
+    ) -> WidgetQuery:
         clean_fields = sanitize_query_fields(fields)
         return WidgetQuery(
             name="main_query",
@@ -126,9 +224,22 @@ class WidgetFactory:
                 "datasetName": dataset_name,
                 "disaggregated": disaggregated,
                 "disaggregatedData": disaggregated,
-                "fields": clean_fields
-            }
+                "fields": clean_fields,
+            },
         )
+
+    @staticmethod
+    def _ensure_field(
+        qfields: List[Dict[str, str]],
+        name: str,
+        expression: Optional[str] = None,
+    ) -> None:
+        if not name or any(f.get("name") == name for f in qfields):
+            return
+        qfields.append({
+            "expression": expression or f"`{name}`",
+            "name": name,
+        })
 
     @classmethod
     def create_bar_widget(
@@ -143,45 +254,41 @@ class WidgetFactory:
         y_scale_type: str = "quantitative",
     ) -> Widget:
         """Create a Version 3 Bar Chart widget."""
-        qfields = query_fields or [
-            {"expression": f"`{x_field}`", "name": x_field},
-            {"expression": f"SUM(`{y_field}`)", "name": y_field},
-        ]
+        if x_field == y_field:
+            raise ValueError(
+                f"Bar chart requires distinct x/y fields; got identical '{x_field}'."
+            )
+        qfields = list(query_fields) if query_fields else []
+        if not qfields:
+            qfields = [
+                {"expression": f"`{x_field}`", "name": x_field},
+                {"expression": f"SUM(`{y_field}`)", "name": y_field},
+            ]
+        cls._ensure_field(qfields, x_field)
+        cls._ensure_field(qfields, y_field, f"SUM(`{y_field}`)")
         if color_field:
-            qfields.append({"expression": f"`{color_field}`", "name": color_field})
+            cls._ensure_field(qfields, color_field)
 
-        encodings = {
-            "x": {
-                "fieldName": x_field,
-                "displayName": _clean_title(x_field),
-                "scale": {"type": x_scale_type},
-                "axis": {"title": _clean_title(x_field)}
-            },
-            "y": {
-                "fieldName": y_field,
-                "displayName": _clean_title(y_field),
-                "scale": {"type": y_scale_type},
-                "axis": {"title": _clean_title(y_field)}
-            },
-            "label": {"show": False}
+        encodings: Dict[str, Any] = {
+            "x": _axis_encoding(x_field, infer_scale_type(x_field, explicit=x_scale_type)),
+            "y": _axis_encoding(y_field, infer_scale_type(y_field, role="measure", explicit=y_scale_type)),
+            "label": {"show": False},
         }
         if color_field:
-            encodings["color"] = {
-                "fieldName": color_field,
-                "displayName": _clean_title(color_field),
-                "scale": {"type": "categorical"}
-            }
+            encodings["color"] = _channel_encoding(color_field, "categorical")
 
         spec = {
             "version": 3,
             "widgetType": "bar",
             "encodings": encodings,
             "frame": {"title": title or _clean_title(y_field), "showTitle": True},
-            "mark": {"colors": DEFAULT_COLORS}
+            "mark": {"colors": DEFAULT_COLORS},
         }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid bar widget spec: {errs}")
 
-        wq = cls._create_widget_query(dataset_name, qfields, disaggregated=False)
-        return Widget(queries=[wq], spec=spec)
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, False)], spec=spec)
 
     @classmethod
     def create_pie_widget(
@@ -192,33 +299,32 @@ class WidgetFactory:
         title: str = "",
         query_fields: Optional[List[Dict[str, str]]] = None,
     ) -> Widget:
-        """Create a Version 3 Pie Chart widget (uses angle & color, NOT x & y)."""
-        qfields = query_fields or [
+        """Create a Version 3 Pie Chart widget (angle & color — NOT x & y)."""
+        qfields = list(query_fields) if query_fields else [
             {"expression": f"`{category_field}`", "name": category_field},
             {"expression": f"SUM(`{value_field}`)", "name": value_field},
         ]
+        cls._ensure_field(qfields, category_field)
+        cls._ensure_field(qfields, value_field, f"SUM(`{value_field}`)")
 
         spec = {
             "version": 3,
             "widgetType": "pie",
             "encodings": {
-                "color": {
-                    "fieldName": category_field,
-                    "displayName": _clean_title(category_field),
-                    "scale": {"type": "categorical"}
-                },
-                "angle": {
-                    "fieldName": value_field,
-                    "displayName": _clean_title(value_field),
-                    "scale": {"type": "quantitative"}
-                }
+                "color": _channel_encoding(category_field, "categorical"),
+                "angle": _channel_encoding(value_field, "quantitative"),
             },
-            "frame": {"title": title or f"{_clean_title(category_field)} Distribution", "showTitle": True},
-            "mark": {"colors": DEFAULT_COLORS}
+            "frame": {
+                "title": title or f"{_clean_title(category_field)} Distribution",
+                "showTitle": True,
+            },
+            "mark": {"colors": DEFAULT_COLORS},
         }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid pie widget spec: {errs}")
 
-        wq = cls._create_widget_query(dataset_name, qfields, disaggregated=False)
-        return Widget(queries=[wq], spec=spec)
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, False)], spec=spec)
 
     @classmethod
     def create_line_widget(
@@ -230,48 +336,44 @@ class WidgetFactory:
         color_field: Optional[str] = None,
         is_area: bool = False,
         query_fields: Optional[List[Dict[str, str]]] = None,
-        x_scale_type: str = "temporal",
+        x_scale_type: Optional[str] = None,
     ) -> Widget:
         """Create a Version 3 Line or Area Chart widget."""
-        qfields = query_fields or [
+        if x_field == y_field:
+            raise ValueError(
+                f"Line/Area chart requires distinct x/y fields; got identical '{x_field}'."
+            )
+        qfields = list(query_fields) if query_fields else [
             {"expression": f"`{x_field}`", "name": x_field},
             {"expression": f"SUM(`{y_field}`)", "name": y_field},
         ]
+        cls._ensure_field(qfields, x_field)
+        cls._ensure_field(qfields, y_field, f"SUM(`{y_field}`)")
         if color_field:
-            qfields.append({"expression": f"`{color_field}`", "name": color_field})
+            cls._ensure_field(qfields, color_field)
 
-        encodings = {
-            "x": {
-                "fieldName": x_field,
-                "displayName": _clean_title(x_field),
-                "scale": {"type": x_scale_type},
-                "axis": {"title": _clean_title(x_field)}
-            },
-            "y": {
-                "fieldName": y_field,
-                "displayName": _clean_title(y_field),
-                "scale": {"type": "quantitative"},
-                "axis": {"title": _clean_title(y_field)}
-            },
-            "label": {"show": False}
+        x_scale = infer_scale_type(x_field, explicit=x_scale_type)
+        encodings: Dict[str, Any] = {
+            "x": _axis_encoding(x_field, x_scale),
+            "y": _axis_encoding(y_field, "quantitative"),
+            "label": {"show": False},
         }
         if color_field:
-            encodings["color"] = {
-                "fieldName": color_field,
-                "displayName": _clean_title(color_field),
-                "scale": {"type": "categorical"}
-            }
+            encodings["color"] = _channel_encoding(color_field, "categorical")
 
+        widget_type = "area" if is_area else "line"
         spec = {
             "version": 3,
-            "widgetType": "area" if is_area else "line",
+            "widgetType": widget_type,
             "encodings": encodings,
             "frame": {"title": title or _clean_title(y_field), "showTitle": True},
-            "mark": {"colors": DEFAULT_COLORS}
+            "mark": {"colors": DEFAULT_COLORS},
         }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid {widget_type} widget spec: {errs}")
 
-        wq = cls._create_widget_query(dataset_name, qfields, disaggregated=False)
-        return Widget(queries=[wq], spec=spec)
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, False)], spec=spec)
 
     @classmethod
     def create_scatter_widget(
@@ -280,37 +382,116 @@ class WidgetFactory:
         x_field: str,
         y_field: str,
         title: str = "",
+        color_field: Optional[str] = None,
         query_fields: Optional[List[Dict[str, str]]] = None,
     ) -> Widget:
         """Create a Version 3 Scatter Plot widget."""
-        qfields = query_fields or [
+        if x_field == y_field:
+            raise ValueError(
+                f"Scatter requires distinct x/y fields; got identical '{x_field}'."
+            )
+        qfields = list(query_fields) if query_fields else [
             {"expression": f"`{x_field}`", "name": x_field},
             {"expression": f"`{y_field}`", "name": y_field},
         ]
+        cls._ensure_field(qfields, x_field)
+        cls._ensure_field(qfields, y_field)
+        if color_field:
+            cls._ensure_field(qfields, color_field)
+
+        encodings: Dict[str, Any] = {
+            "x": _axis_encoding(x_field, "quantitative"),
+            "y": _axis_encoding(y_field, "quantitative"),
+        }
+        if color_field:
+            encodings["color"] = _channel_encoding(color_field, "categorical")
 
         spec = {
             "version": 3,
             "widgetType": "scatter",
-            "encodings": {
-                "x": {
-                    "fieldName": x_field,
-                    "displayName": _clean_title(x_field),
-                    "scale": {"type": "quantitative"},
-                    "axis": {"title": _clean_title(x_field)}
-                },
-                "y": {
-                    "fieldName": y_field,
-                    "displayName": _clean_title(y_field),
-                    "scale": {"type": "quantitative"},
-                    "axis": {"title": _clean_title(y_field)}
-                }
+            "encodings": encodings,
+            "frame": {
+                "title": title or f"{_clean_title(x_field)} vs {_clean_title(y_field)}",
+                "showTitle": True,
             },
-            "frame": {"title": title or f"{_clean_title(x_field)} vs {_clean_title(y_field)}", "showTitle": True},
-            "mark": {"colors": DEFAULT_COLORS}
+            "mark": {"colors": DEFAULT_COLORS},
         }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid scatter widget spec: {errs}")
 
-        wq = cls._create_widget_query(dataset_name, qfields, disaggregated=False)
-        return Widget(queries=[wq], spec=spec)
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, False)], spec=spec)
+
+    @classmethod
+    def create_heatmap_widget(
+        cls,
+        dataset_name: str,
+        x_field: str,
+        y_field: str,
+        color_field: str,
+        title: str = "",
+        query_fields: Optional[List[Dict[str, str]]] = None,
+    ) -> Widget:
+        """Create a Version 3 Heatmap widget (x, y, color)."""
+        qfields = list(query_fields) if query_fields else [
+            {"expression": f"`{x_field}`", "name": x_field},
+            {"expression": f"`{y_field}`", "name": y_field},
+            {"expression": f"SUM(`{color_field}`)", "name": color_field},
+        ]
+        cls._ensure_field(qfields, x_field)
+        cls._ensure_field(qfields, y_field)
+        cls._ensure_field(qfields, color_field, f"SUM(`{color_field}`)")
+
+        spec = {
+            "version": 3,
+            "widgetType": "heatmap",
+            "encodings": {
+                "x": _axis_encoding(x_field, infer_scale_type(x_field)),
+                "y": _axis_encoding(y_field, infer_scale_type(y_field)),
+                "color": _channel_encoding(color_field, "quantitative"),
+            },
+            "frame": {"title": title or _clean_title(color_field), "showTitle": True},
+            "mark": {"colors": DEFAULT_COLORS},
+        }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid heatmap widget spec: {errs}")
+
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, False)], spec=spec)
+
+    @classmethod
+    def create_histogram_widget(
+        cls,
+        dataset_name: str,
+        x_field: str,
+        y_field: str,
+        title: str = "",
+        query_fields: Optional[List[Dict[str, str]]] = None,
+    ) -> Widget:
+        """Create a Version 3 Histogram widget."""
+        qfields = list(query_fields) if query_fields else [
+            {"expression": f"`{x_field}`", "name": x_field},
+            {"expression": f"COUNT(*)", "name": y_field},
+        ]
+        cls._ensure_field(qfields, x_field)
+        cls._ensure_field(qfields, y_field, "COUNT(*)")
+
+        spec = {
+            "version": 3,
+            "widgetType": "histogram",
+            "encodings": {
+                "x": _axis_encoding(x_field, infer_scale_type(x_field)),
+                "y": _axis_encoding(y_field, "quantitative"),
+                "label": {"show": False},
+            },
+            "frame": {"title": title or f"{_clean_title(x_field)} Distribution", "showTitle": True},
+            "mark": {"colors": DEFAULT_COLORS},
+        }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid histogram widget spec: {errs}")
+
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, False)], spec=spec)
 
     @classmethod
     def create_table_widget(
@@ -320,10 +501,12 @@ class WidgetFactory:
         title: str = "",
         query_fields: Optional[List[Dict[str, str]]] = None,
     ) -> Widget:
-        """Create a Version 3 Table widget."""
-        qfields = query_fields or [
+        """Create a Version 1 Table widget (Lakeview table schema is v1)."""
+        qfields = list(query_fields) if query_fields else [
             {"expression": f"`{col}`", "name": col} for col in column_fields
         ]
+        for col in column_fields:
+            cls._ensure_field(qfields, col)
 
         columns_enc = []
         for i, col in enumerate(column_fields):
@@ -335,17 +518,97 @@ class WidgetFactory:
                 "displayAs": "string",
                 "alignContent": "left",
                 "visible": True,
-                "order": 100000 + i
+                "order": 100000 + i,
             })
 
         spec = {
-            "version": 3,
+            "version": 1,
             "widgetType": "table",
-            "encodings": {
-                "columns": columns_enc
-            },
-            "frame": {"title": title or "Table View", "showTitle": True}
+            "encodings": {"columns": columns_enc},
+            "frame": {"title": title or "Table View", "showTitle": True},
+            "condensed": True,
+            "itemsPerPage": 25,
         }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid table widget spec: {errs}")
 
-        wq = cls._create_widget_query(dataset_name, qfields, disaggregated=True)
-        return Widget(queries=[wq], spec=spec)
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, True)], spec=spec)
+
+    @classmethod
+    def create_counter_widget(
+        cls,
+        dataset_name: str,
+        value_field: str,
+        title: str = "",
+        query_fields: Optional[List[Dict[str, str]]] = None,
+    ) -> Widget:
+        """Create a Version 2 Counter / KPI widget."""
+        qfields = list(query_fields) if query_fields else [
+            {"expression": f"SUM(`{value_field}`)", "name": value_field},
+        ]
+        cls._ensure_field(qfields, value_field, f"SUM(`{value_field}`)")
+
+        spec = {
+            "version": 2,
+            "widgetType": "counter",
+            "encodings": {
+                "value": {
+                    "fieldName": value_field,
+                    "displayName": title or _clean_title(value_field),
+                }
+            },
+            "frame": {"title": title or _clean_title(value_field), "showTitle": True},
+        }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid counter widget spec: {errs}")
+
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, False)], spec=spec)
+
+    @classmethod
+    def create_filter_widget(
+        cls,
+        dataset_name: str,
+        field_name: str,
+        title: str = "",
+        filter_type: str = "filter-multi-select",
+        query_fields: Optional[List[Dict[str, str]]] = None,
+    ) -> Widget:
+        """Create a Version 2 Filter widget."""
+        allowed = {
+            "filter-multi-select",
+            "filter-single-select",
+            "filter-date-range-picker",
+            "filter-date-picker",
+        }
+        if filter_type not in allowed:
+            filter_type = "filter-multi-select"
+
+        qfields = list(query_fields) if query_fields else [
+            {"expression": f"`{field_name}`", "name": field_name},
+        ]
+        cls._ensure_field(qfields, field_name)
+
+        spec = {
+            "version": 2,
+            "widgetType": filter_type,
+            "encodings": {
+                "fields": [
+                    {
+                        "fieldName": field_name,
+                        "displayName": _clean_title(field_name),
+                        "queryName": (
+                            f"dashboards/{generate_lakeview_id()}/datasets/"
+                            f"{dataset_name}_{field_name}"
+                        ),
+                    }
+                ]
+            },
+            "frame": {"title": title or _clean_title(field_name), "showTitle": True},
+        }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid filter widget spec: {errs}")
+
+        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, True)], spec=spec)

@@ -1,67 +1,326 @@
 """
-lakeview_generator.py — Lakeview AST Generator (Rewritten)
-============================================================
+lakeview_generator.py — Lakeview AST Generator
+==============================================
 Converts Universal BI Model (UBIM) to Databricks Lakeview AST model.
 
-Fixes applied:
-  - Widget query `fields`: populates exact `[{"expression": "...", "name": "..."}]` matching query fields
-  - Widget query `disaggregated`: set correctly (False for charts/counters, True for tables)
-  - Color marks: adds standard Lakeview color palette `mark.colors`
-  - Pie chart encodings: uses `x` (category) and `y` (value), matching Lakeview schema
-  - Complete spec encodings: adds `displayName`, `scale`, and `axis` titles
-  - Chart types supported: BAR, LINE, AREA, SCATTER, PIE, COUNTER, TABLE, FILTER
+All widget renderSpecs are produced exclusively via WidgetFactory — the single
+source of truth for Databricks AI/BI schema versions, encodings, and queries.
 """
 
-import re
-from typing import Dict, Any, List
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+
 from app.models.universal_model import IntermediateDashboard, ChartType, EncodingChannel
 from app.models.lakeview_model import (
-    LakeviewDashboard, Dataset, Page, Widget, Position, LayoutItem,
-    WidgetQuery, generate_lakeview_id
+    LakeviewDashboard, Dataset, Page, Position, LayoutItem, generate_lakeview_id,
 )
 from app.services.generator.layout_engine import project_to_6column_grid
+from app.services.generator.widget_factory import (
+    WidgetFactory,
+    PLACEHOLDER_FIELDS,
+    infer_scale_type,
+    validate_widget_spec,
+)
 
-# Standard Databricks palette
-DEFAULT_COLORS = [
-    "#077A9D", "#FFAB00", "#00A972", "#FF3621",
-    "#8BCAE7", "#AB4057", "#99DDB4", "#FCA4A1",
-    "#919191", "#BF7080"
-]
+logger = logging.getLogger(__name__)
 
-# P0.3: Placeholder field names that indicate unresolved data binding
-PLACEHOLDER_FIELDS = {'x', 'y', 'value', 'filter_col', 'X', 'Y', 'Value', '0', ''}
-
-# P1.3: Minimum query fields required per chart type
-MIN_FIELDS_FOR_CHART = {
-    ChartType.BAR: 1,
-    ChartType.LINE: 1,
-    ChartType.AREA: 1,
-    ChartType.SCATTER: 2,
-    ChartType.PIE: 2,
-    ChartType.COUNTER: 1,
-    ChartType.TABLE: 1,
-    ChartType.FILTER_MULTI: 1,
-    ChartType.FILTER_SINGLE: 1,
-    ChartType.FILTER_DATE: 1,
+CARTESIAN_CHARTS = {
+    ChartType.BAR,
+    ChartType.LINE,
+    ChartType.AREA,
+    ChartType.SCATTER,
+    ChartType.PIE,
+    ChartType.HEATMAP,
+    ChartType.HISTOGRAM,
 }
 
 
+def _enc_by_channel(encodings, channel: EncodingChannel):
+    return next((e for e in encodings if e.channel == channel), None)
+
+
+def _resolve_xy_fields(
+    w_ubim,
+    query_fields_list: List[Dict[str, str]],
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve dimension / measure / color field names from UBIM encodings."""
+    x_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.X)
+    y_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.Y)
+    color_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.COLOR)
+    size_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.SIZE)
+
+    x_field = x_enc.field_name if x_enc else None
+    y_field = y_enc.field_name if y_enc else None
+    color_field = color_enc.field_name if color_enc else None
+
+    # Pie / shelf-less charts: color acts as category, size as measure
+    if x_field is None and color_enc:
+        x_field = color_enc.field_name
+    if y_field is None and size_enc:
+        y_field = size_enc.field_name
+
+    if x_field is None and query_fields_list and w_ubim.chart_type == ChartType.TABLE:
+        x_field = query_fields_list[0]["name"]
+    if y_field is None and query_fields_list and w_ubim.chart_type == ChartType.TABLE:
+        others = [qf["name"] for qf in query_fields_list if qf["name"] != x_field]
+        y_field = others[0] if others else x_field
+
+    return x_field, y_field, color_field
+
+
+def _build_query_fields(w_ubim) -> List[Dict[str, str]]:
+    query_fields_list: List[Dict[str, str]] = []
+    if w_ubim.query_fields:
+        for qf in w_ubim.query_fields:
+            query_fields_list.append({
+                "expression": qf.expression,
+                "name": qf.name,
+            })
+    elif w_ubim.encodings:
+        for enc in w_ubim.encodings:
+            expr = enc.expression_sql or f"`{enc.field_name}`"
+            query_fields_list.append({
+                "expression": expr,
+                "name": enc.field_name,
+            })
+    return query_fields_list
+
+
+def _create_widget_via_factory(
+    chart_type: ChartType,
+    dataset_ref: str,
+    title: str,
+    x_field: Optional[str],
+    y_field: Optional[str],
+    color_field: Optional[str],
+    query_fields_list: List[Dict[str, str]],
+):
+    """Dispatch to WidgetFactory. Returns Widget or None if incomplete."""
+    has_placeholder_x = (x_field is None) or (x_field in PLACEHOLDER_FIELDS)
+    has_placeholder_y = (y_field is None) or (y_field in PLACEHOLDER_FIELDS)
+
+    # Single-measure worksheets that look like KPIs → counter
+    if chart_type in (ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER):
+        if (
+            (has_placeholder_x and not has_placeholder_y)
+            or (not has_placeholder_x and has_placeholder_y)
+            or (x_field and y_field and x_field == y_field)
+        ):
+            # Prefer demoting to counter when only one real quantitative field exists
+            value_field = None
+            if y_field and y_field not in PLACEHOLDER_FIELDS:
+                value_field = y_field
+            elif x_field and x_field not in PLACEHOLDER_FIELDS:
+                value_field = x_field
+            elif query_fields_list:
+                value_field = query_fields_list[0]["name"]
+            if value_field and value_field not in PLACEHOLDER_FIELDS:
+                logger.info(
+                    "Demoting widget '%s' (%s) → counter — incomplete/identical axes "
+                    "(x=%r, y=%r)",
+                    title, chart_type.value, x_field, y_field,
+                )
+                return WidgetFactory.create_counter_widget(
+                    dataset_name=dataset_ref,
+                    value_field=value_field,
+                    title=title,
+                    query_fields=query_fields_list or None,
+                )
+            logger.warning(
+                "Skipping widget '%s' — incomplete cartesian bindings (x=%r, y=%r)",
+                title, x_field, y_field,
+            )
+            return None
+
+    if chart_type == ChartType.BAR:
+        return WidgetFactory.create_bar_widget(
+            dataset_name=dataset_ref,
+            x_field=x_field,  # type: ignore[arg-type]
+            y_field=y_field,  # type: ignore[arg-type]
+            title=title,
+            color_field=color_field,
+            query_fields=query_fields_list or None,
+            x_scale_type=infer_scale_type(x_field or ""),
+        )
+
+    if chart_type == ChartType.LINE:
+        return WidgetFactory.create_line_widget(
+            dataset_name=dataset_ref,
+            x_field=x_field,  # type: ignore[arg-type]
+            y_field=y_field,  # type: ignore[arg-type]
+            title=title,
+            color_field=color_field,
+            is_area=False,
+            query_fields=query_fields_list or None,
+            x_scale_type=infer_scale_type(x_field or ""),
+        )
+
+    if chart_type == ChartType.AREA:
+        return WidgetFactory.create_line_widget(
+            dataset_name=dataset_ref,
+            x_field=x_field,  # type: ignore[arg-type]
+            y_field=y_field,  # type: ignore[arg-type]
+            title=title,
+            color_field=color_field,
+            is_area=True,
+            query_fields=query_fields_list or None,
+            x_scale_type=infer_scale_type(x_field or ""),
+        )
+
+    if chart_type == ChartType.SCATTER:
+        return WidgetFactory.create_scatter_widget(
+            dataset_name=dataset_ref,
+            x_field=x_field,  # type: ignore[arg-type]
+            y_field=y_field,  # type: ignore[arg-type]
+            title=title,
+            color_field=color_field,
+            query_fields=query_fields_list or None,
+        )
+
+    if chart_type == ChartType.PIE:
+        if has_placeholder_x or has_placeholder_y:
+            logger.warning(
+                "Skipping pie widget '%s' — missing category/value (x=%r, y=%r)",
+                title, x_field, y_field,
+            )
+            return None
+        return WidgetFactory.create_pie_widget(
+            dataset_name=dataset_ref,
+            category_field=x_field,  # type: ignore[arg-type]
+            value_field=y_field,  # type: ignore[arg-type]
+            title=title,
+            query_fields=query_fields_list or None,
+        )
+
+    if chart_type == ChartType.HEATMAP:
+        # Prefer color measure; fall back to y as color intensity
+        color_measure = color_field or y_field
+        row_field = y_field if color_field else (query_fields_list[1]["name"] if len(query_fields_list) > 1 else y_field)
+        if has_placeholder_x or not color_measure or color_measure in PLACEHOLDER_FIELDS:
+            # Degrade to bar when heatmap bindings incomplete
+            if not has_placeholder_x and y_field and x_field != y_field:
+                return WidgetFactory.create_bar_widget(
+                    dataset_name=dataset_ref,
+                    x_field=x_field,  # type: ignore[arg-type]
+                    y_field=y_field,
+                    title=title,
+                    query_fields=query_fields_list or None,
+                )
+            logger.warning("Skipping heatmap widget '%s' — incomplete bindings", title)
+            return None
+        y_dim = row_field if row_field and row_field != x_field else (color_field or y_field)
+        # If we only have x + measure, use bar; need 2 dims + measure for heatmap
+        if not y_dim or y_dim == x_field or y_dim == color_measure:
+            return WidgetFactory.create_bar_widget(
+                dataset_name=dataset_ref,
+                x_field=x_field,  # type: ignore[arg-type]
+                y_field=color_measure,
+                title=title,
+                query_fields=query_fields_list or None,
+            )
+        return WidgetFactory.create_heatmap_widget(
+            dataset_name=dataset_ref,
+            x_field=x_field,  # type: ignore[arg-type]
+            y_field=y_dim,
+            color_field=color_measure,
+            title=title,
+            query_fields=query_fields_list or None,
+        )
+
+    if chart_type == ChartType.HISTOGRAM:
+        if has_placeholder_x:
+            logger.warning("Skipping histogram widget '%s' — missing bin field", title)
+            return None
+        hist_y = y_field if not has_placeholder_y else "count"
+        qfields = list(query_fields_list)
+        if hist_y == "count" and not any(f.get("name") == "count" for f in qfields):
+            qfields.append({"expression": "COUNT(*)", "name": "count"})
+        return WidgetFactory.create_histogram_widget(
+            dataset_name=dataset_ref,
+            x_field=x_field,  # type: ignore[arg-type]
+            y_field=hist_y,  # type: ignore[arg-type]
+            title=title,
+            query_fields=qfields or None,
+        )
+
+    if chart_type == ChartType.COUNTER:
+        val_field = None
+        if y_field and y_field not in PLACEHOLDER_FIELDS:
+            val_field = y_field
+        elif query_fields_list:
+            val_field = query_fields_list[0]["name"]
+        if not val_field or val_field in PLACEHOLDER_FIELDS:
+            logger.warning("Skipping counter widget '%s' — no valid value field", title)
+            return None
+        return WidgetFactory.create_counter_widget(
+            dataset_name=dataset_ref,
+            value_field=val_field,
+            title=title,
+            query_fields=query_fields_list or None,
+        )
+
+    if chart_type in (ChartType.FILTER_MULTI, ChartType.FILTER_SINGLE, ChartType.FILTER_DATE):
+        filt_type = "filter-multi-select"
+        if chart_type == ChartType.FILTER_SINGLE:
+            filt_type = "filter-single-select"
+        elif chart_type == ChartType.FILTER_DATE:
+            filt_type = "filter-date-range-picker"
+        f_field = None
+        if x_field and x_field not in PLACEHOLDER_FIELDS:
+            f_field = x_field
+        elif query_fields_list:
+            f_field = query_fields_list[0]["name"]
+        if not f_field or f_field in PLACEHOLDER_FIELDS:
+            logger.warning("Skipping filter widget '%s' — no valid filter field", title)
+            return None
+        return WidgetFactory.create_filter_widget(
+            dataset_name=dataset_ref,
+            field_name=f_field,
+            title=title,
+            filter_type=filt_type,
+            query_fields=query_fields_list or None,
+        )
+
+    # MAP / BOXPLOT / COMBO / TABLE / fallback → table
+    col_names: List[str] = []
+    if query_fields_list:
+        col_names = [qf["name"] for qf in query_fields_list if qf.get("name")]
+    elif x_field and x_field not in PLACEHOLDER_FIELDS:
+        col_names = [x_field]
+        if y_field and y_field not in PLACEHOLDER_FIELDS and y_field != x_field:
+            col_names.append(y_field)
+    if not col_names:
+        logger.warning("Skipping table widget '%s' — no columns resolved", title)
+        return None
+
+    table_title = title
+    if chart_type in (ChartType.MAP, ChartType.BOXPLOT, ChartType.COMBO):
+        table_title = f"{title} (converted from {chart_type.value})"
+
+    return WidgetFactory.create_table_widget(
+        dataset_name=dataset_ref,
+        column_fields=col_names,
+        title=table_title,
+        query_fields=query_fields_list or None,
+    )
+
+
 def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboard:
-    """Stage 8 Lakeview Generator: Converts Universal BI Model (UBIM) to Databricks Lakeview AST model."""
+    """Stage 8 Lakeview Generator: UBIM → Databricks Lakeview AST via WidgetFactory."""
     lakeview = LakeviewDashboard(datasets=[], pages=[])
 
-    # 1. Map Datasets
-    ds_id_map = {}
+    ds_id_map: Dict[str, str] = {}
     for ubim_ds in ubim.datasets:
         dataset_id = generate_lakeview_id()
         ds_id_map[ubim_ds.name] = dataset_id
         lakeview.datasets.append(Dataset(
             name=dataset_id,
             displayName=ubim_ds.name,
-            query=ubim_ds.sql_query
+            query=ubim_ds.sql_query,
         ))
 
-    # 2. Map Pages and Layout Items
     for ubim_page in ubim.pages:
         page = Page(name=generate_lakeview_id(), displayName=ubim_page.name, layout=[])
         projected_widgets = project_to_6column_grid(ubim_page.widgets)
@@ -69,409 +328,62 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
         for w_ubim in projected_widgets:
             dataset_ref = ds_id_map.get(
                 w_ubim.dataset_name,
-                lakeview.datasets[0].name if lakeview.datasets else "default_ds"
+                lakeview.datasets[0].name if lakeview.datasets else "default_ds",
             )
             pos = Position(
                 x=w_ubim.position.grid_x,
                 y=w_ubim.position.grid_y,
                 width=w_ubim.position.grid_w,
-                height=w_ubim.position.grid_h
+                height=w_ubim.position.grid_h,
             )
 
-            # Build Query Fields & Widget Query (P0.1 Critical Fix)
-            query_fields_list = []
-            if w_ubim.query_fields:
-                for qf in w_ubim.query_fields:
-                    query_fields_list.append({
-                        "expression": qf.expression,
-                        "name": qf.name
-                    })
-            elif w_ubim.encodings:
-                # Fallback from encodings if query_fields missing
-                for enc in w_ubim.encodings:
-                    expr = enc.expression_sql or f"`{enc.field_name}`"
-                    query_fields_list.append({
-                        "expression": expr,
-                        "name": enc.field_name
-                    })
-
-            # Do NOT invent query fields by scraping dataset SQL column order.
-            # That fabricates unrelated bindings (e.g. first two columns as pie x/y).
-            # Tables may still list encoding-derived fields above; charts must have
-            # real UBIM query_fields/encodings or they are skipped below.
-
-            is_disaggregated = w_ubim.disaggregated
-
-            widget_query = WidgetQuery(
-                name="main_query",
-                query={
-                    "datasetName": dataset_ref,
-                    "disaggregated": is_disaggregated,
-                    "fields": query_fields_list
-                }
-            )
-
-            # Build Widget Specs (P1.1 High Fix)
-            spec: Dict[str, Any] = {}
+            query_fields_list = _build_query_fields(w_ubim)
+            x_field, y_field, color_field = _resolve_xy_fields(w_ubim, query_fields_list)
             title = w_ubim.title or w_ubim.name
 
-            # Helper for channel fields — only from real UBIM encodings / query fields
-            x_enc = next((e for e in w_ubim.encodings if e.channel == EncodingChannel.X), None)
-            y_enc = next((e for e in w_ubim.encodings if e.channel == EncodingChannel.Y), None)
-            color_enc = next((e for e in w_ubim.encodings if e.channel == EncodingChannel.COLOR), None)
-
-            x_field = None
-            if x_enc:
-                x_field = x_enc.field_name
-            elif color_enc and w_ubim.chart_type == ChartType.PIE:
-                x_field = color_enc.field_name
-            elif query_fields_list and w_ubim.chart_type == ChartType.TABLE:
-                x_field = query_fields_list[0]["name"]
-
-            y_field = None
-            if y_enc:
-                y_field = y_enc.field_name
-            elif query_fields_list and w_ubim.chart_type == ChartType.TABLE:
-                other_fields = [qf["name"] for qf in query_fields_list if qf["name"] != x_field]
-                y_field = other_fields[0] if other_fields else x_field
-
-            # Chart widgets without explicit X/Y from UBIM encodings are incomplete —
-            # do not invent from SQL column order.
-            if w_ubim.chart_type in (
-                ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER, ChartType.PIE
-            ):
-                if x_field is None and query_fields_list:
-                    # Prefer first non-aggregated / categorical-looking field from encodings
-                    dim_enc = next(
-                        (e for e in w_ubim.encodings if e.channel in (EncodingChannel.COLOR, EncodingChannel.X)),
-                        None,
-                    )
-                    if dim_enc:
-                        x_field = dim_enc.field_name
-                    elif len(query_fields_list) >= 1 and y_enc:
-                        x_field = query_fields_list[0]["name"]
-                if y_field is None:
-                    measure_enc = next(
-                        (e for e in w_ubim.encodings if e.channel in (EncodingChannel.Y, EncodingChannel.SIZE)),
-                        None,
-                    )
-                    if measure_enc:
-                        y_field = measure_enc.field_name
-
-            # Defaults only for incomplete detection — never invent real column names
-            if x_field is None:
-                x_field = "x"
-            if y_field is None:
-                y_field = "y"
-
-            # ── P0.3: Skip widgets with empty fields or placeholder encodings ──
-            has_real_fields = len(query_fields_list) > 0
-            has_placeholder_x = x_field in PLACEHOLDER_FIELDS
-            has_placeholder_y = y_field in PLACEHOLDER_FIELDS
             incomplete_sql = False
             if lakeview.datasets:
                 ds_match = next((d for d in lakeview.datasets if d.name == dataset_ref), None)
                 if ds_match and ds_match.query and "__incomplete_projection__" in ds_match.query:
                     incomplete_sql = True
 
-            # If no real query fields exist, skip the widget entirely
-            if not has_real_fields or incomplete_sql:
-                import logging
-                logging.warning(
-                    f"Skipping widget '{w_ubim.title or w_ubim.name}' — "
-                    f"{'incomplete SQL projection' if incomplete_sql else 'no query fields resolved'}. "
-                    f"Original chart_type={w_ubim.chart_type.value}"
+            if incomplete_sql or not query_fields_list:
+                logger.warning(
+                    "Skipping widget '%s' — %s. chart_type=%s",
+                    title,
+                    "incomplete SQL projection" if incomplete_sql else "no query fields resolved",
+                    w_ubim.chart_type.value,
                 )
                 continue
 
-            # If all encoding field names are placeholders, skip the widget
-            if has_placeholder_x and has_placeholder_y:
-                import logging
-                logging.warning(
-                    f"Skipping widget '{w_ubim.title or w_ubim.name}' — placeholder encodings "
-                    f"(x='{x_field}', y='{y_field}'). chart_type={w_ubim.chart_type.value}"
+            try:
+                widget = _create_widget_via_factory(
+                    chart_type=w_ubim.chart_type,
+                    dataset_ref=dataset_ref,
+                    title=title,
+                    x_field=x_field,
+                    y_field=y_field,
+                    color_field=color_field,
+                    query_fields_list=query_fields_list,
                 )
+            except ValueError as exc:
+                logger.warning("Skipping widget '%s' — factory rejected spec: %s", title, exc)
                 continue
 
-            # Charts that require category+measure must have both from UBIM (not invented)
-            if w_ubim.chart_type == ChartType.PIE and (has_placeholder_x or has_placeholder_y):
-                import logging
-                logging.warning(
-                    f"Skipping pie widget '{w_ubim.title or w_ubim.name}' — missing categorical "
-                    f"or quantitative binding (x='{x_field}', y='{y_field}')"
-                )
+            if widget is None:
                 continue
 
-            # Scatter requires 2 distinct quantitative fields
-            if w_ubim.chart_type == ChartType.SCATTER and x_field == y_field:
-                import logging
-                logging.warning(
-                    f"Demoting widget '{w_ubim.title or w_ubim.name}' from scatter to bar — "
-                    f"x and y reference the same field '{x_field}'"
-                )
-                w_ubim.chart_type = ChartType.BAR
-
-            # Counter requires at least one real value field
-            if w_ubim.chart_type == ChartType.COUNTER:
-                val_field_candidate = query_fields_list[0]["name"] if query_fields_list else "value"
-                if val_field_candidate in PLACEHOLDER_FIELDS:
-                    import logging
-                    logging.warning(
-                        f"Skipping counter widget '{w_ubim.title or w_ubim.name}' — "
-                        f"no valid value field"
+            # Fail-fast factory validation (belt + suspenders)
+            if widget.spec:
+                ok, errs = validate_widget_spec(widget.spec)
+                if not ok:
+                    logger.warning(
+                        "Skipping widget '%s' — invalid renderSpec: %s", title, errs
                     )
                     continue
 
-            if w_ubim.chart_type == ChartType.BAR:
-                encodings_cfg: Dict[str, Any] = {
-                    "x": {
-                        "fieldName": x_field,
-                        "displayName": x_field.replace('_', ' ').title(),
-                        "scale": {"type": "categorical"},
-                        "axis": {"title": x_field.replace('_', ' ').title()}
-                    },
-                    "y": {
-                        "fieldName": y_field,
-                        "displayName": y_field.replace('_', ' ').title(),
-                        "scale": {"type": "quantitative"},
-                        "axis": {"title": y_field.replace('_', ' ').title()}
-                    },
-                    "label": {"show": False}
-                }
-                if color_enc:
-                    encodings_cfg["color"] = {
-                        "fieldName": color_enc.field_name,
-                        "displayName": color_enc.field_name.replace('_', ' ').title(),
-                        "scale": {"type": "categorical"}
-                    }
-                spec = {
-                    "version": 3,
-                    "widgetType": "bar",
-                    "encodings": encodings_cfg,
-                    "frame": {"title": title, "showTitle": True},
-                    "mark": {"colors": DEFAULT_COLORS}
-                }
-
-            elif w_ubim.chart_type in (ChartType.LINE, ChartType.AREA):
-                widget_kind = "line" if w_ubim.chart_type == ChartType.LINE else "area"
-                encodings_cfg = {
-                    "x": {
-                        "fieldName": x_field,
-                        "displayName": x_field.replace('_', ' ').title(),
-                        "scale": {"type": "temporal"},
-                        "axis": {"title": x_field.replace('_', ' ').title()}
-                    },
-                    "y": {
-                        "fieldName": y_field,
-                        "displayName": y_field.replace('_', ' ').title(),
-                        "scale": {"type": "quantitative"},
-                        "axis": {"title": y_field.replace('_', ' ').title()}
-                    },
-                    "label": {"show": False}
-                }
-                if color_enc:
-                    encodings_cfg["color"] = {
-                        "fieldName": color_enc.field_name,
-                        "displayName": color_enc.field_name.replace('_', ' ').title(),
-                        "scale": {"type": "categorical"}
-                    }
-                spec = {
-                    "version": 3,
-                    "widgetType": widget_kind,
-                    "encodings": encodings_cfg,
-                    "frame": {"title": title, "showTitle": True},
-                    "mark": {"colors": DEFAULT_COLORS}
-                }
-
-            elif w_ubim.chart_type == ChartType.SCATTER:
-                spec = {
-                    "version": 3,
-                    "widgetType": "scatter",
-                    "encodings": {
-                        "x": {
-                            "fieldName": x_field,
-                            "displayName": x_field.replace('_', ' ').title(),
-                            "scale": {"type": "quantitative"},
-                            "axis": {"title": x_field.replace('_', ' ').title()}
-                        },
-                        "y": {
-                            "fieldName": y_field,
-                            "displayName": y_field.replace('_', ' ').title(),
-                            "scale": {"type": "quantitative"},
-                            "axis": {"title": y_field.replace('_', ' ').title()}
-                        }
-                    },
-                    "frame": {"title": title, "showTitle": True},
-                    "mark": {"colors": DEFAULT_COLORS}
-                }
-
-            elif w_ubim.chart_type == ChartType.PIE:
-                spec = {
-                    "version": 3,
-                    "widgetType": "pie",
-                    "encodings": {
-                        "color": {
-                            "fieldName": x_field,
-                            "displayName": x_field.replace('_', ' ').title(),
-                            "scale": {"type": "categorical"}
-                        },
-                        "angle": {
-                            "fieldName": y_field,
-                            "displayName": y_field.replace('_', ' ').title(),
-                            "scale": {"type": "quantitative"}
-                        }
-                    },
-                    "frame": {"title": title, "showTitle": True},
-                    "mark": {"colors": DEFAULT_COLORS}
-                }
-
-            elif w_ubim.chart_type == ChartType.COUNTER:
-                val_field = query_fields_list[0]["name"] if query_fields_list else "value"
-                spec = {
-                    "version": 2,
-                    "widgetType": "counter",
-                    "encodings": {
-                        "value": {
-                            "fieldName": val_field,
-                            "displayName": title
-                        }
-                    },
-                    "frame": {"title": title, "showTitle": True}
-                }
-
-            elif w_ubim.chart_type in (ChartType.FILTER_MULTI, ChartType.FILTER_SINGLE, ChartType.FILTER_DATE):
-                filt_type = "filter-multi-select"
-                if w_ubim.chart_type == ChartType.FILTER_SINGLE:
-                    filt_type = "filter-single-select"
-                elif w_ubim.chart_type == ChartType.FILTER_DATE:
-                    filt_type = "filter-date-range-picker"
-                
-                f_field = query_fields_list[0]["name"] if query_fields_list else "filter_col"
-                # P0.3: Skip filter widgets with placeholder fields
-                if f_field in PLACEHOLDER_FIELDS:
-                    import logging
-                    logging.warning(
-                        f"Skipping filter widget '{w_ubim.title or w_ubim.name}' — "
-                        f"no valid filter field resolved"
-                    )
-                    continue
-                spec = {
-                    "version": 2,
-                    "widgetType": filt_type,
-                    "encodings": {
-                        "fields": [
-                            {
-                                "fieldName": f_field,
-                                "displayName": f_field.replace('_', ' ').title(),
-                                "queryName": f"dashboards/{generate_lakeview_id()}/datasets/{dataset_ref}_{f_field}"
-                            }
-                        ]
-                    },
-                    "frame": {"title": title, "showTitle": True}
-                }
-
-            elif w_ubim.chart_type == ChartType.HEATMAP:
-                spec = {
-                    "version": 3,
-                    "widgetType": "bar",
-                    "encodings": {
-                        "x": {
-                            "fieldName": x_field,
-                            "displayName": x_field.replace('_', ' ').title(),
-                            "scale": {"type": "categorical"},
-                            "axis": {"title": x_field.replace('_', ' ').title()}
-                        },
-                        "y": {
-                            "fieldName": y_field,
-                            "displayName": y_field.replace('_', ' ').title(),
-                            "scale": {"type": "quantitative"},
-                            "axis": {"title": y_field.replace('_', ' ').title()}
-                        },
-                        "label": {"show": False}
-                    },
-                    "frame": {"title": title, "showTitle": True},
-                    "mark": {"colors": DEFAULT_COLORS}
-                }
-
-            elif w_ubim.chart_type == ChartType.HISTOGRAM:
-                spec = {
-                    "version": 3,
-                    "widgetType": "bar",
-                    "encodings": {
-                        "x": {
-                            "fieldName": x_field,
-                            "displayName": x_field.replace('_', ' ').title(),
-                            "scale": {"type": "categorical"},
-                            "axis": {"title": x_field.replace('_', ' ').title()}
-                        },
-                        "y": {
-                            "fieldName": y_field,
-                            "displayName": y_field.replace('_', ' ').title(),
-                            "scale": {"type": "quantitative"},
-                            "axis": {"title": y_field.replace('_', ' ').title()}
-                        },
-                        "label": {"show": False}
-                    },
-                    "frame": {"title": title, "showTitle": True},
-                    "mark": {"colors": DEFAULT_COLORS}
-                }
-
-            elif w_ubim.chart_type in (ChartType.MAP, ChartType.BOXPLOT, ChartType.COMBO):
-                # MAP/BOXPLOT/COMBO: Lakeview doesn't support these natively — degrade to table
-                cols_list = []
-                for idx, qf in enumerate(query_fields_list):
-                    col_name = qf["name"]
-                    cols_list.append({
-                        "fieldName": col_name,
-                        "displayName": col_name.replace('_', ' ').title(),
-                        "title": col_name.replace('_', ' ').title(),
-                        "type": "string",
-                        "displayAs": "string",
-                        "alignContent": "left",
-                        "visible": True,
-                        "order": 100000 + idx
-                    })
-                spec = {
-                    "version": 1,
-                    "widgetType": "table",
-                    "encodings": {"columns": cols_list},
-                    "frame": {"title": f"{title} (converted from {w_ubim.chart_type.value})", "showTitle": True},
-                    "condensed": True,
-                    "itemsPerPage": 25
-                }
-
-            else:
-                # Table Spec (Version 1) — default fallback
-                cols_list = []
-                for idx, qf in enumerate(query_fields_list):
-                    col_name = qf["name"]
-                    cols_list.append({
-                        "fieldName": col_name,
-                        "displayName": col_name.replace('_', ' ').title(),
-                        "title": col_name.replace('_', ' ').title(),
-                        "type": "string",
-                        "displayAs": "string",
-                        "alignContent": "left",
-                        "visible": True,
-                        "order": 100000 + idx
-                    })
-                spec = {
-                    "version": 1,
-                    "widgetType": "table",
-                    "encodings": {"columns": cols_list},
-                    "frame": {"title": title, "showTitle": True},
-                    "condensed": True,
-                    "itemsPerPage": 25
-                }
-
-            widget = Widget(
-                name=generate_lakeview_id(),
-                queries=[widget_query],
-                spec=spec,
-            )
-
-            layout_item = LayoutItem(widget=widget, position=pos)
-            page.layout.append(layout_item)
+            widget.name = generate_lakeview_id()
+            page.layout.append(LayoutItem(widget=widget, position=pos))
 
         lakeview.pages.append(page)
 

@@ -3,6 +3,7 @@ import os
 import re
 from typing import Dict, List, Any
 from app.models.lakeview_model import LakeviewDashboard
+from app.services.generator.widget_factory import validate_widget_spec
 
 try:
     import jsonschema
@@ -111,6 +112,11 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
             widget = layout_item.widget
             if not widget.spec and widget.textbox_spec is None:
                 errors.append(f"Widget '{widget.name}' must have either spec or textbox_spec.")
+            elif widget.spec:
+                ok, spec_errors = validate_widget_spec(widget.spec)
+                if not ok:
+                    for se in spec_errors:
+                        errors.append(f"Widget '{widget.name}' renderSpec invalid: {se}")
 
     # Tier 6: ID Uniqueness
     all_widget_ids = []
@@ -186,7 +192,7 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
 
             # Check encoding fieldNames against query fields
             encodings = widget.spec.get("encodings", {})
-            for channel_key in ('x', 'y', 'color', 'value'):
+            for channel_key in ('x', 'y', 'color', 'value', 'angle'):
                 channel = encodings.get(channel_key)
                 if channel and isinstance(channel, dict):
                     field_name = channel.get("fieldName", "")
@@ -232,39 +238,68 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                                 f"'{channel_key}' encoding — will render blank in Databricks."
                             )
 
-                # Pie charts require 'angle' and 'color' encodings; bar/scatter/line/area require 'x' and 'y'
+                # Completeness for chart encodings (scale.type + required channels)
                 if wt == 'pie':
-                    angle_ch = encodings.get('angle') if isinstance(encodings.get('angle'), dict) else None
-                    color_ch = encodings.get('color') if isinstance(encodings.get('color'), dict) else None
-                    if not angle_ch or not angle_ch.get('fieldName'):
+                    if 'x' in encodings or 'y' in encodings:
                         errors.append(
-                            f"Widget '{widget.name}' (pie) missing required 'angle' encoding fieldName."
+                            f"Widget '{widget.name}' (pie) must not use x/y encodings — use angle/color."
                         )
-                    if not color_ch or not color_ch.get('fieldName'):
-                        errors.append(
-                            f"Widget '{widget.name}' (pie) missing required 'color' encoding fieldName."
-                        )
-                elif wt in ('bar', 'scatter', 'line', 'area'):
+                    for ch_name in ('angle', 'color'):
+                        ch = encodings.get(ch_name) if isinstance(encodings.get(ch_name), dict) else None
+                        if not ch or not ch.get('fieldName'):
+                            errors.append(
+                                f"Widget '{widget.name}' (pie) missing required '{ch_name}' encoding fieldName."
+                            )
+                        elif not (ch.get('scale') or {}).get('type'):
+                            errors.append(
+                                f"Widget '{widget.name}' (pie) '{ch_name}' encoding missing scale.type."
+                            )
+                elif wt in ('bar', 'scatter', 'line', 'area', 'histogram'):
                     x_ch = encodings.get('x') if isinstance(encodings.get('x'), dict) else None
                     y_ch = encodings.get('y') if isinstance(encodings.get('y'), dict) else None
                     if not x_ch or not x_ch.get('fieldName'):
                         errors.append(
                             f"Widget '{widget.name}' ({wt}) missing required 'x' encoding fieldName."
                         )
+                    elif not (x_ch.get('scale') or {}).get('type'):
+                        errors.append(
+                            f"Widget '{widget.name}' ({wt}) 'x' encoding missing scale.type."
+                        )
                     if not y_ch or not y_ch.get('fieldName'):
                         errors.append(
                             f"Widget '{widget.name}' ({wt}) missing required 'y' encoding fieldName."
+                        )
+                    elif not (y_ch.get('scale') or {}).get('type'):
+                        errors.append(
+                            f"Widget '{widget.name}' ({wt}) 'y' encoding missing scale.type."
                         )
                     elif (
                         x_ch and y_ch
                         and x_ch.get('fieldName')
                         and y_ch.get('fieldName')
                         and x_ch.get('fieldName') == y_ch.get('fieldName')
-                        and wt == 'scatter'
                     ):
                         errors.append(
-                            f"Widget '{widget.name}' ({wt}) binds both x and y to identical field '{x_ch.get('fieldName')}'."
+                            f"Widget '{widget.name}' ({wt}) binds both x and y to identical field "
+                            f"'{x_ch.get('fieldName')}'."
                         )
+                elif wt == 'heatmap':
+                    for ch_name in ('x', 'y', 'color'):
+                        ch = encodings.get(ch_name) if isinstance(encodings.get(ch_name), dict) else None
+                        if not ch or not ch.get('fieldName'):
+                            errors.append(
+                                f"Widget '{widget.name}' (heatmap) missing required '{ch_name}' encoding."
+                            )
+                        elif not (ch.get('scale') or {}).get('type'):
+                            errors.append(
+                                f"Widget '{widget.name}' (heatmap) '{ch_name}' encoding missing scale.type."
+                            )
+
+                # Empty encodings object is always an error for viz widgets
+                if wt in CHART_WIDGET_TYPES | {'heatmap', 'histogram', 'table'} and not encodings:
+                    errors.append(
+                        f"Widget '{widget.name}' ({wt}) has empty encodings — will fail Databricks renderer."
+                    )
 
                 # Check for empty table columns
                 if wt == "table":
@@ -273,6 +308,12 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                         warnings.append(
                             f"Widget '{widget.name}' (table) has empty columns list — will render blank."
                         )
+
+                # Orphaned widgets: no queries at all
+                if wt in CHART_WIDGET_TYPES | {'heatmap', 'histogram', 'table'} and not widget.queries:
+                    errors.append(
+                        f"Widget '{widget.name}' ({wt}) has no queries — orphaned from any dataset."
+                    )
 
     # Tier 12: SQL Aggregation & GROUP BY Validation
     AGG_FUNC_RE = re.compile(r'\b(SUM|AVG|COUNT|MIN|MAX|PERCENTILE|MEDIAN|STDDEV)\s*\(', re.IGNORECASE)
