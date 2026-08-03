@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronUp, Download, Clock } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ChevronDown, ChevronUp, Download, Clock, GitBranch, ExternalLink } from "lucide-react";
 import { getStageConfig } from "@/lib/pipeline.config";
 import { getStageDetail } from "@/lib/api";
 import StatusBadge from "@/components/ui/StatusBadge";
@@ -21,6 +22,7 @@ export default function StageDetailPanel({
   isComplete,
   onDownload,
 }: StageDetailPanelProps) {
+  const router = useRouter();
   const [detail, setDetail] = useState<StageDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
@@ -85,11 +87,33 @@ export default function StageDetailPanel({
         </div>
       </div>
 
+      {/* Always render Source Mapping CTA for Stage 4 */}
+      {stageId === "SOURCE_MAPPING" && (
+        <div className={styles.mappingCtaBox}>
+          <div className={styles.mappingCtaInfo}>
+            <GitBranch size={28} color="var(--accent-amber)" />
+            <div>
+              <h4 className={styles.mappingCtaTitle}>Data Model & Source Mapping Configurator</h4>
+              <p className={styles.mappingCtaDesc}>
+                Map Tableau datasources to Databricks Unity Catalog tables, browse metastore schemas, and auto-upload embedded files.
+              </p>
+            </div>
+          </div>
+          <button
+            className={styles.mappingBtn}
+            onClick={() => router.push(`/migrations/${jobUuid}/mapping`)}
+          >
+            <ExternalLink size={16} />
+            Open Data Model & Mapping Screen
+          </button>
+        </div>
+      )}
+
       {isWaiting ? (
         <div className={styles.waitingState}>
-          <p>This stage has not been executed yet.</p>
+          <p>This stage will run during pipeline execution.</p>
           <p className={styles.waitingHint}>
-            Data will be populated after pipeline execution.
+            Configure your target tables above, then click <strong>Run Pipeline</strong> in the action bar.
           </p>
         </div>
       ) : (

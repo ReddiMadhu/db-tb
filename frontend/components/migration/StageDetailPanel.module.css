@@ -293,3 +293,56 @@
   font-size: var(--font-size-xs);
   color: var(--text-tertiary);
 }
+
+/* ── Mapping CTA ── */
+.mappingCtaBox {
+  margin-top: var(--space-6);
+  padding: var(--space-6);
+  background: var(--bg-surface);
+  border: 1px solid rgba(245, 176, 65, 0.3);
+  border-radius: var(--radius-xl);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.mappingCtaInfo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.mappingCtaTitle {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.mappingCtaDesc {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.mappingBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  background: var(--accent-amber);
+  color: #071827;
+  border: none;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--duration-fast);
+  box-shadow: 0 2px 8px rgba(245, 176, 65, 0.3);
+}
+
+.mappingBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(245, 176, 65, 0.4);
+}

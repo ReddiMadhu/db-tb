@@ -65,7 +65,7 @@ export async function uploadWorkbook(file: File): Promise<UploadResponse> {
 
 // ── Execute Pipeline ──
 export async function executePipeline(jobUuid: string): Promise<ExecuteResponse> {
-  return apiFetch<ExecuteResponse>(`/migrations/${jobUuid}/execute`, {
+  return apiFetch<ExecuteResponse>(`/migrations/${jobUuid}/execute?sync=false`, {
     method: "POST",
   });
 }

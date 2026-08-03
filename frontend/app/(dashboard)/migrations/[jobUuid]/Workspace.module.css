@@ -65,6 +65,26 @@
   white-space: nowrap;
 }
 
+.mappingBarBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-surface);
+  color: var(--accent-amber);
+  border: 1px solid rgba(245, 176, 65, 0.4);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.mappingBarBtn:hover {
+  background: rgba(245, 176, 65, 0.12);
+  border-color: var(--accent-amber);
+}
+
 .runBtn {
   display: inline-flex;
   align-items: center;

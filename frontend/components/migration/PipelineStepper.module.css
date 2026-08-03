@@ -14,8 +14,8 @@
   align-items: center;
   position: relative;
   flex: 1;
-  min-width: 80px;
-  max-width: 140px;
+  min-width: 100px;
+  max-width: 150px;
 }
 
 /* ── Node ── */
@@ -112,15 +112,15 @@
 /* ── Label ── */
 .label {
   margin-top: var(--space-2);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: var(--font-weight-medium);
   color: var(--text-tertiary);
   text-align: center;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.25;
   transition: color var(--duration-fast);
-  max-width: 90px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 130px;
+  word-break: break-word;
 }
 
 .labelSelected {

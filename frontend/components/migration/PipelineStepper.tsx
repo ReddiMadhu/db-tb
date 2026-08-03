@@ -80,7 +80,7 @@ export default function PipelineStepper({
 
             {/* Label */}
             <span className={`${styles.label} ${isSelected ? styles.labelSelected : ""}`}>
-              {config.shortTitle}
+              {config.title}
             </span>
 
             {/* Connector line */}

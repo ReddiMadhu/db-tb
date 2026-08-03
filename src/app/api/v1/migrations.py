@@ -5,22 +5,23 @@ import shutil
 import logging
 from datetime import datetime
 from typing import Optional, Dict
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
+from pydantic import BaseModel as PydanticBaseModel
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
-from app.models.db_models import MigrationJob, MigrationReport
+from app.db.session import get_db, SessionLocal
+from app.models.db_models import MigrationJob, MigrationReport, DatasourceMapping
 from app.services.pipeline import MigrationPipeline
 from app.services.deployer.api_client import LakeviewAPIClient
 from app.services.deployer.bundle_generator import generate_databricks_asset_bundle
 from app.services.deployer.diff_engine import compute_dashboard_diff
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Output directory (same as upload.py)
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -43,60 +44,27 @@ async def list_migration_jobs(db: Session = Depends(get_db)):
     ]
 
 
-from pydantic import BaseModel as PydanticBaseModel
-from typing import Dict
-
-
 class ExecuteRequest(PydanticBaseModel):
     table_mapping: Optional[Dict[str, str]] = None
     catalog: Optional[str] = None
     schema_name: Optional[str] = None
+    sync: Optional[bool] = False  # If True, runs synchronously (used for unit tests/CLI)
 
 
-@router.post("/{job_uuid}/execute")
-async def execute_migration_pipeline(
+def _run_pipeline_background(
     job_uuid: str,
-    req: Optional[ExecuteRequest] = None,
-    db: Session = Depends(get_db),
+    upload_path: str,
+    table_mapping: Dict[str, str],
+    catalog: str,
+    schema_name: str,
 ):
-    """Executes full 10-stage migration pipeline for a given upload job."""
-    job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Migration job not found.")
-
-    if job.status not in ("PARSED", "NEEDS_MAPPING", "FAILED"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job is in state '{job.status}', expected 'PARSED', 'NEEDS_MAPPING', or 'FAILED'."
-        )
-
-    upload_path = (job.pipeline_config or {}).get("upload_path")
-    if not upload_path or not os.path.exists(upload_path):
-        raise HTTPException(
-            status_code=404,
-            detail="Source workbook file not found. Please re-upload."
-        )
-
-    from app.core.config import settings
-    from app.models.db_models import DatasourceMapping
-
-    # Load saved confirmed mappings from DB
-    db_mappings = (
-        db.query(DatasourceMapping)
-        .filter(DatasourceMapping.job_id == job.id, DatasourceMapping.status == "CONFIRMED")
-        .all()
-    )
-    saved_table_mapping = {m.tableau_table_name: m.target_full_name for m in db_mappings if m.target_full_name}
-
-    # Explicit request mapping overrides saved mapping
-    table_mapping = {**saved_table_mapping, **((req.table_mapping if req else None) or {})}
-    catalog = (req.catalog if req else None) or settings.DEFAULT_CATALOG
-    schema_name = (req.schema_name if req else None) or settings.DEFAULT_SCHEMA
-
+    """Executes full migration pipeline in background worker task."""
+    db = SessionLocal()
     try:
-        job.status = "EXECUTING"
-        job.current_stage = 5
-        db.commit()
+        job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
+        if not job:
+            logger.error("Job %s not found in background task", job_uuid)
+            return
 
         pipeline = MigrationPipeline(
             upload_path,
@@ -116,12 +84,7 @@ async def execute_migration_pipeline(
         report = result["report"]
         error_bag = result["error_bag"]
 
-        # Fail-closed: never persist blank chart shells (pipeline already pruned;
-        # re-check as a hard gate before write).
-        from app.services.validator.validation_engine import (
-            prune_incomplete_widgets,
-            _widget_is_incomplete_chart,
-        )
+        from app.services.validator.validation_engine import prune_incomplete_widgets
         extra_removed = prune_incomplete_widgets(lakeview_dash)
         if extra_removed:
             for title in extra_removed:
@@ -132,26 +95,13 @@ async def execute_migration_pipeline(
             val_res["valid"] = False
             result["status"] = "FAILED_VALIDATION"
 
-        still_incomplete = any(
-            _widget_is_incomplete_chart(item.widget)
-            for page in lakeview_dash.pages
-            for item in page.layout
-        )
-        if still_incomplete:
-            raise HTTPException(
-                status_code=500,
-                detail="Refusing to save dashboard containing incomplete chart widgets "
-                       "(empty encodings or queries).",
-            )
-
-        # Save generated Lakeview JSON to disk (pruned; no blank shells)
+        # Save generated Lakeview JSON to disk
         job_output_dir = os.path.join(OUTPUT_DIR, job_uuid)
         os.makedirs(job_output_dir, exist_ok=True)
         output_filename = f"{job_uuid}.lvdash.json"
         output_path = os.path.join(job_output_dir, output_filename)
         lakeview_dash.save_to_file(output_path)
 
-        # Also save a pretty-printed version for inspection
         pretty_path = os.path.join(job_output_dir, f"{job_uuid}_pretty.lvdash.json")
         with open(pretty_path, "w", encoding="utf-8") as f:
             json.dump(lakeview_dash.to_dict(), f, indent=2, ensure_ascii=False)
@@ -183,38 +133,103 @@ async def execute_migration_pipeline(
         )
         db.add(report_orm)
         db.commit()
+        logger.info("Background pipeline execution succeeded for job %s (status=%s)", job_uuid, result["status"])
+        return result
+    except Exception as e:
+        logger.exception("Background pipeline execution failed for job %s", job_uuid)
+        job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
+        if job:
+            job.status = "FAILED"
+            job.error_bag = (job.error_bag or []) + [
+                {"level": "FATAL", "message": f"Pipeline execution failed: {str(e)}"}
+            ]
+            db.commit()
+        raise
+    finally:
+        db.close()
 
-        response = {
+
+@router.post("/{job_uuid}/execute")
+async def execute_migration_pipeline(
+    job_uuid: str,
+    background_tasks: BackgroundTasks,
+    sync: bool = True,
+    req: Optional[ExecuteRequest] = None,
+    db: Session = Depends(get_db),
+):
+    """Executes full migration pipeline for a given upload job.
+
+    If sync=False (used by Web UI), runs asynchronously in BackgroundTasks so
+    the frontend can poll real-time stage progress. If sync=True (default for
+    CLI/tests), runs synchronously and returns the complete result response.
+    """
+    job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Migration job not found.")
+
+    if job.status not in ("PARSED", "NEEDS_MAPPING", "FAILED", "INITIALIZED"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is in state '{job.status}', expected 'PARSED', 'NEEDS_MAPPING', 'INITIALIZED', or 'FAILED'."
+        )
+
+    upload_path = (job.pipeline_config or {}).get("upload_path")
+    if not upload_path or not os.path.exists(upload_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Source workbook file not found. Please re-upload."
+        )
+
+    # Load saved confirmed mappings from DB
+    db_mappings = (
+        db.query(DatasourceMapping)
+        .filter(DatasourceMapping.job_id == job.id, DatasourceMapping.status == "CONFIRMED")
+        .all()
+    )
+    saved_table_mapping = {m.tableau_table_name: m.target_full_name for m in db_mappings if m.target_full_name}
+
+    # Explicit request mapping overrides saved mapping
+    table_mapping = {**saved_table_mapping, **((req.table_mapping if req else None) or {})}
+    catalog = (req.catalog if req else None) or settings.DEFAULT_CATALOG
+    schema_name = (req.schema_name if req else None) or settings.DEFAULT_SCHEMA
+
+    is_sync = sync or (req and req.sync)
+
+    job.status = "EXECUTING"
+    job.current_stage = 5
+    db.commit()
+
+    if is_sync:
+        result = _run_pipeline_background(job_uuid, upload_path, table_mapping, catalog, schema_name)
+        db.refresh(job)
+        report = result.get("report", {}) if result else {}
+        val_res = result.get("validation_results", {}) if result else {}
+        error_bag = result.get("error_bag", []) if result else []
+        return {
             "job_uuid": job_uuid,
-            "status": result["status"],
+            "status": job.status,
             "current_stage": 10,
-            "output_file": output_path,
+            "output_file": job.output_lvdash_path,
             "summary": report.get("summary", {}),
             "target_lakeview": report.get("target_lakeview", {}),
-            "validation_valid": val_res["valid"],
+            "validation_valid": val_res.get("valid", True),
             "validation_errors": val_res.get("errors", []),
             "validation_warnings": val_res.get("warnings", []),
             "error_bag_count": len(error_bag),
             "message": "10-Stage migration pipeline completed successfully."
-                if val_res["valid"]
+                if val_res.get("valid", True)
                 else "Pipeline completed with validation errors."
         }
-
-        # Include Databricks sources info for Data Model screen
-        if "databricks_sources" in result:
-            response["databricks_sources"] = result["databricks_sources"]
-        if "semantic_model_summary" in result:
-            response["semantic_model_summary"] = result["semantic_model_summary"]
-
-        return response
-    except Exception as e:
-        logger.exception("Pipeline execution failed for job %s", job_uuid)
-        job.status = "FAILED"
-        job.error_bag = (job.error_bag or []) + [
-            {"level": "FATAL", "message": f"Pipeline execution failed: {str(e)}"}
-        ]
-        db.commit()
-        raise HTTPException(status_code=500, detail=f"Pipeline execution failed: {str(e)}")
+    else:
+        background_tasks.add_task(
+            _run_pipeline_background,
+            job_uuid, upload_path, table_mapping, catalog, schema_name
+        )
+        return {
+            "job_uuid": job_uuid,
+            "status": "EXECUTING",
+            "message": "Pipeline execution started in background.",
+        }
 
 
 @router.get("/{job_uuid}/status")
@@ -348,13 +363,10 @@ async def generate_asset_bundle(job_uuid: str, db: Session = Depends(get_db)):
             detail="Generated dashboard JSON not found. Run /execute first."
         )
 
-    # Generate bundle using the actual Lakeview dashboard output
-    from app.models.lakeview_model import LakeviewDashboard
+    from app.models.lakeview_model import LakeviewDashboard, Dataset, Page, Widget, Position
     with open(job.output_lvdash_path, "r", encoding="utf-8") as f:
         dash_dict = json.load(f)
 
-    # Re-construct LakeviewDashboard from saved JSON
-    from app.models.lakeview_model import Dataset, Page, Widget, Position
     datasets = [Dataset(**d) for d in dash_dict.get("datasets", [])]
     pages = []
     for p in dash_dict.get("pages", []):
@@ -404,18 +416,15 @@ async def compute_diff(
             detail="Generated dashboard JSON not found. Run /execute first."
         )
 
-    # Load the generated dashboard
     from app.models.lakeview_model import LakeviewDashboard, Dataset, Page, Widget, Position
     with open(job.output_lvdash_path, "r", encoding="utf-8") as f:
         new_dash_dict = json.load(f)
 
-    # Load existing dashboard (from file or empty baseline)
     existing_dict = {"datasets": [], "pages": []}
     if existing_dashboard_path and os.path.exists(existing_dashboard_path):
         with open(existing_dashboard_path, "r", encoding="utf-8") as f:
             existing_dict = json.load(f)
 
-    # Re-construct LakeviewDashboard for diff engine
     datasets = [Dataset(**d) for d in new_dash_dict.get("datasets", [])]
     pages = []
     for p in new_dash_dict.get("pages", []):

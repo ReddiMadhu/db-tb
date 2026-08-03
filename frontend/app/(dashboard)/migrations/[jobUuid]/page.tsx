@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Play, Rocket, ArrowLeft, RefreshCw } from "lucide-react";
+import { Play, Rocket, ArrowLeft, RefreshCw, GitBranch } from "lucide-react";
 import PipelineStepper from "@/components/migration/PipelineStepper";
 import StageDetailPanel from "@/components/migration/StageDetailPanel";
 import MigrationProgress from "@/components/migration/MigrationProgress";
@@ -48,6 +48,9 @@ export default function MigrationWorkspacePage() {
       const failedStage = stagesRes.stages.find((s) => s.status === "FAILED");
       if (runningStage) setSelectedStageId(runningStage.stage_id);
       else if (failedStage) setSelectedStageId(failedStage.stage_id);
+      else if (["NEEDS_MAPPING", "NEEDS_REVIEW", "PARSED"].includes(statusRes.status)) {
+        setSelectedStageId("SOURCE_MAPPING");
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load migration");
     } finally {
@@ -180,6 +183,14 @@ export default function MigrationWorkspacePage() {
           </div>
         </div>
         <div className={styles.actionBarRight}>
+          <button
+            className={styles.mappingBarBtn}
+            onClick={() => router.push(`/migrations/${jobUuid}/mapping`)}
+            title="Configure Data Model & Unity Catalog Mappings"
+          >
+            <GitBranch size={16} />
+            Data Model & Mapping
+          </button>
           {canExecute && (
             <button
               className={styles.runBtn}
