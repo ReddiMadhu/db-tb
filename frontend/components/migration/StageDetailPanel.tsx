@@ -120,8 +120,8 @@ export default function StageDetailPanel({
         </div>
       </div>
 
-      {/* ── Waiting State ── */}
-      {isWaiting && (
+      {/* ── Waiting State (for non-mapping stages) ── */}
+      {isWaiting && stage.stage_id !== "SOURCE_MAPPING" && (
         <div className={styles.waitingState}>
           This stage is waiting to run.
           <div className={styles.waitingHint}>
@@ -130,7 +130,7 @@ export default function StageDetailPanel({
         </div>
       )}
 
-      {!isWaiting && (
+      {( !isWaiting || stage.stage_id === "SOURCE_MAPPING" ) && (
         <>
           {/* ── Summary Row ── */}
           {(stage.input_summary || stage.output_summary) && (

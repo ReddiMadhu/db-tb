@@ -158,13 +158,57 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
     }
   };
 
+  const handleDirectExecute = async () => {
+    setSaving(true);
+    try {
+      if (totalCount > 0) {
+        const list = Object.values(mappings);
+        await saveMappings(jobUuid, list);
+      }
+      await executePipeline(jobUuid);
+      success("Pipeline execution started.", "Executing");
+      onExecute?.();
+    } catch (err: any) {
+      toastError(err.message || "Failed to execute pipeline.", "Error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const totalCount = Object.keys(mappings).length;
   const mappedCount = Object.values(mappings).filter((m) => m.target_full_name).length;
-  const progressPct = totalCount > 0 ? (mappedCount / totalCount) * 100 : 0;
-  const isComplete = totalCount > 0 && mappedCount === totalCount;
+  const progressPct = totalCount > 0 ? (mappedCount / totalCount) * 100 : 100;
+  const isComplete = totalCount === 0 || (totalCount > 0 && mappedCount === totalCount);
 
   if (loading) {
     return <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-tertiary)", fontSize: "0.875rem" }}>Loading datasources...</div>;
+  }
+
+  if (datasources.length === 0) {
+    return (
+      <div className={styles.container}>
+        <div className={styles.header}>
+          <span className={styles.headerTitle}>Datasource → Unity Catalog Mapping</span>
+          <button className={styles.actionBtnPrimary} onClick={handleDirectExecute} disabled={saving}>
+            {saving ? <RefreshCw size={13} className="spin" /> : <ArrowRight size={13} />}
+            {saving ? "Starting..." : "Run Pipeline →"}
+          </button>
+        </div>
+        <div style={{ padding: "2rem", textAlign: "center", background: "var(--bg-surface)", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-subtle)", marginTop: "1rem" }}>
+          <CheckCircle2 size={32} color="var(--accent-green)" style={{ margin: "0 auto 0.75rem", display: "block" }} />
+          <h4 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: "0.25rem" }}>
+            No Table Mappings Required
+          </h4>
+          <p style={{ fontSize: "0.8125rem", color: "var(--text-secondary)", maxWidth: "480px", margin: "0 auto 1.25rem" }}>
+            All datasources in this workbook connect directly to Databricks Unity Catalog or do not require manual table mapping. You can proceed directly to pipeline execution.
+          </p>
+          <button className={styles.actionBtnPrimary} onClick={handleDirectExecute} disabled={saving}>
+            {saving ? <RefreshCw size={13} className="spin" /> : <ArrowRight size={13} />}
+            {saving ? "Starting..." : "Run Pipeline →"}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
