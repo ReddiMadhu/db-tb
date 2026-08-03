@@ -31,6 +31,7 @@ export interface StageDetail {
   warnings: string[];
   errors: string[];
   generated_code: string | null;
+  artifacts: Record<string, unknown>;
 }
 
 // ── Pipeline Progress (from GET /progress) ──

@@ -108,6 +108,17 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                     "model_type": workbook_meta.model_type,
                     "embedded_files_count": len(embedded_files),
                 },
+                artifacts={
+                    "workbook_name": file.filename,
+                    "workbook_size": f"{os.path.getsize(saved_file_path):,} bytes",
+                    "sheets": [w.name for w in workbook_meta.worksheets],
+                    "dashboards": [d.name for d in workbook_meta.dashboards],
+                    "datasources": [ds.name for ds in workbook_meta.datasources],
+                    "extracts": [ef.get("filename", ef.get("archive_path", "")) if isinstance(ef, dict) else str(ef) for ef in embedded_files],
+                    "embedded_files": [ef if isinstance(ef, dict) else {"filename": str(ef)} for ef in embedded_files],
+                    "tableau_version": workbook_meta.version or "Unknown",
+                    "model_type": workbook_meta.model_type,
+                },
                 logs=[
                     f"[INFO] Received {file.filename}",
                     f"[INFO] File saved to {saved_file_path}",
@@ -139,6 +150,54 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                     "tableau_version": workbook_meta.version or "Unknown",
                     "model_type": workbook_meta.model_type,
                     "dependency_cycles": cycles,
+                },
+                artifacts={
+                    "worksheets": [w.name for w in workbook_meta.worksheets],
+                    "dashboards": [{"name": d.name, "worksheets": d.worksheets, "zone_count": len(d.zones)} for d in workbook_meta.dashboards],
+                    "datasources": [
+                        {
+                            "name": ds.name,
+                            "caption": ds.caption or ds.name,
+                            "connection_type": ds.connection_type or "unknown",
+                            "tables": [t.name for t in ds.tables],
+                            "columns": [c.internal_name for c in ds.columns[:100]],
+                            "calculated_field_count": len(ds.calculated_fields),
+                            "is_databricks": ds.databricks_connection is not None,
+                        }
+                        for ds in workbook_meta.datasources
+                    ],
+                    "calculated_fields": [
+                        {"name": cf.name, "caption": cf.caption or cf.name, "formula": cf.formula, "type": cf.formula_type, "datasource": ds.name}
+                        for ds in workbook_meta.datasources
+                        for cf in ds.calculated_fields
+                    ][:200],
+                    "parameters": [
+                        {"name": p.name, "datatype": p.datatype, "current_value": p.current_value, "domain_type": p.domain_type}
+                        for p in workbook_meta.parameters
+                    ],
+                    "filters": [
+                        {"worksheet": w.name, "field": f.field_name, "type": f.filter_type}
+                        for w in workbook_meta.worksheets
+                        for f in w.filters
+                    ][:100],
+                    "groups": [{"name": g.name, "field": g.field} for g in workbook_meta.groups],
+                    "sets": [{"name": s.name, "field": s.field} for s in workbook_meta.sets],
+                    "hierarchies": [{"name": h.name, "levels": h.levels} for h in workbook_meta.hierarchies],
+                    "joins": [
+                        {"join_type": j.join_type, "left_table": j.left_table, "left_column": j.left_column, "right_table": j.right_table, "right_column": j.right_column, "datasource": ds.name}
+                        for ds in workbook_meta.datasources for j in ds.joins
+                    ],
+                    "relationships": [
+                        {"table1": r.table1, "table2": r.table2, "table1_column": r.table1_column, "table2_column": r.table2_column, "type": r.relationship_type, "datasource": ds.name}
+                        for ds in workbook_meta.datasources for r in ds.relationships
+                    ],
+                    "databricks_discovery": {
+                        "detected": workbook_meta.has_databricks_connections,
+                        "connections": [
+                            {"datasource_name": c.datasource_name, "host": c.host, "catalog": c.catalog, "schema": c.schema_name, "warehouse_id": c.warehouse_id, "connection_class": c.connection_class}
+                            for c in workbook_meta.databricks_connections
+                        ],
+                    } if workbook_meta.has_databricks_connections else None,
                 },
                 logs=[
                     f"[INFO] Parsing XML DOM tree...",
@@ -173,6 +232,25 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                     "parameters": len(workbook_meta.parameters),
                     "orphan_fields": len(orphans),
                     "complexity_analysis": "HIGH" if lod_count > 5 else "MEDIUM" if calc_count > 10 else "LOW",
+                },
+                artifacts={
+                    "calculated_fields": [
+                        {
+                            "name": cf.name,
+                            "caption": cf.caption or cf.name,
+                            "formula": cf.formula,
+                            "type": cf.formula_type,
+                            "datasource": ds.name,
+                        }
+                        for ds in workbook_meta.datasources
+                        for cf in ds.calculated_fields
+                    ][:200],
+                    "lod_expressions": [
+                        {"name": cf.name, "formula": cf.formula, "datasource": ds.name}
+                        for ds in workbook_meta.datasources
+                        for cf in ds.calculated_fields
+                        if cf.formula and '{' in cf.formula and 'FIXED' in cf.formula.upper()
+                    ],
                 },
                 logs=[
                     f"[INFO] Indexing {calc_count} calculated fields across {len(workbook_meta.datasources)} datasources",

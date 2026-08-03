@@ -116,6 +116,7 @@ class MigrationPipeline:
         warnings: list = None,
         errors: list = None,
         generated_code: str = None,
+        artifacts: Dict = None,
     ):
         """Update a stage result row in the database."""
         if not self.job_uuid:
@@ -150,6 +151,8 @@ class MigrationPipeline:
                     row.errors = errors
                 if generated_code is not None:
                     row.generated_code = generated_code
+                if artifacts is not None:
+                    row.artifacts = artifacts
                 db.commit()
         except Exception as e:
             logger.warning("Failed to persist stage %s: %s", stage_id, e)
@@ -193,6 +196,7 @@ class MigrationPipeline:
                 warnings=stage_meta.get("warnings"),
                 errors=stage_meta.get("errors"),
                 generated_code=stage_meta.get("generated_code"),
+                artifacts=stage_meta.get("artifacts"),
             )
             return stage_meta.get("data")
 
@@ -246,6 +250,139 @@ class MigrationPipeline:
                 if cf.formula and '{' in cf.formula and 'FIXED' in cf.formula.upper()
             )
 
+            # Build actual artifact data
+            worksheets = [w.name for w in workbook_meta.worksheets]
+            dashboards_list = []
+            for d in workbook_meta.dashboards:
+                dashboards_list.append({
+                    "name": d.name,
+                    "worksheets": d.worksheets,
+                    "zone_count": len(d.zones),
+                })
+            datasources_list = []
+            for ds in workbook_meta.datasources:
+                datasources_list.append({
+                    "name": ds.name,
+                    "caption": ds.caption or ds.name,
+                    "connection_type": ds.connection_type or "unknown",
+                    "table_count": len(ds.tables),
+                    "tables": [t.name for t in ds.tables],
+                    "column_count": len(ds.columns),
+                    "columns": [c.internal_name for c in ds.columns[:100]],
+                    "calculated_field_count": len(ds.calculated_fields),
+                    "is_databricks": ds.databricks_connection is not None,
+                })
+            calc_fields_list = []
+            for ds in workbook_meta.datasources:
+                for cf in ds.calculated_fields:
+                    calc_fields_list.append({
+                        "name": cf.name,
+                        "caption": cf.caption or cf.name,
+                        "formula": cf.formula,
+                        "type": cf.formula_type,
+                        "datasource": ds.name,
+                    })
+            parameters_list = [
+                {"name": p.name, "datatype": p.datatype, "current_value": p.current_value, "domain_type": p.domain_type}
+                for p in workbook_meta.parameters
+            ]
+            filters_list = []
+            for w in workbook_meta.worksheets:
+                for f in w.filters:
+                    filters_list.append({"worksheet": w.name, "field": f.field_name, "type": f.filter_type, "scope": f.scope})
+            groups_list = [{"name": g.name, "field": g.field, "members": g.members[:20]} for g in workbook_meta.groups]
+            sets_list = [{"name": s.name, "field": s.field, "condition": s.condition} for s in workbook_meta.sets]
+            hierarchies_list = [{"name": h.name, "levels": h.levels} for h in workbook_meta.hierarchies]
+
+            # Joins / Relationships from datasources
+            joins_list = []
+            relationships_list = []
+            for ds in workbook_meta.datasources:
+                for j in ds.joins:
+                    joins_list.append({
+                        "join_type": j.join_type,
+                        "left_table": j.left_table,
+                        "left_column": j.left_column,
+                        "right_table": j.right_table,
+                        "right_column": j.right_column,
+                        "datasource": ds.name,
+                    })
+                for r in ds.relationships:
+                    relationships_list.append({
+                        "table1": r.table1,
+                        "table2": r.table2,
+                        "table1_column": r.table1_column,
+                        "table2_column": r.table2_column,
+                        "type": r.relationship_type,
+                        "datasource": ds.name,
+                    })
+
+            # Databricks discovery results
+            databricks_discovery = None
+            if self.semantic_model is not None:
+                sm = self.semantic_model
+                summary = sm.summary()
+                discovered_tables = []
+                discovered_columns = []
+                discovered_relationships = []
+                for src in sm.sources:
+                    for tbl in src.tables:
+                        discovered_tables.append({
+                            "full_name": tbl.full_name,
+                            "table_type": tbl.table_type.value if hasattr(tbl.table_type, 'value') else str(tbl.table_type),
+                            "column_count": len(tbl.columns),
+                        })
+                        for col in tbl.columns[:50]:
+                            discovered_columns.append({
+                                "table": tbl.full_name,
+                                "name": col.name,
+                                "type": col.data_type.value if hasattr(col.data_type, 'value') else str(col.data_type),
+                            })
+                    for rel in getattr(src, 'relationships', []):
+                        discovered_relationships.append({
+                            "from_table": getattr(rel, 'from_table', ''),
+                            "from_column": getattr(rel, 'from_column', ''),
+                            "to_table": getattr(rel, 'to_table', ''),
+                            "to_column": getattr(rel, 'to_column', ''),
+                        })
+
+                databricks_discovery = {
+                    "detected": True,
+                    "catalog_count": summary.get('catalog_count', 0),
+                    "schema_count": summary.get('schema_count', 0),
+                    "table_count": summary.get('table_count', 0),
+                    "column_count": summary.get('column_count', 0),
+                    "relationship_count": summary.get('relationship_count', 0),
+                    "tables": discovered_tables[:200],
+                    "columns": discovered_columns[:500],
+                    "relationships": discovered_relationships[:100],
+                    "sources": [
+                        {
+                            "datasource_name": src.datasource_name,
+                            "status": src.discovery_status,
+                            "table_count": src.discovered_table_count,
+                            "column_count": src.discovered_column_count,
+                        }
+                        for src in sm.sources
+                    ],
+                }
+            elif workbook_meta.has_databricks_connections:
+                databricks_discovery = {
+                    "detected": True,
+                    "connections": [
+                        {
+                            "datasource_name": c.datasource_name,
+                            "host": c.host,
+                            "catalog": c.catalog,
+                            "schema": c.schema_name,
+                            "warehouse_id": c.warehouse_id,
+                            "connection_class": c.connection_class,
+                        }
+                        for c in workbook_meta.databricks_connections
+                    ],
+                    "credentials_missing": not (self.databricks_host and self.databricks_token),
+                }
+
             return {
                 "status": "COMPLETED",
                 "output_summary": f"Parsed {ws_count} worksheets, {db_count} dashboards, {ds_count} datasources, {calc_count} calculated fields",
@@ -261,6 +398,20 @@ class MigrationPipeline:
                     "tableau_version": workbook_meta.version or "Unknown",
                     "model_type": workbook_meta.model_type,
                     "dependency_cycles": cycles,
+                },
+                "artifacts": {
+                    "worksheets": worksheets,
+                    "dashboards": dashboards_list,
+                    "datasources": datasources_list,
+                    "calculated_fields": calc_fields_list[:200],
+                    "parameters": parameters_list,
+                    "filters": filters_list[:100],
+                    "groups": groups_list,
+                    "sets": sets_list,
+                    "hierarchies": hierarchies_list,
+                    "joins": joins_list,
+                    "relationships": relationships_list,
+                    "databricks_discovery": databricks_discovery,
                 },
                 "logs": [
                     f"[INFO] Unpacking {filename}",
@@ -307,6 +458,54 @@ class MigrationPipeline:
             window_fields = [f for f in registry if f.get('expression_type') == 'TABLE_CALC']
             nested = [f for f in registry if f.get('has_dependencies')]
 
+            # Build actual artifact data
+            calc_fields_detail = [
+                {
+                    "name": f.get('internal_name', ''),
+                    "caption": f.get('caption', ''),
+                    "formula": f.get('original_formula', f.get('formula', '')),
+                    "compiled_sql": f.get('compiled_sql', ''),
+                    "type": f.get('expression_type', 'STANDARD'),
+                    "dependencies": f.get('dependencies', [])[:10],
+                    "referenced_fields": f.get('referenced_fields', [])[:10],
+                    "datasource": f.get('datasource', ''),
+                }
+                for f in calc_fields[:200]
+            ]
+            lod_detail = [
+                {
+                    "name": f.get('internal_name', ''),
+                    "formula": f.get('original_formula', f.get('formula', '')),
+                    "compiled_sql": f.get('compiled_sql', ''),
+                    "datasource": f.get('datasource', ''),
+                }
+                for f in lod_fields[:100]
+            ]
+            window_detail = [
+                {
+                    "name": f.get('internal_name', ''),
+                    "formula": f.get('original_formula', f.get('formula', '')),
+                    "compiled_sql": f.get('compiled_sql', ''),
+                    "datasource": f.get('datasource', ''),
+                }
+                for f in window_fields[:100]
+            ]
+            excluded_detail = [
+                {
+                    "name": f.get('internal_name', ''),
+                    "reason": f.get('exclude_reason', ''),
+                }
+                for f in excluded[:50]
+            ]
+            mismatch_detail = [
+                {
+                    "field": mm.get('field', ''),
+                    "physical_name": mm.get('physical_name', ''),
+                    "expected_type": mm.get('expected_type', ''),
+                }
+                for mm in mismatches[:50]
+            ]
+
             return {
                 "status": "COMPLETED",
                 "output_summary": f"Analyzed {total_fields} fields: {len(calc_fields)} calculated, {len(lod_fields)} LOD, {len(window_fields)} window functions",
@@ -321,6 +520,13 @@ class MigrationPipeline:
                     "schema_mismatches": len(mismatches),
                     "complexity_analysis": "HIGH" if len(lod_fields) > 5 else "MEDIUM" if len(calc_fields) > 10 else "LOW",
                     "migration_confidence": max(0, 100 - len(mismatches) * 5 - len(excluded) * 2),
+                },
+                "artifacts": {
+                    "calculated_fields": calc_fields_detail,
+                    "lod_expressions": lod_detail,
+                    "window_functions": window_detail,
+                    "excluded_fields": excluded_detail,
+                    "schema_mismatches": mismatch_detail,
                 },
                 "logs": [
                     f"[INFO] Analyzing {total_fields} fields from {len(workbook_meta.datasources)} datasources",
@@ -365,6 +571,60 @@ class MigrationPipeline:
             mapped_count = len(self.table_mapping)
             total_tables = sum(len(ds.tables) for ds in workbook_meta.datasources)
 
+            # Build actual artifact data
+            table_mappings = [
+                {"tableau_table": k, "databricks_table": v}
+                for k, v in self.table_mapping.items()
+            ]
+            unresolved_detail = [
+                {
+                    "table": t.get('table', ''),
+                    "datasource": t.get('datasource', ''),
+                    "connection_type": t.get('connection_type', ''),
+                    "suggested_name": t.get('suggested_name', ''),
+                }
+                for t in (unresolved_tables or [])
+            ]
+            # Column mappings from resolved
+            column_mappings = []
+            if isinstance(resolved, dict):
+                for tbl_name, tbl_ref in resolved.items():
+                    column_mappings.append({"tableau_table": tbl_name, "resolved_to": str(tbl_ref)})
+
+            # All joins/relationships from datasources
+            all_joins = []
+            for ds in workbook_meta.datasources:
+                for j in ds.joins:
+                    all_joins.append({
+                        "join_type": j.join_type,
+                        "left_table": j.left_table,
+                        "left_column": j.left_column,
+                        "right_table": j.right_table,
+                        "right_column": j.right_column,
+                        "datasource": ds.name,
+                    })
+                for r in ds.relationships:
+                    all_joins.append({
+                        "join_type": r.relationship_type,
+                        "left_table": r.table1,
+                        "left_column": r.table1_column,
+                        "right_table": r.table2,
+                        "right_column": r.table2_column,
+                        "datasource": ds.name,
+                    })
+
+            # Databricks connection info
+            databricks_connections = []
+            for conn in workbook_meta.databricks_connections:
+                databricks_connections.append({
+                    "datasource_name": conn.datasource_name,
+                    "host": conn.host,
+                    "catalog": conn.catalog,
+                    "schema": conn.schema_name,
+                    "warehouse_id": conn.warehouse_id,
+                    "connection_class": conn.connection_class,
+                })
+
             return {
                 "status": "WARNING" if unresolved_tables else "COMPLETED",
                 "output_summary": f"Mapped {mapped_count}/{total_tables} tables" + (f", {len(unresolved_tables)} unresolved" if unresolved_tables else ""),
@@ -377,6 +637,14 @@ class MigrationPipeline:
                     "default_catalog": self.default_catalog or "N/A",
                     "default_schema": self.default_schema or "N/A",
                     "validation_status": "PASS" if not unresolved_tables else "FAIL",
+                },
+                "artifacts": {
+                    "table_mappings": table_mappings,
+                    "column_mappings": column_mappings,
+                    "unresolved_tables": unresolved_detail,
+                    "detected_joins": all_joins,
+                    "databricks_connections": databricks_connections,
+                    "mapping_json": self.table_mapping,
                 },
                 "logs": [
                     f"[INFO] Scanning {len(workbook_meta.datasources)} datasources",
@@ -415,6 +683,34 @@ class MigrationPipeline:
                 if f.get('compiled_sql'):
                     sample_sql = f['compiled_sql']
 
+            # Build actual conversion artifact data
+            conversions = [
+                {
+                    "name": f.get('internal_name', ''),
+                    "caption": f.get('caption', ''),
+                    "original_formula": f.get('original_formula', f.get('formula', '')),
+                    "compiled_sql": f.get('compiled_sql', ''),
+                    "datasource": f.get('datasource', ''),
+                }
+                for f in compiled[:200]
+            ]
+            unsupported_detail = [
+                {
+                    "name": f.get('internal_name', ''),
+                    "formula": f.get('original_formula', f.get('formula', '')),
+                    "reason": f.get('unsupported_reason', f.get('exclude_reason', 'Unsupported function')),
+                    "datasource": f.get('datasource', ''),
+                }
+                for f in unsupported[:100]
+            ]
+
+            # All compiled SQL concatenated for generated_code display
+            all_sql = "\n\n".join(
+                f"-- {f.get('internal_name', 'unknown')}\n{f.get('compiled_sql', '')}"
+                for f in compiled[:50]
+                if f.get('compiled_sql')
+            )
+
             return {
                 "status": "COMPLETED",
                 "output_summary": f"SQL conversion ready: {len(compiled)} expressions compiled, {len(unsupported)} unsupported",
@@ -425,6 +721,10 @@ class MigrationPipeline:
                     "compilation_rate": f"{(len(compiled) / max(len(registry), 1)) * 100:.1f}%",
                     "databricks_compatibility": "HIGH" if len(unsupported) == 0 else "MEDIUM" if len(unsupported) < 5 else "LOW",
                 },
+                "artifacts": {
+                    "conversions": conversions,
+                    "unsupported": unsupported_detail,
+                },
                 "logs": [
                     f"[INFO] Compiling {len(registry)} expressions to Databricks SQL",
                     f"[INFO] {len(compiled)} expressions compiled successfully",
@@ -432,7 +732,7 @@ class MigrationPipeline:
                 ],
                 "warnings": [f"Unsupported: {f.get('internal_name', 'unknown')}" for f in unsupported[:10]],
                 "errors": [],
-                "generated_code": sample_sql,
+                "generated_code": all_sql or sample_sql,
                 "data": None,
             }
 
@@ -465,6 +765,49 @@ class MigrationPipeline:
             page_count = len(lakeview_dash.pages) if hasattr(lakeview_dash, 'pages') else 0
             dataset_count = len(lakeview_dash.datasets) if hasattr(lakeview_dash, 'datasets') else 0
 
+            # Build actual artifact data
+            pages_detail = []
+            visual_types = set()
+            widgets_detail = []
+            if hasattr(lakeview_dash, 'pages'):
+                for p in lakeview_dash.pages:
+                    page_widgets = []
+                    for item in p.layout:
+                        w = item.widget
+                        w_info = {
+                            "name": w.name,
+                            "type": "textbox" if w.textbox_spec else "chart",
+                            "position": {"x": item.position.x, "y": item.position.y, "w": item.position.width, "h": item.position.height},
+                        }
+                        if w.spec:
+                            spec_version = w.spec.get("version", 0)
+                            w_info["spec_version"] = spec_version
+                            # Try to extract visual type from spec
+                            for enc_key in ["mark", "encoding"]:
+                                if enc_key in w.spec:
+                                    w_info["visual_type"] = str(w.spec.get("mark", {}).get("type", "unknown")) if isinstance(w.spec.get("mark"), dict) else str(w.spec.get("mark", "unknown"))
+                                    visual_types.add(w_info.get("visual_type", "unknown"))
+                                    break
+                        if w.queries:
+                            w_info["dataset"] = w.queries[0].query.get("datasetName", "") if isinstance(w.queries[0].query, dict) else getattr(w.queries[0].query, 'datasetName', '')
+                        page_widgets.append(w_info)
+                        widgets_detail.append(w_info)
+                    pages_detail.append({
+                        "name": p.name,
+                        "display_name": p.displayName,
+                        "widget_count": len(page_widgets),
+                        "widgets": page_widgets,
+                    })
+
+            datasets_detail = []
+            if hasattr(lakeview_dash, 'datasets'):
+                for ds in lakeview_dash.datasets:
+                    datasets_detail.append({
+                        "name": ds.name,
+                        "display_name": ds.displayName,
+                        "query": ds.query,
+                    })
+
             return {
                 "status": "COMPLETED",
                 "output_summary": f"Generated {page_count} pages, {widget_count} widgets, {dataset_count} datasets",
@@ -473,7 +816,13 @@ class MigrationPipeline:
                     "widgets_generated": widget_count,
                     "datasets_generated": dataset_count,
                     "layout_grid": "6-column",
-                    "visual_types_detected": [],
+                    "visual_types_detected": list(visual_types),
+                },
+                "artifacts": {
+                    "pages": pages_detail,
+                    "datasets": datasets_detail,
+                    "widgets": widgets_detail[:200],
+                    "visual_types": list(visual_types),
                 },
                 "logs": [
                     f"[INFO] UBIM normalization: mapping Tableau marks to Lakeview visual types",
@@ -523,6 +872,15 @@ class MigrationPipeline:
             error_count = len(val_res.get("errors", []))
             warning_count = len(val_res.get("warnings", []))
 
+            # Build generated JSON summary (truncated for storage)
+            import json as _json
+            generated_json_str = None
+            try:
+                dash_dict = lakeview_dash.to_dict()
+                generated_json_str = _json.dumps(dash_dict, indent=2, ensure_ascii=False)[:50000]
+            except Exception:
+                pass
+
             return {
                 "status": "COMPLETED" if val_res.get("valid") else "WARNING",
                 "output_summary": f"{'VALID' if val_res.get('valid') else 'INVALID'}: {error_count} errors, {warning_count} warnings, {len(removed)} widgets pruned",
@@ -533,6 +891,14 @@ class MigrationPipeline:
                     "pruned_widgets": len(removed),
                     "tier_status": val_res.get("tier_status", {}),
                 },
+                "artifacts": {
+                    "validation_errors": val_res.get("errors", []),
+                    "validation_warnings": val_res.get("warnings", []),
+                    "tier_status": val_res.get("tier_status", {}),
+                    "pruned_widgets": list(removed),
+                    "generated_json_preview": generated_json_str,
+                },
+                "generated_code": generated_json_str,
                 "logs": [
                     f"[INFO] Running JSON schema validation",
                     f"[INFO] Checking layout bounds (x + width <= 6)",
@@ -570,6 +936,17 @@ class MigrationPipeline:
                     "lakeview_pages": summary.get("lakeview_pages", 0),
                     "lakeview_widgets": summary.get("lakeview_widgets", 0),
                     "validation_valid": val_res.get("valid", False),
+                },
+                "artifacts": {
+                    "report_summary": summary,
+                    "target_lakeview": report.get("target_lakeview", {}),
+                    "error_bag": self.error_bag[-50:],
+                    "output_files": [
+                        f"{self.job_uuid}.lvdash.json",
+                        f"{self.job_uuid}_pretty.lvdash.json",
+                        "migration_report.json",
+                        "validation_report.json",
+                    ],
                 },
                 "logs": [
                     f"[INFO] Assembling migration telemetry report",

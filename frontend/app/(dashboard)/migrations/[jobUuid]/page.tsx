@@ -183,14 +183,6 @@ export default function MigrationWorkspacePage() {
           </div>
         </div>
         <div className={styles.actionBarRight}>
-          <button
-            className={styles.mappingBarBtn}
-            onClick={() => router.push(`/migrations/${jobUuid}/mapping`)}
-            title="Configure Data Model & Unity Catalog Mappings"
-          >
-            <GitBranch size={16} />
-            Data Model & Mapping
-          </button>
           {canExecute && (
             <button
               className={styles.runBtn}
@@ -237,8 +229,7 @@ export default function MigrationWorkspacePage() {
           key={selectedStageId}
           jobUuid={jobUuid}
           stageId={selectedStageId}
-          isComplete={isComplete}
-          onDownload={handleDownload}
+          onExecute={handleExecute}
         />
       </div>
     </div>

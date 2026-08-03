@@ -1,0 +1,265 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { Sparkles, Database, ArrowRight, CheckCircle2, RefreshCw, FileSpreadsheet } from "lucide-react";
+import CatalogBrowser from "@/components/mapping/CatalogBrowser";
+import { useToast } from "@/components/ui/ToastProvider";
+import {
+  getJobDatasources,
+  discoverMappings,
+  saveMappings,
+  autoUploadEmbedded,
+  executePipeline,
+} from "@/lib/api";
+import type { TableauDatasourceInfo, EmbeddedFileInfo, DatasourceMappingItem } from "@/lib/types";
+import styles from "./InlineMappingPanel.module.css";
+
+interface InlineMappingPanelProps {
+  jobUuid: string;
+  onExecute?: () => void;
+}
+
+export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMappingPanelProps) {
+  const { success, info, error: toastError } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [datasources, setDatasources] = useState<TableauDatasourceInfo[]>([]);
+  const [embeddedFiles, setEmbeddedFiles] = useState<EmbeddedFileInfo[]>([]);
+  const [mappings, setMappings] = useState<Record<string, DatasourceMappingItem>>({});
+  const [suggestions, setSuggestions] = useState<Record<string, any>>({});
+  const [activeMappingTable, setActiveMappingTable] = useState<string | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Databricks Connection Settings (read from localStorage)
+  const [host, setHost] = useState("");
+  const [token, setToken] = useState("");
+  const [warehouseId, setWarehouseId] = useState("a1b2c3d4e5f67890");
+
+  useEffect(() => {
+    const saved = localStorage.getItem("lakeview_connections");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.length > 0) {
+          setHost(parsed[0].host);
+          setToken(parsed[0].token);
+          setWarehouseId(parsed[0].warehouseId || warehouseId);
+        }
+      } catch {}
+    }
+  }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const res = await getJobDatasources(jobUuid);
+      setDatasources(res.datasources || []);
+      setEmbeddedFiles(res.embedded_files || []);
+
+      const initial: Record<string, DatasourceMappingItem> = {};
+      for (const ds of res.datasources || []) {
+        for (const t of ds.tables) {
+          const ex = res.existing_mappings?.[t.name];
+          initial[t.name] = {
+            tableau_datasource_name: ds.name,
+            tableau_table_name: t.name,
+            tableau_connection_type: ds.connection_type,
+            target_full_name: ex?.target_full_name || (t.is_unresolved ? "" : t.name),
+            status: (ex?.status as any) || (ex?.target_full_name ? "CONFIRMED" : "PENDING"),
+          };
+        }
+      }
+      setMappings(initial);
+    } catch (err: any) {
+      toastError(err.message || "Failed to load datasources.", "Error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [jobUuid]);
+
+  const handleDiscover = async () => {
+    if (!host || !token) {
+      toastError("Configure a Databricks Connection in the Connections page first.", "Connection Required");
+      return;
+    }
+    setDiscovering(true);
+    try {
+      const res = await discoverMappings(jobUuid, host, token, warehouseId);
+      setSuggestions(res.suggestions || {});
+
+      const updated = { ...mappings };
+      let applied = 0;
+      for (const [tblName, sug] of Object.entries(res.suggestions || {})) {
+        if (sug.matches && sug.matches.length > 0) {
+          const top = sug.matches[0];
+          if (top.confidence_score >= 0.7 && !updated[tblName]?.target_full_name) {
+            updated[tblName] = { ...updated[tblName], target_full_name: top.target_full_name, confidence_score: top.confidence_score, status: "MATCHED" };
+            applied++;
+          }
+        }
+      }
+      setMappings(updated);
+      success(`Discovered ${res.uc_table_count} UC tables. Auto-matched ${applied} sources.`, "Discovery Complete");
+    } catch (err: any) {
+      toastError(err.message || "Discovery failed.", "Error");
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const handleAutoUpload = async () => {
+    if (!host || !token) { toastError("Configure a Databricks Connection first.", "Connection Required"); return; }
+    try {
+      const res = await autoUploadEmbedded(jobUuid, host, token, warehouseId, "main", "default");
+      const updated = { ...mappings };
+      for (const r of res.results || []) {
+        if (r.status === "SUCCESS") {
+          for (const k of Object.keys(updated)) {
+            if (k.toLowerCase().includes(r.table_name.toLowerCase())) {
+              updated[k] = { ...updated[k], target_full_name: r.full_name, status: "CONFIRMED" };
+            }
+          }
+        }
+      }
+      setMappings(updated);
+      success(`Created ${res.uploaded_count} Delta tables.`, "Upload Complete");
+    } catch (err: any) {
+      toastError(err.message || "Upload failed.", "Error");
+    }
+  };
+
+  const handleSelectTarget = (tblName: string, fullName: string) => {
+    setMappings((prev) => ({ ...prev, [tblName]: { ...prev[tblName], target_full_name: fullName, status: "CONFIRMED" } }));
+    setActiveMappingTable(null);
+    success(`Mapped '${tblName}' → '${fullName}'`, "Mapping Confirmed");
+  };
+
+  const handleSaveAndExecute = async () => {
+    const list = Object.values(mappings);
+    const unmapped = list.filter((m) => !m.target_full_name);
+    if (unmapped.length > 0) {
+      toastError(`${unmapped.length} datasource(s) still unmapped.`, "Incomplete");
+      return;
+    }
+    setSaving(true);
+    try {
+      await saveMappings(jobUuid, list);
+      await executePipeline(jobUuid);
+      success("Mappings saved. Pipeline started.", "Executing");
+      onExecute?.();
+    } catch (err: any) {
+      toastError(err.message || "Failed to save/execute.", "Error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const totalCount = Object.keys(mappings).length;
+  const mappedCount = Object.values(mappings).filter((m) => m.target_full_name).length;
+  const progressPct = totalCount > 0 ? (mappedCount / totalCount) * 100 : 0;
+  const isComplete = totalCount > 0 && mappedCount === totalCount;
+
+  if (loading) {
+    return <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-tertiary)", fontSize: "0.875rem" }}>Loading datasources...</div>;
+  }
+
+  return (
+    <div className={styles.container}>
+      <div className={styles.header}>
+        <span className={styles.headerTitle}>Datasource → Unity Catalog Mapping</span>
+        <div className={styles.headerActions}>
+          {embeddedFiles.length > 0 && (
+            <button className={styles.actionBtn} onClick={handleAutoUpload}>
+              <FileSpreadsheet size={13} /> Auto-Upload ({embeddedFiles.length})
+            </button>
+          )}
+          <button className={styles.actionBtn} onClick={handleDiscover} disabled={discovering}>
+            {discovering ? <RefreshCw size={13} className="spin" /> : <Sparkles size={13} />}
+            {discovering ? "Discovering..." : "Auto-Discover"}
+          </button>
+          <button className={styles.actionBtnPrimary} onClick={handleSaveAndExecute} disabled={!isComplete || saving}>
+            {saving ? <RefreshCw size={13} className="spin" /> : <ArrowRight size={13} />}
+            {saving ? "Saving..." : "Save & Execute"}
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.mainGrid}>
+        {/* Left: mapping list */}
+        <div className={styles.mappingList}>
+          {datasources.map((ds) =>
+            ds.tables.map((t) => {
+              const mapItem = mappings[t.name];
+              const target = mapItem?.target_full_name;
+              const isSelected = activeMappingTable === t.name;
+              const sug = suggestions[t.name];
+
+              return (
+                <div key={t.name} className={isSelected ? styles.mappingCardSelected : styles.mappingCard}>
+                  <div className={styles.sourceRow}>
+                    <span className={styles.sourceName}>{t.name}</span>
+                    {target ? (
+                      <span className={styles.mappedBadge}>Mapped</span>
+                    ) : (
+                      <span className={styles.unmappedBadge}>Unmapped</span>
+                    )}
+                  </div>
+                  <div className={styles.sourceType}>{ds.connection_type} • {ds.column_count} cols</div>
+                  <div className={styles.targetRow}>
+                    <Database size={13} color={target ? "var(--accent-cyan)" : "var(--text-disabled)"} />
+                    {target ? (
+                      <span className={styles.targetName}>{target}</span>
+                    ) : (
+                      <span className={styles.unmapped}>No target selected</span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "0.25rem", marginTop: "0.25rem" }}>
+                    {sug?.matches?.[0] && !target && (
+                      <button className={styles.selectBtn} onClick={() => handleSelectTarget(t.name, sug.matches[0].target_full_name)}>
+                        <CheckCircle2 size={11} /> Accept ({Math.round(sug.matches[0].confidence_score * 100)}%)
+                      </button>
+                    )}
+                    <button className={styles.selectBtn} onClick={() => setActiveMappingTable(isSelected ? null : t.name)}>
+                      {isSelected ? "Cancel" : target ? "Change" : "Select →"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Right: catalog browser */}
+        <div className={styles.browserColumn}>
+          <CatalogBrowser
+            host={host}
+            token={token}
+            warehouseId={warehouseId}
+            selectedTable={activeMappingTable ? mappings[activeMappingTable]?.target_full_name : undefined}
+            onSelectTable={(fullName) => {
+              if (activeMappingTable) {
+                handleSelectTarget(activeMappingTable, fullName);
+              } else {
+                info("Select a datasource on the left first.", "No Source Selected");
+              }
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Progress */}
+      <div className={styles.progressRow}>
+        <span className={styles.progressText}>
+          {mappedCount}/{totalCount} mapped
+        </span>
+        <div className={styles.progressBar}>
+          <div className={styles.progressFill} style={{ width: `${progressPct}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}

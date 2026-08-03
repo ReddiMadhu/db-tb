@@ -68,6 +68,11 @@ class StageResult(Base):
     # Generated SQL/JSON output (for SQL, UBIM, Validate stages)
     generated_code = Column(Text, nullable=True)
 
+    # Actual generated objects for each stage — lists of names, SQL,
+    # mappings, relationship details, JSON fragments, renderSpecs, etc.
+    # Separated from `metrics` (which stores quick KPI counts for badges).
+    artifacts = Column(JSON, default=dict)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

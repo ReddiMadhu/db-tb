@@ -172,36 +172,158 @@
   background: var(--bg-hover);
 }
 
+.sectionBadge {
+  display: inline-flex;
+  padding: 1px 6px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 0.65rem;
+  font-weight: var(--font-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
 .sectionBody {
   padding: var(--space-4);
   animation: fadeIn 0.2s var(--easing-default);
 }
 
-/* ── Detail Grid ── */
-.detailGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-2) var(--space-6);
-}
-
-.detailRow {
+/* ── Name List (simple bulleted list of names) ── */
+.nameList {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--space-1) 0;
-  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
-.detailLabel {
+.nameTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-medium);
+}
+
+.nameTagIcon {
   color: var(--text-tertiary);
 }
 
-.detailValue {
+/* ── Formula Table ── */
+.formulaTable {
+  width: 100%;
+  border-collapse: collapse;
   font-size: var(--font-size-sm);
+}
+
+.formulaTable th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface);
+}
+
+.formulaTable td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  font-weight: var(--font-weight-medium);
-  text-align: right;
+  vertical-align: top;
+}
+
+.formulaTable tr:last-child td {
+  border-bottom: none;
+}
+
+.formulaTable tr:hover td {
+  background: rgba(255,255,255,0.02);
+}
+
+.formulaCell {
+  font-family: var(--font-family-mono);
+  font-size: 0.75rem;
+  color: var(--accent-amber);
+  max-width: 350px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sqlCell {
+  font-family: var(--font-family-mono);
+  font-size: 0.75rem;
+  color: var(--accent-green);
+  max-width: 350px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.typeBadge {
+  display: inline-flex;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.65rem;
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+}
+
+.typeLod {
+  composes: typeBadge;
+  background: rgba(155,89,182,0.12);
+  color: #9b59b6;
+}
+
+.typeTableCalc {
+  composes: typeBadge;
+  background: rgba(52,152,219,0.12);
+  color: #3498db;
+}
+
+.typeStandard {
+  composes: typeBadge;
+  background: rgba(46,204,113,0.12);
+  color: var(--accent-green);
+}
+
+/* ── Mapping Table ── */
+.mappingTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.mappingTable th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface);
+}
+
+.mappingTable td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-family-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+}
+
+.mappingArrow {
+  color: var(--text-disabled);
+  text-align: center;
 }
 
 /* ── Code Block ── */
@@ -215,6 +337,24 @@
   overflow-x: auto;
   white-space: pre-wrap;
   color: var(--accent-green);
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+/* ── JSON Viewer ── */
+.jsonViewer {
+  background: var(--bg-code);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  font-family: var(--font-family-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+  max-height: 500px;
+  overflow-y: auto;
 }
 
 /* ── Log Box ── */
@@ -294,55 +434,95 @@
   color: var(--text-tertiary);
 }
 
-/* ── Mapping CTA ── */
-.mappingCtaBox {
-  margin-top: var(--space-6);
-  padding: var(--space-6);
-  background: var(--bg-surface);
-  border: 1px solid rgba(245, 176, 65, 0.3);
-  border-radius: var(--radius-xl);
+/* ── Databricks Detection Banner ── */
+.detectionBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(52,152,219,0.08);
+  border: 1px solid rgba(52,152,219,0.25);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-4);
+}
+
+.detectionIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: rgba(52,152,219,0.15);
+  color: #3498db;
+  flex-shrink: 0;
+}
+
+.detectionInfo {
+  flex: 1;
+}
+
+.detectionTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+}
+
+.detectionDesc {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* ── Key-Value pairs ── */
+.kvGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2) var(--space-6);
+}
+
+.kvRow {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: var(--space-6);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.mappingCtaInfo {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
+.kvLabel {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
 }
 
-.mappingCtaTitle {
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-bold);
+.kvValue {
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  font-weight: var(--font-weight-medium);
+  text-align: right;
+  font-family: var(--font-family-mono);
+}
+
+/* ── Widget cards for layout stage ── */
+.widgetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-2);
+}
+
+.widgetCard {
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+}
+
+.widgetName {
+  font-weight: var(--font-weight-semibold);
   color: var(--text-primary);
   margin-bottom: 2px;
 }
 
-.mappingCtaDesc {
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-}
-
-.mappingBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-5);
-  background: var(--accent-amber);
-  color: #071827;
-  border: none;
-  border-radius: var(--radius-lg);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all var(--duration-fast);
-  box-shadow: 0 2px 8px rgba(245, 176, 65, 0.3);
-}
-
-.mappingBtn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(245, 176, 65, 0.4);
+.widgetMeta {
+  color: var(--text-tertiary);
+  font-size: 0.65rem;
 }

@@ -130,6 +130,7 @@ async def get_stage_detail(job_uuid: str, stage_id: str, db: Session = Depends(g
             "warnings": [],
             "errors": [],
             "generated_code": None,
+            "artifacts": {},
         }
 
     return {
@@ -147,6 +148,7 @@ async def get_stage_detail(job_uuid: str, stage_id: str, db: Session = Depends(g
         "warnings": stage.warnings or [],
         "errors": stage.errors or [],
         "generated_code": stage.generated_code,
+        "artifacts": stage.artifacts or {},
     }
 
 
