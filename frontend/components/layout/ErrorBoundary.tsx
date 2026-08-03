@@ -54,7 +54,7 @@ export default class ErrorBoundary extends Component<Props, State> {
 
             <h1 className={styles.title}>System Recoverable Error</h1>
             <p className={styles.description}>
-              LakeShift encountered an unhandled rendering error. You can reload the application or return to the main dashboard.
+              The application encountered an unhandled rendering error. You can reload the application or return to the main dashboard.
             </p>
 
             <div className={`${styles.requestIdBadge} mono`}>

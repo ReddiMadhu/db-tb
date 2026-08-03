@@ -246,7 +246,169 @@ class UnityCatalogService:
         except Exception:
             return None
 
+    @staticmethod
+    def get_table_columns(
+        host: str, token: str, full_name: str, warehouse_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get detailed column metadata for a table.
+
+        Uses the SDK tables.get() API which returns columns with:
+        name, type_text, type_name, nullable, comment, position.
+
+        Falls back to DESCRIBE TABLE via SQL if SDK fails.
+        """
+        # Try SDK first
+        try:
+            w = UnityCatalogService._client(host, token)
+            table = w.tables.get(full_name=full_name)
+            table_dict = table.as_dict()
+            columns = table_dict.get("columns", [])
+            if columns:
+                return [
+                    {
+                        "name": col.get("name", ""),
+                        "data_type": col.get("type_text", col.get("type_name", "")),
+                        "nullable": col.get("nullable", True),
+                        "comment": col.get("comment", ""),
+                        "position": col.get("position", 0),
+                        "is_partition": col.get("partition_index") is not None,
+                    }
+                    for col in columns
+                ]
+        except Exception:
+            pass
+
+        # Fallback: DESCRIBE TABLE via SQL
+        if warehouse_id:
+            try:
+                res = UnityCatalogService.execute_sql(
+                    host, token, warehouse_id,
+                    f"DESCRIBE TABLE `{full_name}`"
+                )
+                rows = res.get("result", {}).get("data_array", [])
+                columns = []
+                for i, r in enumerate(rows):
+                    if r and len(r) >= 2:
+                        col_name = r[0] or ""
+                        col_type = r[1] or ""
+                        comment = r[2] if len(r) > 2 else ""
+                        # Skip partition info section markers
+                        if col_name.startswith("#") or col_name == "":
+                            continue
+                        columns.append({
+                            "name": col_name.strip(),
+                            "data_type": col_type.strip(),
+                            "nullable": True,
+                            "comment": (comment or "").strip(),
+                            "position": i,
+                            "is_partition": False,
+                        })
+                return columns
+            except Exception as e:
+                logger.warning("Failed to describe table %s via SQL: %s", full_name, str(e))
+
+        return []
+
+    @staticmethod
+    def get_table_constraints(
+        host: str, token: str, warehouse_id: str, full_name: str
+    ) -> Dict[str, Any]:
+        """Discover primary and foreign key constraints for a table.
+
+        Uses DESCRIBE TABLE EXTENDED and SHOW TABLE PROPERTIES to find constraints.
+
+        Returns dict with keys: primary_keys (list[str]), foreign_keys (list[dict]).
+        """
+        result = {"primary_keys": [], "foreign_keys": []}
+
+        try:
+            # Try to get PK info from DESCRIBE EXTENDED
+            res = UnityCatalogService.execute_sql(
+                host, token, warehouse_id,
+                f"DESCRIBE TABLE EXTENDED `{full_name}`"
+            )
+            rows = res.get("result", {}).get("data_array", [])
+            in_constraints = False
+            for r in rows:
+                if not r or len(r) < 2:
+                    continue
+                key = (r[0] or "").strip().lower()
+                val = (r[1] or "").strip()
+                if "constraint" in key or "primary key" in key:
+                    in_constraints = True
+                if in_constraints and "primary" in key.lower():
+                    # Parse PK columns from value like "(col1, col2)"
+                    import re as _re
+                    pk_cols = _re.findall(r'`?(\w+)`?', val)
+                    result["primary_keys"].extend(pk_cols)
+        except Exception as e:
+            logger.debug("Could not get constraints for %s: %s", full_name, str(e))
+
+        try:
+            # Try INFORMATION_SCHEMA for FK relationships
+            parts = full_name.split(".")
+            if len(parts) == 3:
+                catalog, schema, table = parts
+                fk_sql = (
+                    f"SELECT tc.constraint_name, kcu.column_name, "
+                    f"ccu.table_catalog, ccu.table_schema, ccu.table_name, ccu.column_name AS ref_column "
+                    f"FROM `{catalog}`.information_schema.table_constraints tc "
+                    f"JOIN `{catalog}`.information_schema.key_column_usage kcu "
+                    f"ON tc.constraint_name = kcu.constraint_name "
+                    f"JOIN `{catalog}`.information_schema.constraint_column_usage ccu "
+                    f"ON tc.constraint_name = ccu.constraint_name "
+                    f"WHERE tc.table_name = '{table}' "
+                    f"AND tc.table_schema = '{schema}' "
+                    f"AND tc.constraint_type = 'FOREIGN KEY'"
+                )
+                res = UnityCatalogService.execute_sql(host, token, warehouse_id, fk_sql)
+                rows = res.get("result", {}).get("data_array", [])
+                for r in rows:
+                    if r and len(r) >= 6:
+                        result["foreign_keys"].append({
+                            "column": r[1],
+                            "ref_catalog": r[2],
+                            "ref_schema": r[3],
+                            "ref_table": r[4],
+                            "ref_column": r[5],
+                        })
+        except Exception as e:
+            logger.debug("Could not get FK constraints for %s: %s", full_name, str(e))
+
+        return result
+
+    @staticmethod
+    def get_table_properties(
+        host: str, token: str, warehouse_id: str, full_name: str
+    ) -> Dict[str, Any]:
+        """Get table properties and statistics.
+
+        Returns dict with: properties, row_count, partition_columns.
+        """
+        result = {"properties": {}, "row_count": None, "partition_columns": []}
+        try:
+            res = UnityCatalogService.execute_sql(
+                host, token, warehouse_id,
+                f"SHOW TABLE PROPERTIES `{full_name}`"
+            )
+            rows = res.get("result", {}).get("data_array", [])
+            for r in rows:
+                if r and len(r) >= 2:
+                    key = (r[0] or "").strip()
+                    val = (r[1] or "").strip()
+                    result["properties"][key] = val
+                    if "numRows" in key or "spark.sql.statistics.numRows" in key:
+                        try:
+                            result["row_count"] = int(val)
+                        except ValueError:
+                            pass
+        except Exception as e:
+            logger.debug("Could not get properties for %s: %s", full_name, str(e))
+
+        return result
+
     # ── Search ────────────────────────────────────────────────────────
+
 
     @staticmethod
     def search_tables(

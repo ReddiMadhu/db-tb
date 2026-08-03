@@ -100,9 +100,13 @@ async def execute_migration_pipeline(
 
         pipeline = MigrationPipeline(
             upload_path,
+            job_uuid=job_uuid,
             table_mapping=table_mapping,
             default_catalog=catalog,
             default_schema=schema_name,
+            databricks_host=settings.DATABRICKS_HOST or "",
+            databricks_token=settings.DATABRICKS_TOKEN or "",
+            warehouse_id=settings.DEFAULT_WAREHOUSE_ID or "",
         )
         result = pipeline.run()
 
@@ -180,7 +184,7 @@ async def execute_migration_pipeline(
         db.add(report_orm)
         db.commit()
 
-        return {
+        response = {
             "job_uuid": job_uuid,
             "status": result["status"],
             "current_stage": 10,
@@ -195,6 +199,14 @@ async def execute_migration_pipeline(
                 if val_res["valid"]
                 else "Pipeline completed with validation errors."
         }
+
+        # Include Databricks sources info for Data Model screen
+        if "databricks_sources" in result:
+            response["databricks_sources"] = result["databricks_sources"]
+        if "semantic_model_summary" in result:
+            response["semantic_model_summary"] = result["semantic_model_summary"]
+
+        return response
     except Exception as e:
         logger.exception("Pipeline execution failed for job %s", job_uuid)
         job.status = "FAILED"

@@ -10,9 +10,10 @@ import styles from "./UploadModal.module.css";
 
 interface UploadModalProps {
   onClose: () => void;
+  onSuccess?: (jobUuid: string) => void;
 }
 
-export default function UploadModal({ onClose }: UploadModalProps) {
+export default function UploadModal({ onClose, onSuccess }: UploadModalProps) {
   const router = useRouter();
   const { success, error: toastError } = useToast();
   const [file, setFile] = useState<File | null>(null);
@@ -41,7 +42,11 @@ export default function UploadModal({ onClose }: UploadModalProps) {
       const res = await uploadWorkbook(file);
       success(`Workbook "${file.name}" uploaded & XML TOM metadata extracted`, "Upload Complete");
       onClose();
-      router.push(`/migrations/${res.job_uuid}`);
+      if (onSuccess) {
+        onSuccess(res.job_uuid);
+      } else {
+        router.push(`/migrations/${res.job_uuid}`);
+      }
     } catch (err: unknown) {
       const msg = (err as Error).message || "Upload failed";
       setError(msg);

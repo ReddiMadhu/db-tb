@@ -32,10 +32,10 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertIn("job_uuid", data)
             job_uuid = data["job_uuid"]
 
-            # 2. Test GET /api/v1/migrations/{job_uuid}/status (PARSED)
+            # 2. Test GET /api/v1/migrations/{job_uuid}/status (PARSED or NEEDS_MAPPING)
             status_res = client.get(f"/api/v1/migrations/{job_uuid}/status")
             self.assertEqual(status_res.status_code, 200)
-            self.assertEqual(status_res.json()["status"], "PARSED")
+            self.assertIn(status_res.json()["status"], ("PARSED", "NEEDS_MAPPING"))
 
             # 3. Test POST /api/v1/migrations/{job_uuid}/execute
             exec_res = client.post(f"/api/v1/migrations/{job_uuid}/execute")

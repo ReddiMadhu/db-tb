@@ -81,7 +81,7 @@ export default function ApiInspectorDrawer({ isOpen, onClose }: ApiInspectorDraw
     }), null, 2));
     const dlAnchorElem = document.createElement("a");
     dlAnchorElem.setAttribute("href", dataStr);
-    dlAnchorElem.setAttribute("download", `lakeshift_diagnostics_${timestamp}.json`);
+    dlAnchorElem.setAttribute("download", `t2d_diagnostics_${timestamp}.json`);
     dlAnchorElem.click();
   };
 

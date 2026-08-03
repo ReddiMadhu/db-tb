@@ -89,7 +89,7 @@ export default function StructuredLogViewer() {
     const jsonStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(filteredLogs, null, 2));
     const dlAnchor = document.createElement("a");
     dlAnchor.setAttribute("href", jsonStr);
-    dlAnchor.setAttribute("download", `lakeshift_logs_${Date.now()}.json`);
+    dlAnchor.setAttribute("download", `t2d_logs_${Date.now()}.json`);
     dlAnchor.click();
   };
 

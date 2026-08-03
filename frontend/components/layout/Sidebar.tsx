@@ -4,20 +4,12 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import {
   LayoutDashboard,
-  FolderKanban,
   ArrowRightLeft,
-  ShieldCheck,
   Rocket,
-  BookOpen,
-  BarChart3,
-  Database,
-  FileBarChart,
-  Activity,
   PlugZap,
   Settings,
   PanelLeftClose,
   PanelLeft,
-  Zap,
 } from "lucide-react";
 import { useUIStore } from "@/lib/store";
 import styles from "./Sidebar.module.css";
@@ -50,31 +42,19 @@ const NAV_SECTIONS = [
     label: "Work",
     items: [
       { href: "/", icon: <LayoutDashboard size={18} />, label: "Dashboard" },
-      { href: "/projects", icon: <FolderKanban size={18} />, label: "Projects" },
       { href: "/migrations", icon: <ArrowRightLeft size={18} />, label: "Migrations" },
-      { href: "/validation", icon: <ShieldCheck size={18} />, label: "Validation" },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
       { href: "/deployments", icon: <Rocket size={18} />, label: "Deployments" },
-    ],
-  },
-  {
-    label: "Assets",
-    items: [
-      { href: "/workbooks", icon: <BookOpen size={18} />, label: "Workbooks" },
-      { href: "/dashboards", icon: <BarChart3 size={18} />, label: "Dashboards" },
-      { href: "/datasets", icon: <Database size={18} />, label: "Datasets" },
-    ],
-  },
-  {
-    label: "Insights",
-    items: [
-      { href: "/reports", icon: <FileBarChart size={18} />, label: "Reports" },
-      { href: "/activity", icon: <Activity size={18} />, label: "Activity" },
-    ],
-  },
-  {
-    label: "Platform",
-    items: [
       { href: "/connections", icon: <PlugZap size={18} />, label: "Connections" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
       { href: "/settings", icon: <Settings size={18} />, label: "Settings" },
     ],
   },
@@ -90,9 +70,14 @@ export default function Sidebar() {
       <div className={styles.sidebarHeader}>
         <div className={styles.logo}>
           <div className={styles.logoIcon}>
-            <Zap size={14} color="white" />
+            <ArrowRightLeft size={14} color="white" />
           </div>
-          {!sidebarCollapsed && <span>LakeShift</span>}
+          {!sidebarCollapsed && (
+            <div className={styles.logoText}>
+              <span className={styles.logoLine1}>Tableau to</span>
+              <span className={styles.logoLine2}>Databricks</span>
+            </div>
+          )}
         </div>
         <button
           className={styles.collapseBtn}

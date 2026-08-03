@@ -169,7 +169,7 @@ export default function DatasourceMappingPage({
     });
 
     try {
-      updateProgress(opId, 40, "Uploading to UC Volume", "Transferring data files to /Volumes/main/default/lakeshift_staging...");
+      updateProgress(opId, 40, "Uploading to UC Volume", "Transferring data files to /Volumes/main/default/t2d_staging...");
       const res = await autoUploadEmbedded(jobUuid, host, token, warehouseId, "main", "default");
 
       const updated = { ...mappings };

@@ -1,0 +1,155 @@
+.stepper {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-6) var(--space-4);
+  gap: 0;
+  width: 100%;
+  overflow-x: auto;
+}
+
+.stageGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  flex: 1;
+  min-width: 80px;
+  max-width: 140px;
+}
+
+/* ── Node ── */
+.node {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid var(--border-default);
+  background: var(--bg-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--easing-default);
+  position: relative;
+  z-index: 2;
+  color: var(--text-tertiary);
+  outline: none;
+}
+
+.node:hover {
+  border-color: var(--accent-orange);
+  transform: scale(1.1);
+  box-shadow: 0 0 12px rgba(251, 78, 11, 0.2);
+}
+
+.node:focus-visible {
+  outline: 2px solid var(--accent-orange);
+  outline-offset: 3px;
+}
+
+.node.selected {
+  border-color: var(--accent-orange);
+  background: var(--accent-orange-muted);
+  box-shadow: 0 0 0 3px rgba(251, 78, 11, 0.15);
+}
+
+.nodeIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Status States ── */
+.waiting {
+  border-color: var(--border-default);
+  color: var(--text-disabled);
+  border-style: dashed;
+}
+
+.running {
+  border-color: var(--accent-orange);
+  color: var(--accent-orange);
+  background: var(--accent-orange-muted);
+  animation: nodeGlow 2s ease-in-out infinite, nodePulse 2s ease-in-out infinite;
+}
+
+.completed {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+  background: var(--accent-green-muted);
+}
+
+.warning {
+  border-color: var(--accent-amber);
+  color: var(--accent-amber);
+  background: var(--accent-amber-muted);
+}
+
+.failed {
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+  background: var(--accent-red-muted);
+}
+
+.skipped {
+  border-color: var(--border-default);
+  color: var(--text-disabled);
+  background: var(--bg-hover);
+  border-style: dotted;
+}
+
+/* ── Ripple effect on running nodes ── */
+.ripple {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid var(--accent-orange);
+  animation: ripple 1.5s ease-out infinite;
+  pointer-events: none;
+}
+
+/* ── Label ── */
+.label {
+  margin-top: var(--space-2);
+  font-size: 0.7rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--text-tertiary);
+  text-align: center;
+  white-space: nowrap;
+  transition: color var(--duration-fast);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.labelSelected {
+  color: var(--accent-orange);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ── Connector line ── */
+.connector {
+  position: absolute;
+  top: 20px;
+  left: calc(50% + 24px);
+  right: calc(-50% + 24px);
+  height: 2px;
+  background: var(--border-default);
+  z-index: 1;
+  transition: background var(--duration-normal);
+}
+
+.connectorDone {
+  background: var(--accent-green);
+}
+
+.connectorActive {
+  background: linear-gradient(90deg,
+    var(--accent-orange) 0%,
+    transparent 50%,
+    var(--accent-orange) 100%
+  );
+  background-size: 200% 100%;
+  animation: connectionFlow 1.5s linear infinite;
+}

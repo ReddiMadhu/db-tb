@@ -15,9 +15,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LakeShift — Tableau → Databricks Migration Platform",
+  title: "Tableau to Databricks Migration Platform",
   description:
-    "Enterprise control plane for migrating Tableau dashboards to Databricks AI/BI (Lakeview). Inspect, validate, preview, and deploy with confidence.",
+    "Enterprise migration platform for converting Tableau dashboards to Databricks AI/BI (Lakeview). Upload, validate, convert, and deploy with confidence.",
 };
 
 export default function RootLayout({

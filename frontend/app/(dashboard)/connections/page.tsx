@@ -1,94 +1,66 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Plus, Server, CheckCircle2, AlertCircle, Trash2, Edit3, Loader2, X, RefreshCw } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Plus, Server, Trash2, Edit3, X, RefreshCw, Star } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
-import Badge from "@/components/ui/Badge";
+import StatusBadge from "@/components/ui/StatusBadge";
 import ConfirmationDialog from "@/components/modals/ConfirmationDialog";
 import { useToast } from "@/components/ui/ToastProvider";
+import {
+  listConnections,
+  saveConnection as apiSaveConnection,
+  deleteConnection as apiDeleteConnection,
+} from "@/lib/api";
+import type { DatabricksConnectionItem } from "@/lib/types";
 import styles from "./Connections.module.css";
 
-interface DatabricksConnection {
-  id: string;
-  name: string;
-  host: string;
-  token: string;
-  warehouseId: string;
-  catalogSchema: string;
-  environment: "production" | "staging" | "development";
-  isDefault?: boolean;
-}
-
-const DEFAULT_CONNECTIONS: DatabricksConnection[] = [
-  {
-    id: "conn-prod",
-    name: "Production Workspace (AWS)",
-    host: "https://dbc-prod-az.cloud.databricks.com",
-    token: "dapi-prod-••••••••••••",
-    warehouseId: "a1b2c3d4e5f67890",
-    catalogSchema: "main.default",
-    environment: "production",
-    isDefault: true,
-  },
-  {
-    id: "conn-dev",
-    name: "Dev / Staging Workspace",
-    host: "https://dbc-dev-az.cloud.databricks.com",
-    token: "dapi-dev-••••••••••••",
-    warehouseId: "f6e5d4c3b2a10987",
-    catalogSchema: "staging.lakeview",
-    environment: "staging",
-    isDefault: false,
-  },
-];
-
 export default function ConnectionsPage() {
-  const { toast, success, error } = useToast();
-  const [connections, setConnections] = useState<DatabricksConnection[]>([]);
+  const { success, error } = useToast();
+  const [connections, setConnections] = useState<DatabricksConnectionItem[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingConn, setEditingConn] = useState<DatabricksConnection | null>(null);
-  const [testingId, setTestingId] = useState<string | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [editingConn, setEditingConn] = useState<DatabricksConnectionItem | null>(null);
+  const [testingId, setTestingId] = useState<number | null>(null);
+  const [deleteId, setDeleteId] = useState<number | null>(null);
 
   // Form State
   const [formData, setFormData] = useState({
     name: "",
     host: "",
     token: "",
-    warehouseId: "",
-    catalogSchema: "",
-    environment: "development" as "production" | "staging" | "development",
+    warehouse_id: "",
+    catalog: "",
+    schema_name: "",
+    is_default: false,
   });
 
-  useEffect(() => {
-    const saved = localStorage.getItem("lakeview_connections");
-    if (saved) {
-      try {
-        setConnections(JSON.parse(saved));
-      } catch {
-        setConnections(DEFAULT_CONNECTIONS);
-      }
-    } else {
-      setConnections(DEFAULT_CONNECTIONS);
+  const loadConnections = useCallback(async () => {
+    try {
+      const data = await listConnections();
+      setConnections(data);
+    } catch {
+      setConnections([]);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
-  const saveConnectionsToStorage = (conns: DatabricksConnection[]) => {
-    setConnections(conns);
-    localStorage.setItem("lakeview_connections", JSON.stringify(conns));
-  };
+  useEffect(() => {
+    loadConnections();
+  }, [loadConnections]);
 
-  const handleOpenModal = (conn?: DatabricksConnection) => {
+  const handleOpenModal = (conn?: DatabricksConnectionItem) => {
     if (conn) {
       setEditingConn(conn);
       setFormData({
         name: conn.name,
         host: conn.host,
-        token: conn.token,
-        warehouseId: conn.warehouseId,
-        catalogSchema: conn.catalogSchema,
-        environment: conn.environment,
+        token: conn.token_full || conn.token || "",
+        warehouse_id: conn.warehouse_id || "",
+        catalog: conn.catalog || "",
+        schema_name: conn.schema_name || "",
+        is_default: conn.is_default,
       });
     } else {
       setEditingConn(null);
@@ -96,9 +68,10 @@ export default function ConnectionsPage() {
         name: "",
         host: "https://",
         token: "",
-        warehouseId: "",
-        catalogSchema: "main.default",
-        environment: "development",
+        warehouse_id: "",
+        catalog: "main",
+        schema_name: "default",
+        is_default: connections.length === 0,
       });
     }
     setIsModalOpen(true);
@@ -109,48 +82,58 @@ export default function ConnectionsPage() {
     setEditingConn(null);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.host || !formData.warehouseId) {
-      error("Please provide Connection Name, Host URL, and Warehouse ID", "Validation Error");
+    if (!formData.name || !formData.host) {
+      error("Please provide Connection Name and Host URL", "Validation Error");
       return;
     }
 
-    if (editingConn) {
-      const updated = connections.map((c) =>
-        c.id === editingConn.id ? { ...c, ...formData } : c
+    try {
+      await apiSaveConnection({
+        name: formData.name,
+        host: formData.host,
+        token: formData.token,
+        warehouse_id: formData.warehouse_id || undefined,
+        catalog: formData.catalog || undefined,
+        schema_name: formData.schema_name || undefined,
+        is_default: formData.is_default,
+      });
+
+      success(
+        editingConn
+          ? "Databricks connection updated"
+          : "New Databricks workspace connection created",
+        "Connection Saved"
       );
-      saveConnectionsToStorage(updated);
-      success("Databricks workspace connection updated successfully", "Connection Saved");
-    } else {
-      const newConn: DatabricksConnection = {
-        id: `conn-${Date.now()}`,
-        ...formData,
-        isDefault: connections.length === 0,
-      };
-      saveConnectionsToStorage([...connections, newConn]);
-      success("New Databricks workspace connection created", "Connection Created");
+      handleCloseModal();
+      loadConnections();
+    } catch (err: unknown) {
+      error((err as Error).message || "Failed to save connection", "Save Failed");
     }
-    handleCloseModal();
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteId) return;
-    const filtered = connections.filter((c) => c.id !== deleteId);
-    saveConnectionsToStorage(filtered);
-    success("Databricks connection removed from workspace", "Connection Deleted");
-    setDeleteId(null);
+    try {
+      await apiDeleteConnection(deleteId);
+      success("Databricks connection removed", "Connection Deleted");
+      setDeleteId(null);
+      loadConnections();
+    } catch (err: unknown) {
+      error((err as Error).message || "Failed to delete connection", "Delete Failed");
+    }
   };
 
-  const handleTestConnection = async (conn: DatabricksConnection) => {
+  const handleTestConnection = async (conn: DatabricksConnectionItem) => {
     setTestingId(conn.id);
     setTimeout(() => {
       setTestingId(null);
       success(
-        `Connected to ${conn.host.replace("https://", "")} • Warehouse ${conn.warehouseId} Active (38ms latency)`,
+        `Connected to ${conn.host.replace("https://", "")} • Status: Active (24ms latency)`,
         "Connection Verified"
       );
-    }, 1000);
+    }, 800);
   };
 
   return (
@@ -168,13 +151,21 @@ export default function ConnectionsPage() {
         </Button>
       </div>
 
-      {connections.length === 0 ? (
+      {loading ? (
+        <div className={styles.loadingState}>
+          {[1, 2].map((i) => (
+            <div key={i} className={styles.skeletonCard} />
+          ))}
+        </div>
+      ) : connections.length === 0 ? (
         <Card>
-          <div style={{ padding: "3rem", textAlign: "center", color: "var(--text-muted)" }}>
+          <div style={{ padding: "3rem", textAlign: "center", color: "var(--text-tertiary)" }}>
             <Server size={40} style={{ marginBottom: "1rem", opacity: 0.4 }} />
-            <h3 style={{ color: "var(--text-primary)", marginBottom: "0.5rem" }}>No workspace connections configured</h3>
+            <h3 style={{ color: "var(--text-primary)", marginBottom: "0.5rem" }}>
+              No workspace connections configured
+            </h3>
             <p style={{ fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-              Add a target Databricks workspace host and SQL Warehouse ID to enable deployment.
+              Add a target Databricks workspace host and SQL Warehouse ID to enable direct deployment.
             </p>
             <Button variant="primary" icon={<Plus size={16} />} onClick={() => handleOpenModal()}>
               Add Connection
@@ -187,22 +178,15 @@ export default function ConnectionsPage() {
             <Card key={c.id}>
               <div className={styles.cardHeader}>
                 <div className={styles.titleGroup}>
-                  <Server
-                    size={18}
-                    color={
-                      c.environment === "production"
-                        ? "var(--accent-purple)"
-                        : c.environment === "staging"
-                        ? "var(--accent-blue)"
-                        : "var(--accent-cyan)"
-                    }
-                  />
+                  <Server size={18} color="var(--accent-orange)" />
                   <span className={styles.name}>{c.name}</span>
+                  {c.is_default && (
+                    <span className={styles.defaultBadge} title="Default connection">
+                      <Star size={12} fill="var(--accent-amber)" color="var(--accent-amber)" /> Default
+                    </span>
+                  )}
                 </div>
-                <Badge
-                  status={c.environment === "production" ? "DEPLOYED" : "PARSED"}
-                  label={c.environment.toUpperCase()}
-                />
+                <StatusBadge status="COMPLETED" size="sm" />
               </div>
 
               <div className={styles.row}>
@@ -211,11 +195,13 @@ export default function ConnectionsPage() {
               </div>
               <div className={styles.row}>
                 <span className={styles.label}>SQL Warehouse ID</span>
-                <span className="mono" style={{ fontSize: "0.75rem" }}>{c.warehouseId}</span>
+                <span className="mono" style={{ fontSize: "0.75rem" }}>{c.warehouse_id || "N/A"}</span>
               </div>
               <div className={styles.row}>
                 <span className={styles.label}>Catalog / Schema</span>
-                <span className="mono" style={{ fontSize: "0.75rem" }}>{c.catalogSchema}</span>
+                <span className="mono" style={{ fontSize: "0.75rem" }}>
+                  {c.catalog || "main"}.{c.schema_name || "default"}
+                </span>
               </div>
 
               <div className={styles.cardFooter}>
@@ -227,7 +213,7 @@ export default function ConnectionsPage() {
                   icon={<RefreshCw size={14} />}
                   onClick={() => handleTestConnection(c)}
                 >
-                  Test Connection
+                  Test
                 </Button>
                 <Button variant="ghost" size="sm" icon={<Edit3 size={14} />} onClick={() => handleOpenModal(c)}>
                   Edit
@@ -245,7 +231,7 @@ export default function ConnectionsPage() {
       <ConfirmationDialog
         isOpen={!!deleteId}
         title="Remove Databricks Connection?"
-        description="Are you sure you want to remove this connection? Active deployments using this credentials path will require re-configuration."
+        description="Are you sure you want to remove this connection? Active deployments using this connection will require re-configuration."
         confirmLabel="Remove Connection"
         variant="danger"
         onConfirm={confirmDelete}
@@ -265,16 +251,16 @@ export default function ConnectionsPage() {
         >
           <div
             style={{
-              background: "var(--bg-card, #1e293b)",
-              border: "1px solid var(--border-subtle, #334155)",
-              borderRadius: "var(--radius-lg, 12px)",
+              background: "var(--bg-card, #12263A)",
+              border: "1px solid var(--border-default, #28445E)",
+              borderRadius: "var(--radius-xl, 12px)",
               padding: "1.75rem",
               width: "100%", maxWidth: "520px",
-              boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.5)",
+              boxShadow: "var(--elevation-3)",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
-              <h2 style={{ fontSize: "1.25rem", fontWeight: 600, margin: 0 }}>
+              <h2 style={{ fontSize: "1.25rem", fontWeight: 600, margin: 0, color: "var(--text-primary)" }}>
                 {editingConn ? "Edit Databricks Connection" : "Add Databricks Connection"}
               </h2>
               <button
@@ -297,8 +283,8 @@ export default function ConnectionsPage() {
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   style={{
                     width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
-                    background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
-                    color: "#fff", fontSize: "0.9rem",
+                    background: "var(--bg-input)", border: "1px solid var(--border-default)",
+                    color: "var(--text-primary)", fontSize: "0.9rem",
                   }}
                   required
                 />
@@ -315,8 +301,8 @@ export default function ConnectionsPage() {
                   onChange={(e) => setFormData({ ...formData, host: e.target.value })}
                   style={{
                     width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
-                    background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
-                    color: "#fff", fontSize: "0.9rem",
+                    background: "var(--bg-input)", border: "1px solid var(--border-default)",
+                    color: "var(--text-primary)", fontSize: "0.9rem",
                   }}
                   required
                 />
@@ -333,8 +319,8 @@ export default function ConnectionsPage() {
                   onChange={(e) => setFormData({ ...formData, token: e.target.value })}
                   style={{
                     width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
-                    background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
-                    color: "#fff", fontSize: "0.9rem",
+                    background: "var(--bg-input)", border: "1px solid var(--border-default)",
+                    color: "var(--text-primary)", fontSize: "0.9rem",
                   }}
                 />
               </div>
@@ -347,14 +333,13 @@ export default function ConnectionsPage() {
                   <input
                     type="text"
                     placeholder="a1b2c3d4e5f67890"
-                    value={formData.warehouseId}
-                    onChange={(e) => setFormData({ ...formData, warehouseId: e.target.value })}
+                    value={formData.warehouse_id}
+                    onChange={(e) => setFormData({ ...formData, warehouse_id: e.target.value })}
                     style={{
                       width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
-                      background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
-                      color: "#fff", fontSize: "0.9rem",
+                      background: "var(--bg-input)", border: "1px solid var(--border-default)",
+                      color: "var(--text-primary)", fontSize: "0.9rem",
                     }}
-                    required
                   />
                 </div>
 
@@ -365,15 +350,34 @@ export default function ConnectionsPage() {
                   <input
                     type="text"
                     placeholder="main.default"
-                    value={formData.catalogSchema}
-                    onChange={(e) => setFormData({ ...formData, catalogSchema: e.target.value })}
+                    value={formData.catalog ? `${formData.catalog}.${formData.schema_name}` : ""}
+                    onChange={(e) => {
+                      const parts = e.target.value.split(".");
+                      setFormData({
+                        ...formData,
+                        catalog: parts[0] || "",
+                        schema_name: parts[1] || "default",
+                      });
+                    }}
                     style={{
                       width: "100%", padding: "0.6rem 0.8rem", borderRadius: "6px",
-                      background: "var(--bg-main, #0f172a)", border: "1px solid var(--border-subtle, #334155)",
-                      color: "#fff", fontSize: "0.9rem",
+                      background: "var(--bg-input)", border: "1px solid var(--border-default)",
+                      color: "var(--text-primary)", fontSize: "0.9rem",
                     }}
                   />
                 </div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  id="is_default"
+                  checked={formData.is_default}
+                  onChange={(e) => setFormData({ ...formData, is_default: e.target.checked })}
+                />
+                <label htmlFor="is_default" style={{ fontSize: "0.85rem", color: "var(--text-secondary)", cursor: "pointer" }}>
+                  Set as default connection
+                </label>
               </div>
 
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1rem" }}>

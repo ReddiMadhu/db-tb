@@ -1,0 +1,50 @@
+.container {
+  width: 100%;
+}
+
+.barTrack {
+  width: 100%;
+  height: var(--progress-bar-height, 3px);
+  background: var(--border-default);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-orange), #FF6B35);
+  border-radius: 2px;
+  transition: width var(--duration-slower) var(--easing-smooth);
+  position: relative;
+}
+
+.barFill.animate {
+  background: linear-gradient(90deg, var(--accent-orange), #FF6B35, var(--accent-orange));
+  background-size: 200% 100%;
+  animation: connectionFlow 2s linear infinite;
+}
+
+.barFill.complete {
+  background: linear-gradient(90deg, var(--accent-green), #27AE60);
+  animation: none;
+}
+
+.info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-1) 0;
+  font-size: var(--font-size-xs);
+}
+
+.activity {
+  color: var(--accent-orange);
+  font-weight: var(--font-weight-medium);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.elapsed {
+  color: var(--text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: 0.7rem;
+}

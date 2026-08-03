@@ -349,12 +349,17 @@ def normalize_tom_to_ubim(
     default_catalog: str = "",
     default_schema: str = "",
     field_resolver: Optional[CanonicalFieldResolver] = None,
+    semantic_model=None,
 ) -> IntermediateDashboard:
-    """Stage 6 Normalizer: Maps Tableau Object Model (TOM) to Universal BI Model (UBIM)."""
+    """Stage 6 Normalizer: Maps Tableau Object Model (TOM) to Universal BI Model (UBIM).
+
+    When semantic_model is provided, field data types are enriched from UC metadata
+    and the resolver cross-references Tableau fields against the actual schema.
+    """
     table_mapping = table_mapping or {}
 
-    # Build canonical field resolver if not provided
-    resolver = field_resolver or CanonicalFieldResolver(workbook_meta)
+    # Build canonical field resolver if not provided — inject semantic model for enrichment
+    resolver = field_resolver or CanonicalFieldResolver(workbook_meta, semantic_model=semantic_model)
 
     # Auto-build table mapping from datasource metadata + config
     auto_mapping, unresolved = build_table_mapping(

@@ -219,6 +219,7 @@
             "x": { "$ref": "#/$defs/AxisEncoding" },
             "y": { "$ref": "#/$defs/AxisEncoding" },
             "color": { "$ref": "#/$defs/ColorEncoding" },
+            "angle": { "$ref": "#/$defs/AxisEncoding" },
             "value": { "$ref": "#/$defs/ValueEncoding" },
             "label": { "$ref": "#/$defs/LabelEncoding" },
             "columns": {

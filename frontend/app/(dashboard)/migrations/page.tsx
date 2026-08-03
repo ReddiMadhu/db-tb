@@ -1,12 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
-import { Upload, ArrowRightLeft, ArrowRight, Layers } from "lucide-react";
-import Button from "@/components/ui/Button";
-import Card from "@/components/ui/Card";
-import Badge from "@/components/ui/Badge";
-import { SkeletonCard } from "@/components/ui/Skeleton";
+import { useRouter } from "next/navigation";
+import { Upload, ExternalLink, Trash2, FileUp } from "lucide-react";
+import StatusBadge from "@/components/ui/StatusBadge";
 import UploadModal from "@/components/migration/UploadModal";
 import { listMigrationJobs } from "@/lib/api";
 import styles from "./Migrations.module.css";
@@ -22,6 +19,7 @@ interface MigrationJobItem {
 }
 
 export default function MigrationsPage() {
+  const router = useRouter();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [jobs, setJobs] = useState<MigrationJobItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,62 +35,116 @@ export default function MigrationsPage() {
     <div className={styles.container}>
       <div className={styles.header}>
         <div>
-          <h1 className={styles.title}>Migration Projects</h1>
-          <p className={styles.subtitle}>Browse and manage active Tableau → Lakeview migration jobs.</p>
+          <h1 className={styles.title}>Migrations</h1>
+          <p className={styles.subtitle}>
+            Browse and manage active Tableau → Databricks migration jobs.
+          </p>
         </div>
-
-        <Button variant="primary" icon={<Upload size={16} />} onClick={() => setUploadOpen(true)}>
-          New Migration
-        </Button>
+        <button
+          className={styles.uploadBtn}
+          onClick={() => setUploadOpen(true)}
+        >
+          <FileUp size={16} />
+          Upload Workbook
+        </button>
       </div>
 
       {loading ? (
-        <div className={styles.grid}>
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
+        <div className={styles.loadingState}>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className={styles.skeletonRow} />
+          ))}
         </div>
       ) : jobs.length === 0 ? (
-        <Card>
-          <div style={{ padding: "3rem", textAlign: "center", color: "var(--text-muted)" }}>
-            <Layers size={42} style={{ marginBottom: "1rem", opacity: 0.4 }} />
-            <h3 style={{ color: "var(--text-primary)", marginBottom: "0.5rem" }}>No migration projects found</h3>
-            <p style={{ fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-              Upload a Tableau workbook (.twbx / .twb) to create your first migration job.
-            </p>
-            <Button variant="primary" icon={<Upload size={16} />} onClick={() => setUploadOpen(true)}>
-              New Migration
-            </Button>
-          </div>
-        </Card>
+        <div className={styles.emptyState}>
+          <Upload size={48} strokeWidth={1} />
+          <h3>No migrations yet</h3>
+          <p>Upload a Tableau workbook to create your first migration.</p>
+          <button
+            className={styles.emptyUploadBtn}
+            onClick={() => setUploadOpen(true)}
+          >
+            <FileUp size={16} />
+            Upload Workbook
+          </button>
+        </div>
       ) : (
-        <div className={styles.grid}>
-          {jobs.map((m) => (
-            <Card key={m.job_uuid} clickable>
-              <div className={styles.cardHeader}>
-                <div className={styles.nameGroup}>
-                  <ArrowRightLeft size={16} color="var(--accent-orange)" />
-                  <span className={styles.name}>{m.source_filename}</span>
-                </div>
-                <Badge status={m.status} />
-              </div>
-
-              <div className={styles.details}>
-                <span>Stage {m.current_stage}/10</span> • <span>UUID: {m.job_uuid.slice(0, 8)}</span>
-              </div>
-
-              <div className={styles.cardFooter}>
-                <span>Status: {m.status}</span>
-                <Link href={`/migrations/${m.job_uuid}`} className={styles.link}>
-                  Open Workspace <ArrowRight size={14} />
-                </Link>
-              </div>
-            </Card>
-          ))}
+        <div className={styles.tableCard}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Filename</th>
+                <th>Status</th>
+                <th>Stages</th>
+                <th>Created</th>
+                <th>Completed</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map((job) => (
+                <tr
+                  key={job.job_uuid}
+                  className={styles.tableRow}
+                  onClick={() => router.push(`/migrations/${job.job_uuid}`)}
+                >
+                  <td className={styles.filenameCell}>
+                    <span className={styles.filename}>{job.source_filename}</span>
+                    <span className={styles.uuid}>{job.job_uuid}</span>
+                  </td>
+                  <td>
+                    <StatusBadge status={job.status} />
+                  </td>
+                  <td className={styles.monoCell}>{job.current_stage}/9</td>
+                  <td className={styles.dateCell}>
+                    {job.created_at
+                      ? new Date(job.created_at).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "—"}
+                  </td>
+                  <td className={styles.dateCell}>
+                    {job.completed_at
+                      ? new Date(job.completed_at).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "—"}
+                  </td>
+                  <td>
+                    <button
+                      className={styles.actionBtn}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/migrations/${job.job_uuid}`);
+                      }}
+                      title="Open workspace"
+                    >
+                      <ExternalLink size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {uploadOpen && <UploadModal onClose={() => setUploadOpen(false)} />}
+      {uploadOpen && (
+        <UploadModal
+          onClose={() => setUploadOpen(false)}
+          onSuccess={(jobUuid) => {
+            setUploadOpen(false);
+            router.push(`/migrations/${jobUuid}`);
+          }}
+        />
+      )}
     </div>
   );
 }

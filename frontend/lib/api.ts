@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════
-   LakeShift API Client
+   Tableau to Databricks Migration — API Client
    ═══════════════════════════════════════════════ */
 
 import type {
@@ -10,6 +10,10 @@ import type {
   MigrationReport,
   BundleResponse,
   DiffResponse,
+  StagesResponse,
+  StageDetail,
+  PipelineProgress,
+  DatabricksConnectionItem,
 } from "./types";
 
 // Base URL — configurable for Azure App Service deployment
@@ -104,7 +108,67 @@ export async function deployToDatabricks(
   });
 }
 
-// ── Datasource Mapping APIs ──
+// ═══════════════════════════════════════════════
+// NEW — Pipeline Stage APIs
+// ═══════════════════════════════════════════════
+
+// ── Get All Stages ──
+export async function getStages(jobUuid: string): Promise<StagesResponse> {
+  return apiFetch<StagesResponse>(`/migrations/${jobUuid}/stages`);
+}
+
+// ── Get Stage Detail ──
+export async function getStageDetail(jobUuid: string, stageId: string): Promise<StageDetail> {
+  return apiFetch<StageDetail>(`/migrations/${jobUuid}/stages/${stageId}`);
+}
+
+// ── Get Progress (polling) ──
+export async function getProgress(jobUuid: string): Promise<PipelineProgress> {
+  return apiFetch<PipelineProgress>(`/migrations/${jobUuid}/progress`);
+}
+
+// ═══════════════════════════════════════════════
+// NEW — Connections APIs
+// ═══════════════════════════════════════════════
+
+// ── List Connections ──
+export async function listConnections(): Promise<DatabricksConnectionItem[]> {
+  return apiFetch<DatabricksConnectionItem[]>("/connections/");
+}
+
+// ── Save Connection ──
+export async function saveConnection(data: {
+  name: string;
+  host: string;
+  token: string;
+  warehouse_id?: string;
+  catalog?: string;
+  schema_name?: string;
+  is_default?: boolean;
+}): Promise<{ id: number; name: string; host: string; message: string }> {
+  return apiFetch("/connections/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+// ── Delete Connection ──
+export async function deleteConnection(id: number): Promise<{ message: string }> {
+  return apiFetch(`/connections/${id}`, { method: "DELETE" });
+}
+
+// ── Get Default Connection ──
+export async function getDefaultConnection(): Promise<{
+  has_default: boolean;
+  connection: DatabricksConnectionItem | null;
+}> {
+  return apiFetch("/connections/default");
+}
+
+// ═══════════════════════════════════════════════
+// Datasource Mapping APIs (unchanged)
+// ═══════════════════════════════════════════════
+
 import type {
   TableauDatasourceInfo,
   EmbeddedFileInfo,
@@ -209,4 +273,3 @@ export async function validateMappings(
     body: JSON.stringify({ host, token, warehouse_id: warehouseId }),
   });
 }
-

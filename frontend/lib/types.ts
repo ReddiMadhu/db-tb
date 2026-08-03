@@ -1,33 +1,64 @@
 /* ═══════════════════════════════════════════════
-   LakeShift TypeScript Types
+   Tableau to Databricks Migration — TypeScript Types
    ═══════════════════════════════════════════════ */
 
-// ── Pipeline Stages ──
-export type PipelineStage =
-  | "UPLOAD"
-  | "PARSE"
-  | "DAG"
-  | "MAPPING"
-  | "EXPRESSIONS"
-  | "SQL"
-  | "UBIM"
-  | "GENERATE"
-  | "VALIDATE"
-  | "DEPLOY"
-  | "REPORT";
+// ── Pipeline Stage Status ──
+export type StageStatus = "WAITING" | "RUNNING" | "COMPLETED" | "WARNING" | "FAILED" | "SKIPPED";
 
-export const PIPELINE_STAGES: { key: PipelineStage; label: string; number: number }[] = [
-  { key: "UPLOAD", label: "Upload", number: 1 },
-  { key: "PARSE", label: "Parse", number: 2 },
-  { key: "DAG", label: "DAG", number: 3 },
-  { key: "MAPPING", label: "Mapping", number: 4 },
-  { key: "EXPRESSIONS", label: "Expressions", number: 5 },
-  { key: "SQL", label: "SQL", number: 6 },
-  { key: "UBIM", label: "UBIM", number: 7 },
-  { key: "GENERATE", label: "Generate", number: 8 },
-  { key: "VALIDATE", label: "Validate", number: 9 },
-  { key: "DEPLOY", label: "Deploy", number: 10 },
-];
+// ── Stage Summary (from GET /stages) ──
+export interface StageSummary {
+  stage_id: string;
+  stage_number: number;
+  stage_name: string;
+  status: StageStatus;
+  duration_ms: number | null;
+  metrics: Record<string, unknown>;
+}
+
+// ── Stage Detail (from GET /stages/{stageId}) ──
+export interface StageDetail {
+  stage_id: string;
+  stage_number: number;
+  stage_name: string;
+  status: StageStatus;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number | null;
+  input_summary: string | null;
+  output_summary: string | null;
+  metrics: Record<string, unknown>;
+  logs: string[];
+  warnings: string[];
+  errors: string[];
+  generated_code: string | null;
+}
+
+// ── Pipeline Progress (from GET /progress) ──
+export interface PipelineProgress {
+  job_uuid: string;
+  job_status: string;
+  overall_progress: number;
+  current_stage_id: string | null;
+  current_stage_number: number | null;
+  current_activity: string | null;
+  elapsed_ms: number;
+  completed_stages: number;
+  total_stages: number;
+  stage_statuses: { stage_id: string; status: StageStatus; duration_ms: number | null }[];
+  is_running: boolean;
+  is_complete: boolean;
+  is_failed: boolean;
+}
+
+// ── All Stages Response (from GET /stages) ──
+export interface StagesResponse {
+  job_uuid: string;
+  stages: StageSummary[];
+  overall_progress: number;
+  current_stage: string | null;
+  current_activity: string | null;
+  stage_count: number;
+}
 
 // ── Job Status ──
 export type JobStatus = "UPLOADED" | "PARSED" | "NEEDS_MAPPING" | "EXECUTING" | "COMPLETED" | "FAILED" | "DEPLOYED" | "NEEDS_REVIEW";
@@ -275,4 +306,18 @@ export interface ValidationResult {
   errors: string[];
   warnings: string[];
   tier_status: Record<string, boolean>;
+}
+
+// ── Databricks Connection ──
+export interface DatabricksConnectionItem {
+  id: number;
+  name: string;
+  host: string;
+  token: string;
+  token_full: string;
+  warehouse_id: string | null;
+  catalog: string | null;
+  schema_name: string | null;
+  is_default: boolean;
+  created_at: string | null;
 }

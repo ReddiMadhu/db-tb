@@ -130,6 +130,28 @@ class SortMetadata(BaseModel):
     sort_type: str = "natural"  # natural | data | field | manual
 
 
+class DatabricksConnectionInfo(BaseModel):
+    """Databricks connection details extracted from a Tableau datasource."""
+    datasource_name: str = ""             # Tableau datasource that owns this connection
+    host: str = ""                         # Databricks workspace URL
+    http_path: str = ""                    # SQL Warehouse HTTP path
+    catalog: str = ""                      # Default catalog from connection
+    schema_name: str = ""                  # Default schema from connection
+    warehouse_id: str = ""                 # Derived from http_path
+    auth_method: str = ""                  # PAT, OAuth, AAD, etc.
+    connection_class: str = ""             # Tableau connection class (databricks, spark_thrift_http, etc.)
+    server: str = ""                       # Raw server attribute
+    port: str = ""                         # Connection port
+    jdbc_url: str = ""                     # Full JDBC URL if available
+
+
+# Connection class values that indicate a Databricks connection
+DATABRICKS_CONNECTION_CLASSES = frozenset({
+    'databricks', 'spark', 'spark_thrift_http', 'simba_spark',
+    'generic-jdbc',  # may be Databricks if server contains .databricks.
+})
+
+
 class DatasourceMetadata(BaseModel):
     name: str
     caption: Optional[str] = None
@@ -141,6 +163,7 @@ class DatasourceMetadata(BaseModel):
     calculated_fields: List[CalculatedFieldMetadata] = Field(default_factory=list)
     joins: List[JoinRelationship] = Field(default_factory=list)
     relationships: List[RelationshipMetadata] = Field(default_factory=list)
+    databricks_connection: Optional[DatabricksConnectionInfo] = None  # Set if datasource connects to Databricks
 
 
 class ShelfField(BaseModel):
@@ -205,3 +228,10 @@ class WorkbookMetadata(BaseModel):
     # Field resolution maps — populated by parser for downstream stages
     caption_to_internal_map: Dict[str, str] = Field(default_factory=dict)  # caption → internal_name
     internal_to_caption_map: Dict[str, str] = Field(default_factory=dict)  # internal_name → caption
+    # Databricks connections detected across all datasources
+    databricks_connections: List[DatabricksConnectionInfo] = Field(default_factory=list)
+
+    @property
+    def has_databricks_connections(self) -> bool:
+        """True if any datasource connects to Databricks."""
+        return len(self.databricks_connections) > 0

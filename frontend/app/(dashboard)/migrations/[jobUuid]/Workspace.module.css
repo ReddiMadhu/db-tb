@@ -1,97 +1,180 @@
-.workspaceContainer {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - var(--header-height) - 48px);
-  gap: var(--space-3);
+.page {
+  padding: var(--space-6) var(--space-8);
+  max-width: 1400px;
+  animation: fadeIn 0.3s var(--easing-default);
 }
 
-.topBar {
+/* ── Action Bar ── */
+.actionBar {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--border-default);
-}
-
-.jobTitleGroup {
-  display: flex;
   align-items: center;
-  gap: var(--space-3);
-}
-
-.jobTitle {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-bold);
-
-  color: var(--text-primary);
-}
-
-.topActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.mainSplit {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  background: var(--bg-secondary);
-}
-
-.contentColumn {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.tabBar {
-  display: flex;
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border-default);
-}
-
-.tab {
-  padding: var(--space-3) var(--space-5);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-secondary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: all var(--duration-fast) var(--easing-default);
-}
-
-.tab:hover {
-  color: var(--text-primary);
-}
-
-.tab.active {
-  color: var(--accent-blue);
-  border-bottom-color: var(--accent-blue);
-  background: var(--bg-secondary);
-}
-
-.tabPanel {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-5);
-  display: flex;
-  flex-direction: column;
+  margin: var(--space-4) 0 var(--space-6);
   gap: var(--space-4);
 }
 
-.yamlPre {
-  background: var(--bg-primary);
-  padding: var(--space-4);
-  border-radius: var(--radius-md);
+.actionBarLeft {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+
+.actionBarRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.backBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
   border: 1px solid var(--border-default);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  flex-shrink: 0;
+}
+
+.backBtn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-emphasis);
+  color: var(--text-primary);
+}
+
+.jobInfo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.jobFilename {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  background: linear-gradient(135deg, #FB4E0B, #E03E00);
+  color: white;
+  border: none;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  box-shadow: 0 2px 8px rgba(251, 78, 11, 0.3);
+}
+
+.runBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(251, 78, 11, 0.4);
+}
+
+.runBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.deployBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  background: var(--accent-green-muted);
   color: var(--accent-green);
-  white-space: pre-wrap;
+  border: 1px solid rgba(46, 204, 113, 0.3);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.deployBtn:hover {
+  background: rgba(46, 204, 113, 0.2);
+  border-color: var(--accent-green);
+}
+
+/* ── Error Banner ── */
+.errorBanner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-error);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  border-radius: var(--radius-lg);
+  color: var(--accent-red);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--space-4);
+}
+
+.errorBanner button {
+  background: none;
+  border: none;
+  color: var(--accent-red);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+}
+
+/* ── Stepper Section ── */
+.stepperSection {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  margin-bottom: var(--space-6);
+  box-shadow: var(--elevation-1);
+}
+
+/* ── Detail Section ── */
+.detailSection {
+  min-height: 200px;
+}
+
+/* ── Loading Skeleton ── */
+.loadingSkeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding-top: var(--space-8);
+}
+
+.skeletonBar {
+  height: 3px;
+  background: linear-gradient(90deg, var(--bg-hover) 25%, var(--bg-active) 50%, var(--bg-hover) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 2px;
+}
+
+.skeletonStepper {
+  height: 100px;
+  background: linear-gradient(90deg, var(--bg-hover) 25%, var(--bg-active) 50%, var(--bg-hover) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-xl);
+}
+
+.skeletonPanel {
+  height: 300px;
+  background: linear-gradient(90deg, var(--bg-hover) 25%, var(--bg-active) 50%, var(--bg-hover) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-xl);
 }

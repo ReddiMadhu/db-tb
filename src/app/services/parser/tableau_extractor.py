@@ -17,7 +17,8 @@ from app.models.metadata import (
     CalculatedFieldMetadata, WorksheetMetadata, DashboardMetadata, DashboardZoneMetadata,
     JoinRelationship, RelationshipMetadata, ParameterMetadata, ActionMetadata,
     HierarchyMetadata, GroupMetadata, SetMetadata, BinMetadata,
-    EncodingMetadata, FilterMetadata, SortMetadata, ShelfField
+    EncodingMetadata, FilterMetadata, SortMetadata, ShelfField,
+    DatabricksConnectionInfo, DATABRICKS_CONNECTION_CLASSES,
 )
 
 
@@ -624,7 +625,7 @@ def extract_connections(root: etree._Element, ds_prefixes: list) -> List[Dict[st
         caption = nc.get("caption", "")
         conn = nc.find("connection")
         if conn is not None:
-            connections.append({
+            conn_info = {
                 "caption": caption,
                 "type": conn.get("class", ""),
                 "filename": conn.get("filename", ""),
@@ -632,7 +633,36 @@ def extract_connections(root: etree._Element, ds_prefixes: list) -> List[Dict[st
                 "database": conn.get("database", ""),
                 "schema": conn.get("schema", ""),
                 "port": conn.get("port", ""),
-            })
+            }
+            # Extract Databricks-specific attributes
+            http_path = (
+                conn.get("httppath", "")
+                or conn.get("HTTPPath", "")
+                or conn.get("http-path", "")
+            )
+            # Also check connection-customization elements (Simba/ODBC drivers)
+            if not http_path:
+                for cust in conn.xpath(".//connection-customization/customization[@name='HTTPPath']"):
+                    http_path = cust.get("value", "")
+                for cust in conn.xpath(".//connection-customization/customization[@name='httppath']"):
+                    http_path = http_path or cust.get("value", "")
+            conn_info["http_path"] = http_path
+
+            # Authentication mechanism
+            auth_mech = conn.get("authentication", "") or conn.get("AuthMech", "")
+            if not auth_mech:
+                for cust in conn.xpath(".//connection-customization/customization[@name='AuthMech']"):
+                    auth_mech = cust.get("value", "")
+            conn_info["auth_method"] = auth_mech
+
+            # JDBC URL (for generic-jdbc connections to Databricks)
+            jdbc_url = conn.get("url", "") or conn.get("jdbc-url", "")
+            if not jdbc_url:
+                for cust in conn.xpath(".//connection-customization/customization[@name='url']"):
+                    jdbc_url = cust.get("value", "")
+            conn_info["jdbc_url"] = jdbc_url
+
+            connections.append(conn_info)
     return connections
 
 
@@ -946,6 +976,110 @@ def extract_dashboard_actions(root: etree._Element) -> List[ActionMetadata]:
     return actions
 
 
+def _detect_databricks_connection(
+    conn_el: etree._Element,
+    conn_class: str,
+    datasource_name: str,
+    datasource_caption: str = None,
+) -> DatabricksConnectionInfo | None:
+    """Detect if a Tableau connection element is a Databricks connection.
+
+    Handles multiple driver types:
+      - Native: class="databricks"
+      - Spark Thrift: class="spark_thrift_http" with Databricks server
+      - Simba: class="simba_spark" with Databricks server
+      - Generic JDBC: class="generic-jdbc" with Databricks JDBC URL
+    """
+    conn_class_lower = (conn_class or "").lower().strip()
+    server = conn_el.get("server", "").strip()
+    database = conn_el.get("database", conn_el.get("dbname", "")).strip()
+    schema = conn_el.get("schema", "").strip()
+    port = conn_el.get("port", "").strip()
+
+    # Determine if this is a Databricks connection
+    is_databricks = False
+
+    if conn_class_lower in ('databricks',):
+        is_databricks = True
+    elif conn_class_lower in ('spark_thrift_http', 'simba_spark', 'spark'):
+        # Only Databricks if server contains .databricks. or .azuredatabricks.
+        if '.databricks.' in server.lower() or '.azuredatabricks.' in server.lower():
+            is_databricks = True
+    elif conn_class_lower == 'generic-jdbc':
+        # Check JDBC URL for Databricks
+        jdbc_url = conn_el.get("url", "") or conn_el.get("jdbc-url", "")
+        if not jdbc_url:
+            for cust in conn_el.xpath(".//connection-customization/customization[@name='url']"):
+                jdbc_url = cust.get("value", "")
+        if 'databricks' in jdbc_url.lower():
+            is_databricks = True
+
+    if not is_databricks:
+        return None
+
+    # Extract HTTP Path
+    http_path = (
+        conn_el.get("httppath", "")
+        or conn_el.get("HTTPPath", "")
+        or conn_el.get("http-path", "")
+    )
+    if not http_path:
+        for cust in conn_el.xpath(".//connection-customization/customization[@name='HTTPPath']"):
+            http_path = cust.get("value", "")
+        for cust in conn_el.xpath(".//connection-customization/customization[@name='httppath']"):
+            http_path = http_path or cust.get("value", "")
+
+    # Derive warehouse ID from HTTP path: /sql/1.0/warehouses/{warehouse_id}
+    warehouse_id = ""
+    if http_path:
+        wh_match = re.search(r'/sql/[\d.]+/warehouses/([a-f0-9]+)', http_path)
+        if wh_match:
+            warehouse_id = wh_match.group(1)
+
+    # Extract authentication method
+    auth_method = conn_el.get("authentication", "") or conn_el.get("AuthMech", "")
+    if not auth_method:
+        for cust in conn_el.xpath(".//connection-customization/customization[@name='AuthMech']"):
+            auth_method = cust.get("value", "")
+    # Normalize auth method
+    if auth_method == "3" or auth_method.lower() == "pat":
+        auth_method = "PAT"
+    elif auth_method == "11" or 'oauth' in auth_method.lower():
+        auth_method = "OAuth"
+    elif auth_method == "1" or 'aad' in auth_method.lower():
+        auth_method = "AAD"
+
+    # Normalize host: ensure https:// prefix
+    host = server
+    if host and not host.startswith("http"):
+        host = f"https://{host}"
+
+    # Extract JDBC URL
+    jdbc_url = conn_el.get("url", "") or conn_el.get("jdbc-url", "")
+    if not jdbc_url:
+        for cust in conn_el.xpath(".//connection-customization/customization[@name='url']"):
+            jdbc_url = cust.get("value", "")
+
+    # Extract catalog from database or specific attribute
+    catalog = database
+    if not catalog:
+        catalog = conn_el.get("catalog", "")
+
+    return DatabricksConnectionInfo(
+        datasource_name=datasource_name,
+        host=host,
+        http_path=http_path,
+        catalog=catalog,
+        schema_name=schema,
+        warehouse_id=warehouse_id,
+        auth_method=auth_method,
+        connection_class=conn_class_lower,
+        server=server,
+        port=port,
+        jdbc_url=jdbc_url,
+    )
+
+
 def parse_workbook(file_path: str) -> WorkbookMetadata:
     """Master entrypoint: Parses `.twb`/`.twbx` into full TOM model."""
     root = _load_xml(file_path)
@@ -979,11 +1113,15 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         ds_name = ds_el.attrib.get("name", "Unknown")
         ds_name_list.append(ds_name)
         
-        # Detect connection type
+        # Detect connection type and Databricks-specific attributes
         conn_type = None
+        db_conn_info = None
         conn_el = ds_el.find(".//connection[@class]")
         if conn_el is not None:
             conn_type = conn_el.get("class", "")
+            db_conn_info = _detect_databricks_connection(
+                conn_el, conn_type, ds_name, ds_el.attrib.get("caption")
+            )
         
         ds_meta = DatasourceMetadata(
             name=ds_name,
@@ -993,8 +1131,11 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
             tables=extract_tables(ds_el, ds_prefixes),
             columns=extract_columns(ds_el, ds_prefixes, caption_map, alias_map),
             joins=extract_joins(ds_el, ds_prefixes),
-            relationships=extract_relationships(ds_el, ds_prefixes)
+            relationships=extract_relationships(ds_el, ds_prefixes),
+            databricks_connection=db_conn_info,
         )
+        if db_conn_info:
+            workbook.databricks_connections.append(db_conn_info)
         # Extract calculated fields from columns
         for col_meta in ds_meta.columns:
             if col_meta.formula:

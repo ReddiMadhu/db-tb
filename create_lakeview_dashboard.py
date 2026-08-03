@@ -320,22 +320,32 @@ class ScatterSpec(WidgetSpec):
 
 
 class PieChartSpec(WidgetSpec):
-    """Pie chart widget. [Inferred: version=3, widgetType='pie']"""
+    """Pie chart widget. Uses color (category) + angle (value) — never x/y."""
 
     DEFAULT_COLORS = ["#077A9D", "#FFAB00", "#00A972", "#FF3621",
                       "#8BCAE7", "#AB4057", "#99DDB4", "#FCA4A1",
                       "#919191", "#BF7080"]
 
-    def __init__(self, title: str, x: AxisEncoding, y: AxisEncoding,
-                 colors: Optional[List[str]] = None):
+    def __init__(self, title: str,
+                 color: Optional[AxisEncoding] = None,
+                 angle: Optional[AxisEncoding] = None,
+                 colors: Optional[List[str]] = None,
+                 # Backward-compat aliases (deprecated — use color/angle)
+                 x: Optional[AxisEncoding] = None,
+                 y: Optional[AxisEncoding] = None):
         super().__init__("pie", 3, title)
-        self.x = x
-        self.y = y
+        self.color = color or x
+        self.angle = angle or y
+        if self.color is None or self.angle is None:
+            raise ValueError("PieChartSpec requires color (category) and angle (value) encodings")
         self.colors = colors or self.DEFAULT_COLORS
 
     def to_dict(self) -> dict:
         d = self._base_dict()
-        d["encodings"] = {"x": self.x.to_dict(), "y": self.y.to_dict()}
+        d["encodings"] = {
+            "color": self.color.to_dict(),
+            "angle": self.angle.to_dict(),
+        }
         d["mark"] = {"colors": self.colors}
         return d
 

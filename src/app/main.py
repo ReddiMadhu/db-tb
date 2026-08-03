@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.db.session import engine, Base
 
 import app.models.db_models  # Ensures all ORM models are registered with Base
+import app.models.stage_model  # Stage results + Databricks connections tables
 
 logger = logging.getLogger(__name__)
 

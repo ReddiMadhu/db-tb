@@ -23,6 +23,12 @@ from app.models.metadata import (
 )
 from app.services.compiler.expression_compiler import compile_expression_to_sql
 
+# Optional import — SemanticModel may not exist if discovery hasn't run
+try:
+    from app.models.semantic_model import SemanticModel
+except ImportError:
+    SemanticModel = None  # type: ignore
+
 
 # Table calculations that cannot be expressed in static SQL
 TABLE_CALC_FUNCTIONS = {
@@ -101,13 +107,14 @@ class CanonicalFieldResolver:
         5. Safe-alias match (_make_safe_alias applied)
     """
 
-    def __init__(self, workbook_meta: WorkbookMetadata):
+    def __init__(self, workbook_meta: WorkbookMetadata, semantic_model=None):
         self._fields: Dict[str, ResolvedField] = {}  # keyed by internal_name
         self._caption_to_internal: Dict[str, str] = {}
         self._caption_lower_to_internal: Dict[str, str] = {}
         self._internal_lower_to_internal: Dict[str, str] = {}
         self._alias_to_internal: Dict[str, str] = {}
         self._physical_to_internal: Dict[str, str] = {}
+        self._semantic_model = semantic_model
 
         # Calculated fields: caption → compiled SQL
         self._calc_field_sql: Dict[str, str] = {}
@@ -115,6 +122,10 @@ class CanonicalFieldResolver:
         self._excluded_fields: Set[str] = set()
 
         self._build(workbook_meta)
+
+        # Enrich with UC metadata if available
+        if semantic_model is not None:
+            self._enrich_from_semantic_model(semantic_model, workbook_meta)
 
     def _build(self, workbook_meta: WorkbookMetadata):
         """Build the canonical resolution maps from workbook metadata."""
@@ -250,6 +261,92 @@ class CanonicalFieldResolver:
         if field.is_calculated and field.compiled_sql:
             self._calc_field_sql[field.internal_name] = field.compiled_sql
             self._calc_field_sql[field.caption] = field.compiled_sql
+
+    def _enrich_from_semantic_model(self, semantic_model, workbook_meta: WorkbookMetadata):
+        """Cross-reference Tableau fields against UC column metadata.
+
+        When a SemanticModel is provided:
+        - UC column names are registered as additional resolution targets
+        - UC data types override Tableau-inferred types
+        - Fields not found in UC are flagged with a warning (but not excluded)
+        """
+        if semantic_model is None:
+            return
+
+        # Get all UC columns across all tables
+        uc_column_names: Dict[str, str] = {}  # lower_name → actual_name
+        uc_column_types: Dict[str, str] = {}  # lower_name → data_type
+        for table in semantic_model.all_tables():
+            for col in table.columns:
+                key = col.name.lower()
+                uc_column_names[key] = col.name
+                uc_column_types[key] = col.data_type
+
+        # Enrich existing fields with UC data types
+        for internal_name, field in self._fields.items():
+            physical_lower = field.physical_name.lower()
+            caption_lower = field.caption.lower()
+
+            # Try matching by physical name first, then caption
+            uc_name = None
+            uc_type = None
+            if physical_lower in uc_column_names:
+                uc_name = uc_column_names[physical_lower]
+                uc_type = uc_column_types[physical_lower]
+            elif caption_lower in uc_column_names:
+                uc_name = uc_column_names[caption_lower]
+                uc_type = uc_column_types[caption_lower]
+
+            if uc_name and uc_type:
+                # Update data type from UC metadata
+                field.datatype = uc_type
+                # If physical name doesn't match UC exactly, prefer UC casing
+                if field.physical_name.lower() == uc_name.lower() and field.physical_name != uc_name:
+                    field.physical_name = uc_name
+                    field.sql_alias = _make_safe_alias(uc_name)
+
+        # Register any UC columns not already known to the resolver
+        for table in semantic_model.all_tables():
+            for col in table.columns:
+                if col.name not in self._fields and col.name not in self._caption_to_internal:
+                    # Check case-insensitive too
+                    if col.name.lower() not in self._internal_lower_to_internal:
+                        field = ResolvedField(
+                            internal_name=col.name,
+                            caption=col.name,
+                            physical_name=col.name,
+                            datatype=col.data_type,
+                            role="measure" if col.is_numeric else "dimension",
+                        )
+                        self._register(field)
+
+    def validate_against_schema(self, table_name: str = "") -> List[Dict[str, str]]:
+        """Validate all resolved fields against the semantic model.
+
+        Returns a list of mismatches: [{field, issue, suggestion}]
+        """
+        if self._semantic_model is None:
+            return []
+
+        mismatches = []
+        for internal_name, field in self._fields.items():
+            if field.is_excluded or field.is_calculated:
+                continue
+
+            # Check if field exists in any UC table
+            matches = self._semantic_model.find_column_by_name(field.physical_name)
+            if not matches:
+                matches = self._semantic_model.find_column_by_name(field.caption)
+
+            if not matches:
+                mismatches.append({
+                    "field": field.caption,
+                    "physical_name": field.physical_name,
+                    "issue": "NOT_IN_UC",
+                    "suggestion": "Column not found in Unity Catalog schema",
+                })
+
+        return mismatches
 
     def _lookup(self, name: str) -> Optional[ResolvedField]:
         """Look up a field by any of its name variants."""

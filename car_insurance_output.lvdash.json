@@ -1,0 +1,898 @@
+{
+  "datasets": [
+    {
+      "name": "b148f2fa",
+      "displayName": "e3d5f4e9",
+      "query": "SELECT `Date_calculation`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "849baed6",
+      "displayName": "a83e6e2f",
+      "query": "SELECT AVG(`claim_amt`) AS `claim_amt` FROM catalog.beneficiary.csv_table"
+    },
+    {
+      "name": "22582638",
+      "displayName": "e88dcd52",
+      "query": "SELECT AVG(`household_income`) AS `household_income` FROM catalog.beneficiary.csv_table"
+    },
+    {
+      "name": "42c23128",
+      "displayName": "d8b8be04",
+      "query": "SELECT `car_make`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "6dd818f2",
+      "displayName": "ce9e6006",
+      "query": "SELECT `car_model`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "68f138c4",
+      "displayName": "b699eda0",
+      "query": "SELECT `car_use`, SUM(`0`) AS `0`, SUM(`pcto:usr:Calculation_1530520194077540352`) AS `pcto_usr_Calculation_1530520194077540352`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "ec37ca19",
+      "displayName": "22774cc3",
+      "query": "SELECT `car_year`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "6492ab9a",
+      "displayName": "ad7cc1f8",
+      "query": "SELECT SUM(`claim_freq`) AS `claim_freq`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table"
+    },
+    {
+      "name": "7816fea5",
+      "displayName": "234bb8d1",
+      "query": "SELECT `education`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "130c3729",
+      "displayName": "796007d2",
+      "query": "SELECT `gender`, SUM(`0`) AS `0`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues`, SUM(`pcto:usr:Calculation_1530520194077540352`) AS `pcto_usr_Calculation_1530520194077540352` FROM catalog.beneficiary.csv_table GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "a225f493",
+      "displayName": "c53f93fc",
+      "query": "SELECT `0` FROM catalog.beneficiary.csv_table ORDER BY 1"
+    },
+    {
+      "name": "587e4550",
+      "displayName": "cb3635b1",
+      "query": "SELECT `marital_status`, SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "ae0edf8c",
+      "displayName": "f8a07811",
+      "query": "SELECT SUM(`claim_amt`) AS `claim_amt` FROM catalog.beneficiary.csv_table"
+    },
+    {
+      "name": "e4184e77",
+      "displayName": "f3973e1a",
+      "query": "SELECT SUM(`Total_Insurance_Policues`) AS `Total_Insurance_Policues` FROM catalog.beneficiary.csv_table"
+    }
+  ],
+  "pages": [
+    {
+      "name": "1ef66165",
+      "displayName": "Car Insurance Dashboard",
+      "layout": [
+        {
+          "widget": {
+            "name": "66c4e27e",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "e4184e77",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`Total_Insurance_Policues`)",
+                      "name": "Total_Insurance_Policues"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "Total_Insurance_Policues",
+                  "displayName": "Total Insurance Policues",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "title": "Total Insurance Policues"
+                  }
+                },
+                "y": {
+                  "fieldName": "Total_Insurance_Policues",
+                  "displayName": "Total Insurance Policues",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Total Insurance Policues"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Total Insurance Policies",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 24,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "22b9e4fe",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ae0edf8c",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`claim_amt`)",
+                      "name": "claim_amt"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "claim_amt",
+                  "displayName": "Claim Amt",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "title": "Claim Amt"
+                  }
+                },
+                "y": {
+                  "fieldName": "claim_amt",
+                  "displayName": "Claim Amt",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Claim Amt"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Total Claim Amount",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 36,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "277ccedb",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "849baed6",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "AVG(`claim_amt`)",
+                      "name": "claim_amt"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "claim_amt",
+                    "displayName": "Claim Amt",
+                    "title": "Claim Amt",
+                    "type": "string",
+                    "displayAs": "string",
+                    "alignContent": "left",
+                    "visible": true,
+                    "order": 100000
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Average Claim Amount",
+                "showTitle": true
+              },
+              "condensed": true,
+              "itemsPerPage": 25
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 48,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "9d65e7e9",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "22582638",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "AVG(`household_income`)",
+                      "name": "household_income"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "household_income",
+                    "displayName": "Household Income",
+                    "title": "Household Income",
+                    "type": "string",
+                    "displayAs": "string",
+                    "alignContent": "left",
+                    "visible": true,
+                    "order": 100000
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Average Household Income",
+                "showTitle": true
+              },
+              "condensed": true,
+              "itemsPerPage": 25
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 60,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "43ba699c",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "587e4550",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`marital_status`",
+                      "name": "marital_status"
+                    },
+                    {
+                      "expression": "SUM(`claim_amt`)",
+                      "name": "claim_amt"
+                    },
+                    {
+                      "expression": "SUM(`claim_freq`)",
+                      "name": "claim_freq"
+                    },
+                    {
+                      "expression": "SUM(`household_income`)",
+                      "name": "household_income"
+                    },
+                    {
+                      "expression": "SUM(`kids_driving`)",
+                      "name": "kids_driving"
+                    },
+                    {
+                      "expression": "SUM(`Total_Insurance_Policues`)",
+                      "name": "Total_Insurance_Policues"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "marital_status",
+                  "displayName": "Marital Status",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "axis": {
+                    "title": "Marital Status"
+                  }
+                },
+                "y": {
+                  "fieldName": "claim_amt",
+                  "displayName": "Claim Amt",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Claim Amt"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Marital Status",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 96,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "561a3da1",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "7816fea5",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`education`",
+                      "name": "education"
+                    },
+                    {
+                      "expression": "SUM(`claim_amt`)",
+                      "name": "claim_amt"
+                    },
+                    {
+                      "expression": "SUM(`claim_freq`)",
+                      "name": "claim_freq"
+                    },
+                    {
+                      "expression": "SUM(`household_income`)",
+                      "name": "household_income"
+                    },
+                    {
+                      "expression": "SUM(`kids_driving`)",
+                      "name": "kids_driving"
+                    },
+                    {
+                      "expression": "SUM(`Total_Insurance_Policues`)",
+                      "name": "Total_Insurance_Policues"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "education",
+                  "displayName": "Education",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "axis": {
+                    "title": "Education"
+                  }
+                },
+                "y": {
+                  "fieldName": "claim_amt",
+                  "displayName": "Claim Amt",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Claim Amt"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Education",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 108,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "08dded91",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "b148f2fa",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`Date_calculation`",
+                      "name": "Date_calculation"
+                    },
+                    {
+                      "expression": "SUM(`Total_Insurance_Policues`)",
+                      "name": "Total_Insurance_Policues"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "Date_calculation",
+                    "displayName": "Date Calculation",
+                    "title": "Date Calculation",
+                    "type": "string",
+                    "displayAs": "string",
+                    "alignContent": "left",
+                    "visible": true,
+                    "order": 100000
+                  },
+                  {
+                    "fieldName": "Total_Insurance_Policues",
+                    "displayName": "Total Insurance Policues",
+                    "title": "Total Insurance Policues",
+                    "type": "string",
+                    "displayAs": "string",
+                    "alignContent": "left",
+                    "visible": true,
+                    "order": 100001
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Age",
+                "showTitle": true
+              },
+              "condensed": true,
+              "itemsPerPage": 25
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 156,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "f5adda55",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "6dd818f2",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`car_model`",
+                      "name": "car_model"
+                    },
+                    {
+                      "expression": "SUM(`Total_Insurance_Policues`)",
+                      "name": "Total_Insurance_Policues"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "car_model",
+                  "displayName": "Car Model",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "axis": {
+                    "title": "Car Model"
+                  }
+                },
+                "y": {
+                  "fieldName": "car_model",
+                  "displayName": "Car Model",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Car Model"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Car Model",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 84,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "ad7f4ea7",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "42c23128",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`car_make`",
+                      "name": "car_make"
+                    },
+                    {
+                      "expression": "SUM(`Total_Insurance_Policues`)",
+                      "name": "Total_Insurance_Policues"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "car_make",
+                  "displayName": "Car Make",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "axis": {
+                    "title": "Car Make"
+                  }
+                },
+                "y": {
+                  "fieldName": "car_make",
+                  "displayName": "Car Make",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Car Make"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Car Brand",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 72,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "46a55a4c",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "6492ab9a",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`claim_freq`)",
+                      "name": "claim_freq"
+                    },
+                    {
+                      "expression": "SUM(`claim_amt`)",
+                      "name": "claim_amt"
+                    },
+                    {
+                      "expression": "SUM(`household_income`)",
+                      "name": "household_income"
+                    },
+                    {
+                      "expression": "SUM(`kids_driving`)",
+                      "name": "kids_driving"
+                    },
+                    {
+                      "expression": "SUM(`Total_Insurance_Policues`)",
+                      "name": "Total_Insurance_Policues"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "claim_freq",
+                  "displayName": "Claim Freq",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "axis": {
+                    "title": "Claim Freq"
+                  }
+                },
+                "y": {
+                  "fieldName": "claim_amt",
+                  "displayName": "Claim Amt",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Claim Amt"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Claim Frequency",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 132,
+            "width": 6,
+            "height": 12
+          }
+        },
+        {
+          "widget": {
+            "name": "5925a2a7",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ec37ca19",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`car_year`",
+                      "name": "car_year"
+                    },
+                    {
+                      "expression": "SUM(`Total_Insurance_Policues`)",
+                      "name": "Total_Insurance_Policues"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "car_year",
+                  "displayName": "Car Year",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "axis": {
+                    "title": "Car Year"
+                  }
+                },
+                "y": {
+                  "fieldName": "car_year",
+                  "displayName": "Car Year",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Car Year"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Car Year Breakdown",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 120,
+            "width": 6,
+            "height": 12
+          }
+        }
+      ]
+    }
+  ]
+}

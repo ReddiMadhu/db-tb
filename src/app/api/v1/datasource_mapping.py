@@ -127,14 +127,31 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
             if ws.datasource_name == ds.name
         ]
 
-        datasources.append({
+        ds_info = {
             "name": ds.name,
             "caption": ds.caption or ds.name,
             "connection_type": ds.connection_type or "unknown",
             "tables": tables,
             "column_count": len(ds.columns),
             "worksheets": referencing_worksheets,
-        })
+        }
+
+        # Include Databricks connection details if this datasource connects to Databricks
+        if ds.databricks_connection:
+            ds_info["is_databricks"] = True
+            ds_info["databricks_connection"] = {
+                "host": ds.databricks_connection.host,
+                "http_path": ds.databricks_connection.http_path,
+                "catalog": ds.databricks_connection.catalog,
+                "schema": ds.databricks_connection.schema_name,
+                "warehouse_id": ds.databricks_connection.warehouse_id,
+                "auth_method": ds.databricks_connection.auth_method,
+                "connection_class": ds.databricks_connection.connection_class,
+            }
+        else:
+            ds_info["is_databricks"] = False
+
+        datasources.append(ds_info)
 
     # Load existing mappings
     existing_mappings = (
@@ -148,9 +165,24 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
         "confidence_score": m.confidence_score,
     } for m in existing_mappings}
 
+    # Build the top-level list of all Databricks sources for the Data Model screen
+    databricks_sources = []
+    for conn in workbook_meta.databricks_connections:
+        databricks_sources.append({
+            "datasource_name": conn.datasource_name,
+            "host": conn.host,
+            "catalog": conn.catalog,
+            "schema": conn.schema_name,
+            "warehouse_id": conn.warehouse_id,
+            "connection_class": conn.connection_class,
+            "auth_method": conn.auth_method,
+        })
+
     return {
         "job_uuid": job_uuid,
         "datasources": datasources,
+        "databricks_sources": databricks_sources,
+        "databricks_source_count": len(databricks_sources),
         "embedded_files": embedded_files,
         "existing_mappings": mapping_lookup,
         "mapping_status": job.mapping_status,

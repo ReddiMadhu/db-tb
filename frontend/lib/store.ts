@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════
-   LakeShift Zustand Stores
+   Tableau to Databricks Migration — Zustand Stores
    ═══════════════════════════════════════════════ */
 
 import { create } from "zustand";
@@ -19,7 +19,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
   sidebarCollapsed: false,
-  inspectorOpen: true,
+  inspectorOpen: false,
   theme: "dark",
   commandPaletteOpen: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

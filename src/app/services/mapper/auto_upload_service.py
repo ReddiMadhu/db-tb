@@ -90,7 +90,7 @@ def auto_upload_embedded(
     warehouse_id: str,
     catalog: str,
     schema: str,
-    volume: str = "lakeshift_staging",
+    volume: str = "t2d_staging",
 ) -> List[Dict[str, Any]]:
     """Auto-extract embedded files from .twbx and upload to Unity Catalog.
 
@@ -107,7 +107,7 @@ def auto_upload_embedded(
         warehouse_id: SQL Warehouse ID
         catalog: Target catalog name
         schema: Target schema name
-        volume: UC Volume name (default: lakeshift_staging)
+        volume: UC Volume name (default: t2d_staging)
 
     Returns:
         List of results: [{table_name, full_name, source_file, status, error?}]
