@@ -138,6 +138,26 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
     success(`Mapped '${tblName}' → '${fullName}'`, "Mapping Confirmed");
   };
 
+  const handleDirectExecute = async () => {
+    setSaving(true);
+    try {
+      if (totalCount > 0) {
+        const list = Object.values(mappings);
+        await saveMappings(jobUuid, list);
+      }
+      if (onExecute) {
+        onExecute();
+      } else {
+        await executePipeline(jobUuid);
+      }
+      success("Pipeline execution started.", "Executing");
+    } catch (err: any) {
+      toastError(err.message || "Failed to execute pipeline.", "Error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSaveAndExecute = async () => {
     const list = Object.values(mappings);
     const unmapped = list.filter((m) => !m.target_full_name);
@@ -148,28 +168,14 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
     setSaving(true);
     try {
       await saveMappings(jobUuid, list);
-      await executePipeline(jobUuid);
+      if (onExecute) {
+        onExecute();
+      } else {
+        await executePipeline(jobUuid);
+      }
       success("Mappings saved. Pipeline started.", "Executing");
-      onExecute?.();
     } catch (err: any) {
       toastError(err.message || "Failed to save/execute.", "Error");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDirectExecute = async () => {
-    setSaving(true);
-    try {
-      if (totalCount > 0) {
-        const list = Object.values(mappings);
-        await saveMappings(jobUuid, list);
-      }
-      await executePipeline(jobUuid);
-      success("Pipeline execution started.", "Executing");
-      onExecute?.();
-    } catch (err: any) {
-      toastError(err.message || "Failed to execute pipeline.", "Error");
     } finally {
       setSaving(false);
     }
