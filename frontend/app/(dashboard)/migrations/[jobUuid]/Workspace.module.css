@@ -1,5 +1,5 @@
 .page {
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-2) var(--space-8);
   max-width: 1400px;
   animation: fadeIn 0.3s var(--easing-default);
 }
@@ -9,7 +9,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin: var(--space-4) 0 var(--space-6);
+  margin: 0 0 var(--space-4);
   gap: var(--space-4);
 }
 

@@ -21,17 +21,26 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `API error: ${res.status}`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...init?.headers,
+      },
+    });
+  } catch (err: any) {
+    throw new Error(
+      `Cannot connect to backend server at ${API_BASE}. Please verify that the FastAPI backend server is running.`
+    );
   }
+
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `API error (${res.status})`);
+  }
+
   return res.json();
 }
 
@@ -98,13 +107,19 @@ export async function getDiff(jobUuid: string): Promise<DiffResponse> {
 // ── Deploy ──
 export async function deployToDatabricks(
   jobUuid: string,
-  warehouseId: string,
-  host: string,
-  token: string
-): Promise<unknown> {
+  warehouseIdOrPayload: string | { warehouse_id: string; host?: string; token?: string; catalog?: string; schema_name?: string },
+  host?: string,
+  token?: string
+): Promise<{ status: string; dashboard_id: string; published_url?: string }> {
+  let body: Record<string, unknown>;
+  if (typeof warehouseIdOrPayload === "object") {
+    body = warehouseIdOrPayload;
+  } else {
+    body = { warehouse_id: warehouseIdOrPayload, host, token };
+  }
   return apiFetch(`/migrations/${jobUuid}/deploy`, {
     method: "POST",
-    body: JSON.stringify({ warehouse_id: warehouseId, host, token }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -273,3 +288,5 @@ export async function validateMappings(
     body: JSON.stringify({ host, token, warehouse_id: warehouseId }),
   });
 }
+
+

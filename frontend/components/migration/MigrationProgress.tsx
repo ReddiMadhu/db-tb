@@ -22,7 +22,7 @@ export default function MigrationProgress({
   elapsedMs,
   isRunning,
 }: MigrationProgressProps) {
-  if (!isRunning && progress === 0) return null;
+  if (!isRunning) return null;
 
   return (
     <div className={styles.container}>

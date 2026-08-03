@@ -96,44 +96,44 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 
   /* ── Layout ── */
   --header-height: 56px;
-  --sidebar-width: 260px;
+  --sidebar-width: 185px;
   --sidebar-collapsed-width: 64px;
   --inspector-width: 360px;
   --progress-bar-height: 3px;
 }
 
 /* ══════════════════════════════════════════════════
-   DARK THEME (Default)
+   DARK THEME (Default — Pure Black Aesthetic)
    ══════════════════════════════════════════════════ */
 [data-theme="dark"], :root {
-  /* Background Palette */
-  --bg-primary: #071827;
-  --bg-secondary: #0F2235;
-  --bg-tertiary: #0F2235;
-  --bg-surface: #0F2235;
-  --bg-card: #12263A;
-  --bg-hover: #19334D;
-  --bg-active: #19334D;
-  --bg-accent: rgba(251, 78, 11, 0.12);
-  --bg-elevated: #12263A;
-  --bg-input: #0A1C2E;
-  --bg-code: #0A1C2E;
-  --bg-success: rgba(46, 204, 113, 0.08);
-  --bg-warning: rgba(245, 176, 65, 0.08);
-  --bg-error: rgba(231, 76, 60, 0.08);
+  /* Background Palette — Pure OLED Black */
+  --bg-primary: #000000;
+  --bg-secondary: #080808;
+  --bg-tertiary: #101010;
+  --bg-surface: #0A0A0A;
+  --bg-card: #121212;
+  --bg-hover: #1A1A1A;
+  --bg-active: #222222;
+  --bg-accent: rgba(251, 78, 11, 0.15);
+  --bg-elevated: #141414;
+  --bg-input: #080808;
+  --bg-code: #080808;
+  --bg-success: rgba(46, 204, 113, 0.12);
+  --bg-warning: rgba(245, 176, 65, 0.12);
+  --bg-error: rgba(231, 76, 60, 0.12);
 
-  /* Borders */
-  --border-default: #28445E;
-  --border-emphasis: #385C7E;
-  --border-subtle: #1E3A54;
+  /* Borders — Crisp Dark Dividers */
+  --border-default: #262626;
+  --border-emphasis: #404040;
+  --border-subtle: #1C1C1C;
 
-  /* Text Colors */
+  /* Text Colors — High Contrast Pure White */
   --text-primary: #FFFFFF;
-  --text-secondary: #C8D3E0;
-  --text-tertiary: #8FA3B8;
-  --text-muted: #8FA3B8;
-  --text-disabled: #617488;
-  --text-inverse: #071827;
+  --text-secondary: #F1F5F9;
+  --text-tertiary: #CBD5E1;
+  --text-muted: #CBD5E1;
+  --text-disabled: #94A3B8;
+  --text-inverse: #000000;
 
   /* EXL Primary Accent Colors */
   --accent-orange: #FB4E0B;

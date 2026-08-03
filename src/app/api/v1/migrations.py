@@ -358,6 +358,42 @@ async def deploy_to_databricks(
         job.status = "DEPLOYED"
         db.commit()
 
+        # Update Stage 8 (PUBLISH) result in stage_results table
+        try:
+            from app.models.stage_model import StageResult
+            pub_stage = (
+                db.query(StageResult)
+                .filter(StageResult.job_uuid == job_uuid, StageResult.stage_id == "PUBLISH")
+                .first()
+            )
+            pub_url = (
+                f"{client.host}/dashboardsv3/{result.get('dashboard_id')}/published"
+                if client.host else f"/dashboardsv3/{result.get('dashboard_id')}/published"
+            )
+            if pub_stage:
+                pub_stage.status = "COMPLETED"
+                pub_stage.completed_at = datetime.utcnow()
+                pub_stage.metrics = {
+                    "dashboard_id": result.get("dashboard_id"),
+                    "warehouse_id": req.warehouse_id,
+                    "status": "DEPLOYED",
+                }
+                pub_stage.artifacts = {
+                    "dashboard_id": result.get("dashboard_id"),
+                    "published_url": pub_url,
+                    "warehouse_id": req.warehouse_id,
+                    "catalog": req.catalog,
+                    "schema": req.schema_name,
+                }
+                pub_stage.logs = (pub_stage.logs or []) + [
+                    f"[INFO] Deploying Lakeview dashboard JSON to SQL Warehouse {req.warehouse_id}",
+                    f"[SUCCESS] Dashboard deployed! ID: {result.get('dashboard_id')}",
+                    f"[SUCCESS] Published URL: {pub_url}",
+                ]
+                db.commit()
+        except Exception as stage_err:
+            logger.warning("Failed to update StageResult for PUBLISH: %s", stage_err)
+
         return {
             "status": "SUCCESS",
             "dashboard_id": result.get("dashboard_id"),
@@ -365,6 +401,21 @@ async def deploy_to_databricks(
                 if client.host else None
         }
     except Exception as e:
+        # Record failure on StageResult if publish fails
+        try:
+            from app.models.stage_model import StageResult
+            pub_stage = (
+                db.query(StageResult)
+                .filter(StageResult.job_uuid == job_uuid, StageResult.stage_id == "PUBLISH")
+                .first()
+            )
+            if pub_stage:
+                pub_stage.status = "FAILED"
+                pub_stage.errors = (pub_stage.errors or []) + [f"Publish failed: {str(e)}"]
+                pub_stage.logs = (pub_stage.logs or []) + [f"[ERROR] Publish failed: {str(e)}"]
+                db.commit()
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Databricks deployment failed: {str(e)}")
 
 

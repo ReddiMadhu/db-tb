@@ -23,7 +23,7 @@ const ICON_MAP: Record<string, React.ReactNode> = {
 
 function getStatusIcon(status: StageStatus) {
   switch (status) {
-    case "COMPLETED": return <Check size={14} />;
+    case "COMPLETED": return null;
     case "RUNNING": return <Loader2 size={14} className="spin" />;
     case "WARNING": return <AlertTriangle size={14} />;
     case "FAILED": return <XCircle size={14} />;

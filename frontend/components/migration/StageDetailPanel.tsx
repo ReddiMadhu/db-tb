@@ -24,6 +24,7 @@ import {
 import StatusBadge from "@/components/ui/StatusBadge";
 import InlineMappingPanel from "./InlineMappingPanel";
 import RelationshipDiagram from "./RelationshipDiagram";
+import PublishPanel from "./PublishPanel";
 import { getStageDetail } from "@/lib/api";
 import { getStageConfig } from "@/lib/pipeline.config";
 import type { StageDetail, StageStatus } from "@/lib/types";
@@ -109,14 +110,6 @@ export default function StageDetailPanel({
             {stage.stage_number}. {stage.stage_name}
           </h2>
           <p className={styles.description}>{config?.description || ""}</p>
-        </div>
-        <div className={styles.headerRight}>
-          {stage.duration_ms !== null && stage.duration_ms !== undefined && (
-            <span className={styles.duration}>
-              <Clock size={12} /> {stage.duration_ms}ms
-            </span>
-          )}
-          <StatusBadge status={stage.status} />
         </div>
       </div>
 
@@ -540,12 +533,15 @@ export default function StageDetailPanel({
 
           {/* 8. PUBLISH STAGE */}
           {stage.stage_id === "PUBLISH" && (
-            <div className={styles.downloadCta}>
-              <h3>Databricks Deployment Ready</h3>
-              <p className={styles.downloadHint}>
-                Publish the generated Lakeview JSON directly to your Databricks Workspace SQL Warehouse.
-              </p>
-            </div>
+            <PublishPanel
+              jobUuid={jobUuid}
+              initialArtifacts={artifacts}
+              onPublished={() => {
+                if (stageId && jobUuid) {
+                  getStageDetail(jobUuid, stageId).then((data) => setStage(data)).catch(() => {});
+                }
+              }}
+            />
           )}
 
           {/* 9. FINALIZE STAGE */}

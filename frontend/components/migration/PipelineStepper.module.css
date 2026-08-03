@@ -48,9 +48,15 @@
 }
 
 .node.selected {
-  border-color: var(--accent-orange);
-  background: var(--accent-orange-muted);
-  box-shadow: 0 0 0 3px rgba(251, 78, 11, 0.15);
+  border-color: var(--accent-orange) !important;
+  background: rgba(251, 78, 11, 0.2) !important;
+  color: var(--accent-orange) !important;
+  box-shadow: 0 0 0 3px rgba(251, 78, 11, 0.25) !important;
+}
+
+.node.selected svg,
+.node.selected .nodeIcon {
+  color: var(--accent-orange) !important;
 }
 
 .nodeIcon {
@@ -114,7 +120,7 @@
   margin-top: var(--space-2);
   font-size: 0.72rem;
   font-weight: var(--font-weight-medium);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   text-align: center;
   white-space: normal;
   line-height: 1.25;

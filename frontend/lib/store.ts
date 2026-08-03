@@ -8,22 +8,18 @@ import type { Migration, Project } from "./types";
 // ── UI Store ──
 interface UIState {
   sidebarCollapsed: boolean;
-  inspectorOpen: boolean;
   theme: "dark" | "light";
   commandPaletteOpen: boolean;
   toggleSidebar: () => void;
-  toggleInspector: () => void;
   toggleTheme: () => void;
   setCommandPaletteOpen: (open: boolean) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
   sidebarCollapsed: false,
-  inspectorOpen: false,
   theme: "dark",
   commandPaletteOpen: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-  toggleInspector: () => set((s) => ({ inspectorOpen: !s.inspectorOpen })),
   toggleTheme: () =>
     set((s) => {
       const next = s.theme === "dark" ? "light" : "dark";

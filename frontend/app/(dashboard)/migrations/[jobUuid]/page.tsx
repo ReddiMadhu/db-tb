@@ -2,17 +2,15 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Play, Rocket, ArrowLeft, RefreshCw, GitBranch } from "lucide-react";
+import { Play, Download, ArrowLeft, RefreshCw } from "lucide-react";
 import PipelineStepper from "@/components/migration/PipelineStepper";
 import StageDetailPanel from "@/components/migration/StageDetailPanel";
 import MigrationProgress from "@/components/migration/MigrationProgress";
-import StatusBadge from "@/components/ui/StatusBadge";
 import {
   getMigrationStatus,
   executePipeline,
   getStages,
   getProgress,
-  getLakeviewJson,
 } from "@/lib/api";
 import type { StageSummary, PipelineProgress as PipelineProgressType } from "@/lib/types";
 import styles from "./Workspace.module.css";
@@ -179,7 +177,6 @@ export default function MigrationWorkspacePage() {
           </button>
           <div className={styles.jobInfo}>
             <h1 className={styles.jobFilename}>{filename || jobUuid}</h1>
-            <StatusBadge status={status} size="md" />
           </div>
         </div>
         <div className={styles.actionBarRight}>
@@ -199,7 +196,7 @@ export default function MigrationWorkspacePage() {
           )}
           {isComplete && (
             <button className={styles.deployBtn} onClick={handleDownload}>
-              <Rocket size={16} />
+              <Download size={16} />
               Download .lvdash.json
             </button>
           )}
