@@ -204,11 +204,6 @@ export default function ParseStageDetail({
     <div className={styles.container}>
       {/* ── SECTION 1: EXECUTIVE SUMMARY ── */}
       <div className={styles.sectionBlock}>
-        <div className={styles.sectionHeader}>
-          <h3 className={styles.sectionTitle}>
-            <Sparkles size={16} style={{ color: "var(--accent-cyan)" }} /> Executive Summary
-          </h3>
-        </div>
         <div className={styles.summaryGrid}>
           <div className={styles.statCard}>
             <div className={styles.statHeader}>

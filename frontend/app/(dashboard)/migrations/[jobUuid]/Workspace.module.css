@@ -1,6 +1,6 @@
 .page {
-  padding: var(--space-2) var(--space-8);
-  max-width: 1400px;
+  padding: var(--space-2) var(--space-4);
+  max-width: 100%;
   animation: fadeIn 0.3s var(--easing-default);
 }
 

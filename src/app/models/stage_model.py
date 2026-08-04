@@ -13,7 +13,7 @@ from app.db.session import Base
 # ── 8 Frontend-Facing Pipeline Stages ──
 PIPELINE_STAGE_DEFS = [
     {"id": "UPLOAD",               "number": 1, "name": "Upload",                       "backend_stages": ["UPLOAD"]},
-    {"id": "PARSE",                "number": 2, "name": "Parse",                         "backend_stages": ["PARSE", "DAG"]},
+    {"id": "PARSE",                "number": 2, "name": "Dashboard Intelligence",        "backend_stages": ["PARSE", "DAG"]},
     {"id": "SOURCE_MAPPING",       "number": 3, "name": "Source Mapping Validation",     "backend_stages": ["MAPPING"]},
     {"id": "CALC_DEEP_DIVE",       "number": 4, "name": "Calculation Deep Dive",         "backend_stages": ["EXPRESSIONS"]},
     {"id": "CALC_LOGIC_CONVERSION","number": 5, "name": "Calculation Logic Conversion",  "backend_stages": ["SQL"]},

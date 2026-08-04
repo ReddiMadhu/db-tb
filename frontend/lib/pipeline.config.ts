@@ -51,8 +51,8 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
   {
     id: "PARSE",
     number: 2,
-    title: "Parse",
-    shortTitle: "Parse",
+    title: "Dashboard Intelligence",
+    shortTitle: "Dashboard Intel.",
     description: "Parse Tableau XML, extract object model, build DOM tree & dependency graph",
     icon: "FileSearch",
     backendStages: ["PARSE", "DAG"],
@@ -148,8 +148,8 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
   {
     id: "SCHEMA_VALIDATION",
     number: 7,
-    title: "Lakeview Schema Validation & Deployment Review",
-    shortTitle: "Deployment Review",
+    title: "Lakeview Schema Validation",
+    shortTitle: "Schema Validation",
     description: "Inspect, edit, validate Lakeview JSON schema, preview deployment readiness, and publish directly to Databricks",
     icon: "ShieldCheck",
     backendStages: ["VALIDATE"],

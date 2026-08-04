@@ -117,6 +117,14 @@ export default function StageDetailPanel({
     );
   }
 
+  if (stage.stage_id === "SOURCE_MAPPING") {
+    return (
+      <div className={styles.panel}>
+        <InlineMappingPanel jobUuid={jobUuid} onExecute={onExecute} />
+      </div>
+    );
+  }
+
   if (stage.stage_id === "CALC_DEEP_DIVE") {
     return (
       <div className={styles.panel}>

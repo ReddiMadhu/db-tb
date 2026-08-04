@@ -18,5 +18,6 @@
 .contentArea {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-6);
+  padding: var(--space-3);
 }
+
