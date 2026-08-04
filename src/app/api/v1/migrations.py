@@ -403,6 +403,17 @@ async def deploy_to_databricks(
 
     try:
         client = LakeviewAPIClient(host=req.host, token=req.token)
+        if not client.host:
+            raise HTTPException(
+                status_code=400,
+                detail="Databricks Host URL is required (e.g. https://adb-xxxx.azuredatabricks.net). Set DATABRICKS_HOST in .env or provide host in request."
+            )
+        if not client.token:
+            raise HTTPException(
+                status_code=400,
+                detail="Databricks Personal Access Token (PAT) is required. Set DATABRICKS_TOKEN in .env or provide token in request."
+            )
+
         with open(job.output_lvdash_path, "r", encoding="utf-8") as f:
             serialized_json = f.read()
 

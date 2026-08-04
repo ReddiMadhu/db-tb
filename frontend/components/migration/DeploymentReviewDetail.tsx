@@ -30,7 +30,7 @@ import {
   FileText,
 } from "lucide-react";
 import type { StageDetail } from "@/lib/types";
-import { getLakeviewJson, getDefaultConnection } from "@/lib/api";
+import { getLakeviewJson, getDefaultConnection, deployToDatabricks } from "@/lib/api";
 import styles from "./DeploymentReviewDetail.module.css";
 
 // Dynamically import Monaco Editor to avoid SSR hydration issues
@@ -301,25 +301,51 @@ export default function DeploymentReviewDetail({
     }
   };
 
-  // Handle Publish flow simulation
-  const handleStartPublish = () => {
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [patTokenInput, setPatTokenInput] = useState<string>("");
+  const [publishedDashboardUrl, setPublishedDashboardUrl] = useState<string | null>(artifacts.published_url || null);
+
+  // Handle Publish flow to Databricks API
+  const handleStartPublish = async () => {
     if (!validationResult.isValid) {
       alert("Please fix schema errors before publishing to Databricks.");
       return;
     }
     setIsPublishing(true);
-    setPublishStep(0);
+    setPublishStep(1);
+    setPublishError(null);
     setPublishComplete(false);
 
-    const steps = [1, 2, 3, 4, 5];
-    steps.forEach((stepIdx, i) => {
+    try {
+      setPublishStep(2);
+      const whId = connectionInfo.warehouse_id && !connectionInfo.warehouse_id.includes("Serverless")
+        ? connectionInfo.warehouse_id
+        : "6ad2e493737245a5";
+      
+      const hostUrl = connectionInfo.host && !connectionInfo.host.includes("Workspace")
+        ? connectionInfo.host
+        : undefined;
+
+      setPublishStep(3);
+      const res = await deployToDatabricks(jobUuid, {
+        warehouse_id: whId,
+        host: hostUrl,
+        token: patTokenInput || undefined,
+        catalog: connectionInfo.catalog || undefined,
+        schema_name: connectionInfo.schema_name || undefined,
+      });
+
+      setPublishStep(4);
       setTimeout(() => {
-        setPublishStep(stepIdx);
-        if (stepIdx === 5) {
-          setPublishComplete(true);
+        setPublishStep(5);
+        setPublishComplete(true);
+        if (res.published_url) {
+          setPublishedDashboardUrl(res.published_url);
         }
-      }, (i + 1) * 800);
-    });
+      }, 500);
+    } catch (err: any) {
+      setPublishError(err.message || "Databricks deployment failed. Please verify your host URL and PAT token.");
+    }
   };
 
   // Dynamic Diff computation
@@ -794,20 +820,76 @@ export default function DeploymentReviewDetail({
               </div>
             </div>
 
+            {publishError && (
+              <div style={{ background: "rgba(231, 76, 60, 0.1)", border: "1px solid rgba(231, 76, 60, 0.3)", borderRadius: "8px", padding: "1rem", marginTop: "1rem" }}>
+                <div style={{ color: "var(--accent-red)", fontWeight: 700, fontSize: "0.85rem", marginBottom: "0.4rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <AlertTriangle size={16} /> Databricks Deployment Failed
+                </div>
+                <div style={{ fontSize: "0.785rem", color: "var(--text-secondary)", marginBottom: "0.75rem" }}>
+                  {publishError}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                  <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
+                    Enter Databricks Personal Access Token (PAT):
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="dapi..."
+                    value={patTokenInput}
+                    onChange={(e) => setPatTokenInput(e.target.value)}
+                    style={{
+                      background: "#0d1117",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "4px",
+                      padding: "0.4rem 0.6rem",
+                      color: "#fff",
+                      fontSize: "0.8rem",
+                    }}
+                  />
+                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem" }}>
+                    <button
+                      className={styles.secondaryBtn}
+                      onClick={handleStartPublish}
+                      style={{ background: "var(--accent-cyan)", color: "#000", border: "none", fontWeight: 700 }}
+                    >
+                      Retry Publish
+                    </button>
+                    <button
+                      className={styles.secondaryBtn}
+                      onClick={() => setIsPublishing(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {publishComplete && (
               <div className={styles.completedBox}>
                 <div className={styles.completedTitle}>🎉 Dashboard Published Successfully!</div>
                 <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", margin: 0 }}>
                   Your Lakeview dashboard is now live in Databricks.
                 </p>
-                <a
-                  href={`https://${connectionInfo.host}/dashboardsv3`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={styles.databricksLinkBtn}
-                >
-                  <ExternalLink size={16} /> Open Dashboard in Databricks
-                </a>
+                {publishedDashboardUrl ? (
+                  <a
+                    href={publishedDashboardUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={styles.databricksLinkBtn}
+                  >
+                    <ExternalLink size={16} /> Open Published Dashboard in Databricks
+                  </a>
+                ) : (
+                  <a
+                    href={connectionInfo.host.startsWith("http") ? connectionInfo.host : `https://${connectionInfo.host}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={styles.databricksLinkBtn}
+                  >
+                    <ExternalLink size={16} /> Open Databricks Workspace
+                  </a>
+                )}
                 <button
                   className={styles.secondaryBtn}
                   style={{ marginTop: "0.5rem" }}
