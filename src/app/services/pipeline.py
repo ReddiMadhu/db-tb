@@ -335,7 +335,7 @@ class MigrationPipeline:
             measures_list = sorted(list(measures_set))
             dimensions_list = sorted(list(dimensions_set))
 
-            # Build detailed visuals for frontend rendering
+            # Build detailed visuals for frontend rendering (enriched for Visual Intelligence Explorer)
             detailed_visuals = []
             for w in workbook_meta.worksheets:
                 ws_measures = [sf.field_name for sf in w.columns_shelves + w.rows_shelves if sf.derivation]
@@ -353,6 +353,31 @@ class MigrationPipeline:
                     "filters": [f.field_name for f in w.filters],
                     "encoding": f"Mark Type: {w.mark_type or 'Automatic'}, Visual: {w.visual_type or 'Chart'}",
                     "tooltip": w.tooltip_text or "",
+                    # ── Enriched fields for Visual Intelligence Explorer ──
+                    "datasource_name": w.datasource_name or "",
+                    "used_calculated_fields": list(w.used_calculated_fields) if w.used_calculated_fields else [],
+                    "rows_shelves": [
+                        {"field_name": sf.field_name, "derivation": sf.derivation, "raw": sf.raw}
+                        for sf in w.rows_shelves
+                    ],
+                    "columns_shelves": [
+                        {"field_name": sf.field_name, "derivation": sf.derivation, "raw": sf.raw}
+                        for sf in w.columns_shelves
+                    ],
+                    "encodings": [
+                        {"channel": enc.channel, "field_name": enc.field_name, "field_type": enc.field_type,
+                         "aggregation": enc.aggregation, "derivation": enc.derivation}
+                        for enc in w.encodings
+                    ],
+                    "sorts": [
+                        {"field_name": s.field_name, "direction": s.direction, "sort_type": s.sort_type}
+                        for s in w.sorts
+                    ],
+                    "filter_details": [
+                        {"field_name": f.field_name, "filter_type": f.filter_type,
+                         "is_context_filter": f.is_context_filter, "is_global": f.is_global, "scope": f.scope}
+                        for f in w.filters
+                    ],
                 })
 
             calc_fields_list = []
