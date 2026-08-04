@@ -1,0 +1,280 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+}
+
+/* ── KPI Grid ── */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.85rem;
+}
+
+.kpiCard {
+  background: var(--bg-surface, #161b22);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.kpiLabel {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary, #8b949e);
+  margin-bottom: 0.25rem;
+}
+
+.kpiValue {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary, #f0f6fc);
+}
+
+/* ── Section Cards ── */
+.card {
+  background: var(--bg-surface, #161b22);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 1.15rem 1.25rem;
+}
+
+.cardTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary, #f0f6fc);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.topologyGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.85rem;
+}
+
+.layerCard {
+  background: var(--bg-surface-elevated, #0d1117);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  border-radius: 6px;
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.layerBadge {
+  align-self: flex-start;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary, #8b949e);
+  margin-bottom: 0.4rem;
+}
+
+.layerName {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary, #f0f6fc);
+  margin-bottom: 0.2rem;
+}
+
+.layerDesc {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #8b949e);
+  line-height: 1.35;
+  margin-bottom: 0.5rem;
+}
+
+.layerCount {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary, #f0f6fc);
+}
+
+/* ── Split Catalog & Formula Detail ── */
+.catalogSplit {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 992px) {
+  .catalogSplit {
+    grid-template-columns: 1fr;
+  }
+}
+
+.catalogTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.catalogTable th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-tertiary, #8b949e);
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.6875rem;
+}
+
+.catalogTable td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary, #8b949e);
+  vertical-align: middle;
+}
+
+.catalogRow {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.catalogRow:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.catalogRowActive {
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.statusValid {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #3fb950;
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+
+.statusWarn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #d29922;
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+
+.formulaInspector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.codeBox {
+  background: #0d1117;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  padding: 0.75rem 0.85rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+  color: #c9d1d9;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Lineage Visualization ── */
+.lineageFlow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.75rem 0 0.25rem;
+}
+
+.lineageNode {
+  background: var(--bg-surface-elevated, #0d1117);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+}
+
+.lineageStep {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  color: var(--text-tertiary, #8b949e);
+  margin-bottom: 0.15rem;
+}
+
+.lineageName {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary, #f0f6fc);
+}
+
+.lineageArrow {
+  color: var(--text-tertiary, #8b949e);
+  flex-shrink: 0;
+}
+
+/* ── Validation Checklist ── */
+.validationGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.6rem;
+}
+
+.valItem {
+  background: var(--bg-surface-elevated, #0d1117);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.05));
+  border-radius: 6px;
+  padding: 0.6rem 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.785rem;
+  color: var(--text-secondary, #8b949e);
+}
+
+/* ── Accordion ── */
+.accordion {
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  background: var(--bg-surface, #161b22);
+  overflow: hidden;
+}
+
+.accordionHeader {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-secondary, #8b949e);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.accordionHeader:hover {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary, #f0f6fc);
+}
+
+.accordionBody {
+  padding: 1rem;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  background: #0d1117;
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #c9d1d9;
+}

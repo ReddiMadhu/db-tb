@@ -53,19 +53,23 @@
 }
 
 .success {
-  border-left: 3px solid var(--accent-green, #2ecc71);
+  border: 1px solid rgba(46, 204, 113, 0.25);
+  background: rgba(18, 38, 58, 0.95);
 }
 
 .error {
-  border-left: 3px solid var(--accent-red, #e74c3c);
+  border: 1px solid rgba(231, 76, 60, 0.25);
+  background: rgba(18, 38, 58, 0.95);
 }
 
 .warning {
-  border-left: 3px solid var(--accent-amber, #f5b041);
+  border: 1px solid rgba(245, 176, 65, 0.25);
+  background: rgba(18, 38, 58, 0.95);
 }
 
 .info {
-  border-left: 3px solid var(--accent-info, #3498db);
+  border: 1px solid rgba(52, 152, 219, 0.25);
+  background: rgba(18, 38, 58, 0.95);
 }
 
 @keyframes slideIn {

@@ -176,6 +176,8 @@ class ShelfField(BaseModel):
 
 class WorksheetMetadata(BaseModel):
     name: str
+    title: Optional[str] = None
+    visual_type: Optional[str] = None
     datasource_name: Optional[str] = None  # resolved from <datasource-dependencies>
     used_calculated_fields: List[str] = Field(default_factory=list)
     rows: List[str] = Field(default_factory=list)
@@ -205,10 +207,20 @@ class DashboardZoneMetadata(BaseModel):
 
 class DashboardMetadata(BaseModel):
     name: str
+    title: Optional[str] = None
     worksheets: List[str] = Field(default_factory=list)
     zones: List[DashboardZoneMetadata] = Field(default_factory=list)
+    filter_controls: List[Dict[str, Any]] = Field(default_factory=list)
     size_x: int = 1000  # dashboard canvas width
     size_y: int = 800   # dashboard canvas height
+
+    @property
+    def total_zone_count(self) -> int:
+        """Recursively count all zones in the tree."""
+        def _count(z: DashboardZoneMetadata) -> int:
+            return 1 + sum(_count(c) for c in z.children)
+        return sum(_count(z) for z in self.zones)
+
 
 
 class WorkbookMetadata(BaseModel):

@@ -70,10 +70,10 @@
   background: rgba(255, 255, 255, 0.1);
 }
 
-.success { border-left: 4px solid var(--accent-green, #2ecc71); }
-.error { border-left: 4px solid var(--accent-red, #e74c3c); }
-.warning { border-left: 4px solid var(--accent-amber, #f5b041); }
-.info { border-left: 4px solid var(--accent-orange, #fb4e0b); }
+.success { border: 1px solid rgba(46, 204, 113, 0.25); }
+.error { border: 1px solid rgba(231, 76, 60, 0.25); }
+.warning { border: 1px solid rgba(245, 176, 65, 0.25); }
+.info { border: 1px solid rgba(52, 152, 219, 0.25); }
 
 @keyframes slideInRight {
   from {

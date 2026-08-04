@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════
    Tableau to Databricks Migration — Pipeline Configuration
    
-   Single source of truth for all 9 pipeline stages.
+   Single source of truth for all 8 pipeline stages.
    Edit this file to add/rename/reorder stages without UI changes.
    ═══════════════════════════════════════════════ */
 
@@ -72,8 +72,28 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
     ],
   },
   {
-    id: "CALC_DEEP_DIVE",
+    id: "SOURCE_MAPPING",
     number: 3,
+    title: "Source Mapping Validation",
+    shortTitle: "Mapping",
+    description: "Map Tableau datasources to Unity Catalog tables in Databricks",
+    icon: "GitBranch",
+    backendStages: ["MAPPING"],
+    color: "var(--accent-amber)",
+    detailFields: [
+      { key: "total_tables", label: "Total Tables", type: "number", section: "metrics" },
+      { key: "mapped_tables", label: "Mapped Tables", type: "number", section: "metrics" },
+      { key: "unresolved_tables", label: "Unresolved Tables", type: "number", section: "metrics" },
+      { key: "datasource_count", label: "Datasources", type: "number", section: "metrics" },
+      { key: "connection_types", label: "Connection Types", type: "list", section: "details" },
+      { key: "default_catalog", label: "Default Catalog", type: "text", section: "details" },
+      { key: "default_schema", label: "Default Schema", type: "text", section: "details" },
+      { key: "validation_status", label: "Validation Status", type: "badge", section: "details" },
+    ],
+  },
+  {
+    id: "CALC_DEEP_DIVE",
+    number: 4,
     title: "Calculation Deep Dive",
     shortTitle: "Calc Dive",
     description: "Analyze calculated fields, LOD expressions, window functions, and dependencies",
@@ -90,26 +110,6 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
       { key: "complexity_analysis", label: "Complexity", type: "badge", section: "details" },
       { key: "migration_confidence", label: "Migration Confidence", type: "percentage", section: "details" },
       { key: "schema_mismatches", label: "Schema Mismatches", type: "number", section: "details" },
-    ],
-  },
-  {
-    id: "SOURCE_MAPPING",
-    number: 4,
-    title: "Source Mapping Validation",
-    shortTitle: "Mapping",
-    description: "Map Tableau datasources to Unity Catalog tables in Databricks",
-    icon: "GitBranch",
-    backendStages: ["MAPPING"],
-    color: "var(--accent-amber)",
-    detailFields: [
-      { key: "total_tables", label: "Total Tables", type: "number", section: "metrics" },
-      { key: "mapped_tables", label: "Mapped Tables", type: "number", section: "metrics" },
-      { key: "unresolved_tables", label: "Unresolved Tables", type: "number", section: "metrics" },
-      { key: "datasource_count", label: "Datasources", type: "number", section: "metrics" },
-      { key: "connection_types", label: "Connection Types", type: "list", section: "details" },
-      { key: "default_catalog", label: "Default Catalog", type: "text", section: "details" },
-      { key: "default_schema", label: "Default Schema", type: "text", section: "details" },
-      { key: "validation_status", label: "Validation Status", type: "badge", section: "details" },
     ],
   },
   {
@@ -132,9 +132,9 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
   {
     id: "LAYOUT_GENERATION",
     number: 6,
-    title: "Dashboard Layout Generation",
-    shortTitle: "Layout",
-    description: "Generate Lakeview dashboard layout, widgets, and dataset specs",
+    title: "Visual Conversion Report",
+    shortTitle: "Visual Conv.",
+    description: "Side-by-side Tableau visual to Databricks Lakeview visual conversion report & JSON spec",
     icon: "LayoutDashboard",
     backendStages: ["UBIM", "GENERATE"],
     color: "var(--accent-green)",
@@ -149,9 +149,9 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
   {
     id: "SCHEMA_VALIDATION",
     number: 7,
-    title: "Lakeview Schema Validation",
-    shortTitle: "Validate",
-    description: "Validate generated JSON against Lakeview dashboard schema",
+    title: "Lakeview Schema Validation & Deployment Review",
+    shortTitle: "Deployment Review",
+    description: "Inspect, edit, validate Lakeview JSON schema, preview deployment readiness, and publish directly to Databricks",
     icon: "ShieldCheck",
     backendStages: ["VALIDATE"],
     color: "var(--accent-info)",
@@ -178,25 +178,6 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
       { key: "publish_status", label: "Publish Status", type: "badge", section: "metrics" },
       { key: "dashboard_url", label: "Dashboard URL", type: "text", section: "details" },
       { key: "dashboard_id", label: "Dashboard ID", type: "text", section: "details" },
-    ],
-  },
-  {
-    id: "FINALIZE",
-    number: 9,
-    title: "Finalize",
-    shortTitle: "Finalize",
-    description: "Generate migration package, reports, and download artifacts",
-    icon: "PackageCheck",
-    backendStages: ["REPORT"],
-    color: "var(--accent-cyan)",
-    detailFields: [
-      { key: "worksheets_total", label: "Worksheets Total", type: "number", section: "metrics" },
-      { key: "expressions_total", label: "Expressions Total", type: "number", section: "metrics" },
-      { key: "expressions_compiled", label: "Compiled", type: "number", section: "metrics" },
-      { key: "validation_valid", label: "Validation Passed", type: "badge", section: "metrics" },
-      { key: "lakeview_pages", label: "Lakeview Pages", type: "number", section: "details" },
-      { key: "lakeview_widgets", label: "Lakeview Widgets", type: "number", section: "details" },
-      { key: "expressions_unsupported", label: "Unsupported Expressions", type: "number", section: "details" },
     ],
   },
 ];

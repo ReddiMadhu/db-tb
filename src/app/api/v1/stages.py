@@ -20,7 +20,7 @@ router = APIRouter()
 
 @router.get("/{job_uuid}/stages")
 async def get_all_stages(job_uuid: str, db: Session = Depends(get_db)):
-    """Returns all 9 stage statuses for a migration job.
+    """Returns all 8 stage statuses for a migration job.
 
     Used by the PipelineStepper component to render the horizontal
     pipeline with correct status icons and colors.
@@ -75,7 +75,7 @@ async def get_all_stages(job_uuid: str, db: Session = Depends(get_db)):
         current_activity = f"Executing: {running_stage['stage_name']}..."
     elif job.status in ("COMPLETED", "DEPLOYED"):
         current_activity = "Pipeline completed"
-        current_stage_name = "Finalize"
+        current_stage_name = "Publish"
         overall_progress = 100
     elif job.status == "FAILED":
         failed_stage = next((s for s in stage_list if s["status"] == "FAILED"), None)
@@ -199,7 +199,7 @@ async def get_progress(job_uuid: str, db: Session = Depends(get_db)):
         current_stage_number = failed_stage.stage_number
     elif job.status in ("COMPLETED", "DEPLOYED"):
         current_activity = "Migration completed successfully"
-        current_stage_id = "FINALIZE"
+        current_stage_id = "PUBLISH"
         current_stage_number = PIPELINE_STAGE_COUNT
 
     # Compact stage statuses for the stepper

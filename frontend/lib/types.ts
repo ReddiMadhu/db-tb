@@ -322,3 +322,43 @@ export interface DatabricksConnectionItem {
   is_default: boolean;
   created_at: string | null;
 }
+
+// ── Business Insights & Lineage Types ──
+export interface BusinessOverview {
+  workbook_name?: string;
+  dashboards_found?: number;
+  worksheets_count?: number;
+  visualizations_count?: number;
+  datasources_count?: number;
+  calculated_fields_count?: number;
+  parameters_count?: number;
+  filters_count?: number;
+  estimated_success_pct?: string;
+  migration_complexity?: string;
+  estimated_processing_time?: string;
+}
+
+export interface FormulaConversionItem {
+  name: string;
+  caption?: string;
+  original_formula: string;
+  compiled_sql: string;
+  ai_explanation?: string;
+  confidence_score?: number;
+  validation_status?: "VALID" | "WARNING" | "FAIL";
+  datasource?: string;
+}
+
+export interface VisualCompatibilityItem {
+  visual: string;
+  status: "COMPATIBLE" | "UNSUPPORTED" | "CONVERTED";
+  notes?: string;
+}
+
+export interface ColumnMappingLineageItem {
+  source_column: string;
+  detected_meaning: string;
+  target_column: string;
+  transformation: string;
+  confidence: number;
+}

@@ -1,7 +1,7 @@
 """
 Tableau to Databricks Migration — Stage Result & Connection Models
 
-Per-stage result tracking for the 9-stage migration pipeline,
+Per-stage result tracking for the 8-stage migration pipeline,
 and persistent Databricks connection storage.
 """
 
@@ -10,18 +10,16 @@ from datetime import datetime
 from app.db.session import Base
 
 
-# ── 9 Frontend-Facing Pipeline Stages ──
-# Maps to the backend's internal 10-stage pipeline
+# ── 8 Frontend-Facing Pipeline Stages ──
 PIPELINE_STAGE_DEFS = [
     {"id": "UPLOAD",               "number": 1, "name": "Upload",                       "backend_stages": ["UPLOAD"]},
     {"id": "PARSE",                "number": 2, "name": "Parse",                         "backend_stages": ["PARSE", "DAG"]},
-    {"id": "CALC_DEEP_DIVE",       "number": 3, "name": "Calculation Deep Dive",         "backend_stages": ["EXPRESSIONS"]},
-    {"id": "SOURCE_MAPPING",       "number": 4, "name": "Source Mapping Validation",     "backend_stages": ["MAPPING"]},
+    {"id": "SOURCE_MAPPING",       "number": 3, "name": "Source Mapping Validation",     "backend_stages": ["MAPPING"]},
+    {"id": "CALC_DEEP_DIVE",       "number": 4, "name": "Calculation Deep Dive",         "backend_stages": ["EXPRESSIONS"]},
     {"id": "CALC_LOGIC_CONVERSION","number": 5, "name": "Calculation Logic Conversion",  "backend_stages": ["SQL"]},
     {"id": "LAYOUT_GENERATION",    "number": 6, "name": "Dashboard Layout Generation",   "backend_stages": ["UBIM", "GENERATE"]},
     {"id": "SCHEMA_VALIDATION",    "number": 7, "name": "Lakeview Schema Validation",    "backend_stages": ["VALIDATE"]},
     {"id": "PUBLISH",              "number": 8, "name": "Publish to Databricks",         "backend_stages": ["DEPLOY"]},
-    {"id": "FINALIZE",             "number": 9, "name": "Finalize",                      "backend_stages": ["REPORT"]},
 ]
 
 # Quick lookup: backend stage key → frontend stage id

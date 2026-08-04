@@ -227,6 +227,7 @@ export default function MigrationWorkspacePage() {
           jobUuid={jobUuid}
           stageId={selectedStageId}
           onExecute={handleExecute}
+          onSelectStage={setSelectedStageId}
         />
       </div>
     </div>

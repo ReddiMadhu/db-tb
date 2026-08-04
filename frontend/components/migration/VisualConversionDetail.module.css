@@ -1,0 +1,659 @@
+/* ══════════════════════════════════════════════════════════════
+   Visual Conversion Report — Business-First UX Styles
+   Side-by-side comparison between Tableau visual & Databricks Lakeview JSON
+   ══════════════════════════════════════════════════════════════ */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+  color: var(--text-primary);
+  font-family: var(--font-family-primary);
+}
+
+/* ── Executive Conversion Summary Cards ── */
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.85rem;
+}
+
+.summaryCard {
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.summaryLabel {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary, #8b949e);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.summaryValue {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary, #f0f6fc);
+}
+
+.summaryValueSuccess {
+  color: #3fb950;
+}
+
+.summaryValueReview {
+  color: #d29922;
+}
+
+.summaryValueUnsupported {
+  color: var(--text-tertiary, #8b949e);
+}
+
+.summaryValueAccuracy {
+  color: var(--text-primary, #f0f6fc);
+}
+
+.summarySubtext {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* ── Navigation Tabs & Toolbar ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.tabGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tabBtn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.tabBtn:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+
+.tabBtnActive {
+  background: rgba(0, 168, 204, 0.12);
+  border-color: rgba(0, 168, 204, 0.3);
+  color: var(--accent-cyan);
+}
+
+.badgeCount {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+}
+
+.tabBtnActive .badgeCount {
+  background: rgba(0, 168, 204, 0.25);
+  color: var(--accent-cyan);
+}
+
+.searchFilterGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.75rem;
+  width: 240px;
+}
+
+.searchBox input {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  outline: none;
+  width: 100%;
+  font-size: var(--font-size-xs);
+}
+
+.filterSelect {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  padding: 0.4rem 0.75rem;
+  font-size: var(--font-size-xs);
+  outline: none;
+}
+
+/* ── Conversion Card Section ── */
+.cardsList {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.conversionCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transition: border-color var(--duration-fast) var(--easing-default);
+}
+
+.conversionCard:hover {
+  border-color: var(--border-default);
+}
+
+.conversionCardReview {
+  border-color: rgba(255, 154, 60, 0.4);
+}
+
+.conversionCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.cardTitleArea {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.cardTitle {
+  font-size: var(--font-size-base);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.visualTypeBadge {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-md);
+}
+
+.statusBadgeSuccess {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(46, 204, 113, 0.12);
+  border: 1px solid rgba(46, 204, 113, 0.3);
+  color: var(--accent-green);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+}
+
+.statusBadgeReview {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 154, 60, 0.12);
+  border: 1px solid rgba(255, 154, 60, 0.3);
+  color: var(--accent-amber);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+}
+
+.statusBadgeUnsupported {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(231, 76, 60, 0.12);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  color: var(--accent-red);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+}
+
+/* ── Side-by-Side Card Comparison Body ── */
+.cardComparisonBody {
+  display: grid;
+  grid-template-columns: 1fr 40px 1fr;
+  align-items: stretch;
+  padding: 1.25rem;
+  gap: 1rem;
+}
+
+@media (max-width: 900px) {
+  .cardComparisonBody {
+    grid-template-columns: 1fr;
+  }
+}
+
+.visualSideColumn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.columnHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.columnHeaderTitle {
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tableauAccent {
+  color: #e8762d;
+}
+
+.databricksAccent {
+  color: #ff3621;
+}
+
+.fieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.fieldRow {
+  display: flex;
+  align-items: flex-start;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.fieldLabel {
+  width: 130px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.fieldValue {
+  color: var(--text-primary);
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.fieldTag {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  margin-right: 4px;
+  margin-bottom: 2px;
+}
+
+.fieldTagCyan {
+  background: rgba(0, 168, 204, 0.12);
+  border-color: rgba(0, 168, 204, 0.3);
+  color: var(--accent-cyan);
+}
+
+.fieldTagPurple {
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.3);
+  color: var(--accent-purple);
+}
+
+.arrowDivider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  color: var(--text-tertiary);
+}
+
+.arrowText {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── Business Validation Checks Row ── */
+.validationRow {
+  padding: 0.875rem 1.25rem;
+  background: rgba(0, 0, 0, 0.15);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.validationRowTitle {
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.checkPillsGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.checkPillPassed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(46, 204, 113, 0.08);
+  border: 1px solid rgba(46, 204, 113, 0.25);
+  color: var(--accent-green);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-md);
+}
+
+.checkPillDiff {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 154, 60, 0.1);
+  border: 1px solid rgba(255, 154, 60, 0.3);
+  color: var(--accent-amber);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-md);
+}
+
+.diffAlertBox {
+  background: rgba(255, 154, 60, 0.08);
+  border: 1px solid rgba(255, 154, 60, 0.3);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.875rem;
+  font-size: var(--font-size-xs);
+  color: var(--accent-amber);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.diffHeader {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.diffReason {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+/* ── Manual Review Warning Box ── */
+.manualReviewBox {
+  margin: 0 1.25rem 1.25rem;
+  background: rgba(255, 154, 60, 0.08);
+  border: 1px dashed rgba(255, 154, 60, 0.4);
+  border-radius: var(--radius-lg);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.manualReviewTitle {
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  color: var(--accent-amber);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.manualReviewGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+  font-size: var(--font-size-xs);
+}
+
+.reviewItemLabel {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.reviewItemVal {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* ── Code Viewer Section (Lakeview JSON) ── */
+.jsonViewerContainer {
+  border-top: 1px solid var(--border-subtle);
+  background: #0d1117;
+  border-bottom-left-radius: var(--radius-xl);
+  border-bottom-right-radius: var(--radius-xl);
+}
+
+.jsonViewerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1.25rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.jsonViewerTitle {
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  color: var(--text-secondary);
+  font-family: var(--font-family-mono);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.jsonViewerActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.codeActionBtn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.codeActionBtn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.cardExpandIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary, #8b949e);
+  margin-left: 0.5rem;
+}
+
+.codeBlock {
+  font-family: var(--font-family-mono);
+  font-size: 0.785rem;
+  line-height: 1.5;
+  color: #c9d1d9;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  overflow-y: auto;
+  white-space: pre;
+  min-height: 250px;
+  max-height: 650px;
+}
+
+/* ── Full JSON View (Tab 2) ── */
+.fullJsonView {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.fullJsonHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1.25rem;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.fullJsonTitle {
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ── Manual Review Table (Tab 3) ── */
+.manualReviewTableContainer {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.reviewTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-xs);
+  text-align: left;
+}
+
+.reviewTable th {
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reviewTable td {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.reviewTable tr:last-child td {
+  border-bottom: none;
+}
+
+.impactBadgeHigh {
+  color: var(--accent-red);
+  background: rgba(231, 76, 60, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.impactBadgeMedium {
+  color: var(--accent-amber);
+  background: rgba(255, 154, 60, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.impactBadgeLow {
+  color: var(--accent-cyan);
+  background: rgba(0, 168, 204, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.emptyState {
+  padding: 3rem;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+}

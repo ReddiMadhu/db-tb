@@ -399,7 +399,7 @@ def _extract_worksheet_encodings(ws_el, ds_prefixes: list, caption_map: dict = N
     return encodings
 
 
-def _extract_worksheet_filters(ws_el, ds_prefixes: list) -> list:
+def _extract_worksheet_filters(ws_el, ds_prefixes: list, caption_map: dict = None) -> list:
     """Extract filter definitions from a worksheet.
     
     Tableau stores filters at:
@@ -409,13 +409,18 @@ def _extract_worksheet_filters(ws_el, ds_prefixes: list) -> list:
     filters = []
     filter_nodes = (
         ws_el.xpath(".//filter[@column]") or
-        ws_el.xpath(".//filter[@field]")
+        ws_el.xpath(".//filter[@field]") or
+        ws_el.xpath(".//filter")
     )
     for filt in filter_nodes:
         field = filt.get("column", filt.get("field", ""))
         if not field:
             continue
         clean_field = _clean_field(field, ds_prefixes)
+        if caption_map and clean_field in caption_map:
+            clean_field = caption_map[clean_field]
+        elif caption_map and field.strip("[]") in caption_map:
+            clean_field = caption_map[field.strip("[]")]
         
         # Determine filter type
         ftype = "categorical"
@@ -450,19 +455,13 @@ def _extract_worksheet_filters(ws_el, ds_prefixes: list) -> list:
         
         is_context = filt.get("context", "false") == "true"
 
-        # Skip filters on pseudo-fields or with internal references
-        if is_tableau_pseudo_field(clean_field):
-            continue
-        if TABLEAU_INTERNAL_FILTER_RE.match(field):
+        # Skip filters on pseudo-fields like :Measure Names
+        if clean_field in (':Measure Names', 'Measure Names', ':measure names'):
             continue
 
         # Sanitize include/exclude values — remove Tableau internal references
         include_vals = [v for v in include_vals if not is_tableau_internal_filter_value(v)]
         exclude_vals = [v for v in exclude_vals if not is_tableau_internal_filter_value(v)]
-
-        # Skip filter entirely if no valid values remain for categorical filters
-        if ftype == "categorical" and not include_vals and not exclude_vals and min_val is None:
-            continue
 
         filters.append(FilterMetadata(
             field_name=clean_field,
@@ -579,6 +578,95 @@ def _extract_tooltip_text(ws_el) -> str:
         if tooltip.text:
             return tooltip.text.strip()
     return ""
+
+
+def _extract_worksheet_title(ws_el, ws_name: str) -> str:
+    """Extract display title for a worksheet, resolving <Sheet Name> to ws_name."""
+    title_el = ws_el.find(".//title")
+    if title_el is not None:
+        runs = title_el.findall(".//run")
+        text = "".join([r.text for r in runs if r.text]).strip()
+        if text:
+            if "<Sheet Name>" in text:
+                text = text.replace("<Sheet Name>", ws_name)
+            elif text in ("<Sheet Name>", "<", ">"):
+                return ws_name
+            return text
+    return ws_name
+
+
+def _infer_visual_type(mark_type: str, cols_text: str, rows_text: str) -> str:
+    """Infer high-level visual type from mark_type and shelf configuration."""
+    m_lower = (mark_type or "").lower()
+    has_lat_long = 'Latitude' in rows_text or 'Longitude' in cols_text or 'Latitude' in cols_text or 'Longitude' in rows_text
+    
+    if has_lat_long:
+        if m_lower in ('pie',):
+            return "Pie Map Chart"
+        elif m_lower in ('circle', 'automatic'):
+            return "Symbol Map"
+        return "Map Chart"
+    if m_lower == 'square':
+        return "Highlight Table"
+    if m_lower == 'circle':
+        return "Scatter Plot"
+    if m_lower in ('bar', 'kpi'):
+        if ':Measure Names' in rows_text or ':Measure Names' in cols_text:
+            return "Bar Chart / KPI Grid"
+        return "Bar Chart"
+    if m_lower == 'line':
+        return "Line Chart"
+    if m_lower in ('text', 'table'):
+        return "Table"
+    return f"{mark_type.title()} Chart" if mark_type else "Visual Chart"
+
+
+def _extract_dashboard_title(db_el, db_name: str) -> str:
+    """Extract display title for dashboard, checking <title> or top text zones."""
+    title_el = db_el.find("./title") or db_el.find(".//title")
+    if title_el is not None:
+        runs = title_el.findall(".//run")
+        text = "".join([r.text for r in runs if r.text]).strip()
+        if text:
+            return text
+    # Fallback to header text runs inside dashboard text zones
+    for run in db_el.findall(".//run"):
+        txt = (run.text or "").strip()
+        if txt and len(txt) > 3 and not txt.startswith("[") and not txt.endswith("]"):
+            font_size = run.get("fontsize", "")
+            if (font_size and int(font_size) >= 16) or run.get("bold") == "true":
+                return txt
+    return db_name
+
+
+def _extract_dashboard_filter_controls(db_el, ds_prefixes: list, caption_map: dict) -> List[Dict[str, Any]]:
+    """Extract interactive filter controls placed on the dashboard layout."""
+    filter_controls = []
+    seen = set()
+    for zone in db_el.findall(".//zone"):
+        param = zone.get("param")
+        mode = zone.get("mode")
+        if param and param not in ('horz', 'vert'):
+            field_name = _clean_field(param, ds_prefixes)
+            caption = caption_map.get(field_name, field_name)
+            # Remove derivation prefixes like 'none:', 'mn:'
+            clean_caption = re.sub(r'^(none|mn|yr|qr|wk|dy|sum|avg|cnt):', '', caption, flags=re.IGNORECASE)
+            clean_caption = caption_map.get(clean_caption, clean_caption)
+            
+            key = f"{clean_caption}:{mode}"
+            if key not in seen:
+                seen.add(key)
+                filter_controls.append({
+                    "id": zone.get("id"),
+                    "field": clean_caption,
+                    "raw_param": param,
+                    "mode": mode or "dropdown",
+                    "worksheet_owner": zone.get("name")
+                })
+    return filter_controls
+
+
+
 
 
 def _parse_dashboard_zones(zone_el, ds_prefixes: list) -> DashboardZoneMetadata:
@@ -931,23 +1019,27 @@ def extract_bins(root: etree._Element, ds_prefixes: list) -> List[BinMetadata]:
 def extract_parameters(root: etree._Element, ds_prefixes: list) -> List[ParameterMetadata]:
     params = []
     seen = set()
-    for ds in root.xpath("//datasource[@name='Parameters']"):
-        for col in ds.xpath(".//column[@param-domain-type]"):
-            name = (col.get("caption") or col.get("name", "")).strip("[]")
-            if name in seen:
-                continue
-            seen.add(name)
-            members = [{"alias": m.get("alias", ""), "value": m.get("value", "")} for m in col.xpath(".//member")]
-            params.append(ParameterMetadata(
-                name=name,
-                datatype=col.get("datatype", ""),
-                current_value=col.get("value", "").strip('"'),
-                domain_type=col.get("param-domain-type", ""),
-                range_min=col.get("range-min"),
-                range_max=col.get("range-max"),
-                step=col.get("range-step"),
-                allowable_values=members
-            ))
+    param_cols = (
+        root.xpath("//datasource[@name='Parameters' or @caption='Parameters']//column") or
+        root.xpath("//column[@param-domain-type]") or
+        root.xpath("//column[@role='parameter']")
+    )
+    for col in param_cols:
+        name = (col.get("caption") or col.get("name", "")).strip("[]")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        members = [{"alias": m.get("alias", ""), "value": m.get("value", "")} for m in col.xpath(".//member")]
+        params.append(ParameterMetadata(
+            name=name,
+            datatype=col.get("datatype", "string"),
+            current_value=(col.get("value", "") or col.get("default-value", "")).strip('"'),
+            domain_type=col.get("param-domain-type", "list"),
+            range_min=col.get("range-min"),
+            range_max=col.get("range-max"),
+            step=col.get("range-step"),
+            allowable_values=members
+        ))
     return params
 
 
@@ -1107,9 +1199,10 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
     # Build set of all calculated field names for reference detection
     all_calc_names = set()
 
-    # Parse datasources
+    # Parse datasources — target top-level datasources under /workbook/datasources/
     ds_name_list = []
-    for ds_el in root.xpath("//datasource[@name and not(@name='Parameters')]"):
+    top_datasources = root.xpath("/workbook/datasources/datasource[@name and not(@name='Parameters')]") or root.xpath("//datasources/datasource[@name and not(@name='Parameters')]")
+    for ds_el in top_datasources:
         ds_name = ds_el.attrib.get("name", "Unknown")
         ds_name_list.append(ds_name)
         
@@ -1182,11 +1275,13 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         # Extract all the rich metadata
         mark_type = _extract_mark_type(ws_el)
         encodings = _extract_worksheet_encodings(ws_el, ds_prefixes, caption_map)
-        filters = _extract_worksheet_filters(ws_el, ds_prefixes)
+        filters = _extract_worksheet_filters(ws_el, ds_prefixes, caption_map)
         sorts = _extract_worksheet_sorts(ws_el, ds_prefixes)
         datasource_name = _resolve_worksheet_datasource(ws_el, ds_name_list)
         used_calcs = _extract_used_calc_fields(ws_el, ds_prefixes, all_calc_names)
         tooltip = _extract_tooltip_text(ws_el)
+        ws_title = _extract_worksheet_title(ws_el, ws_name)
+        vis_type = _infer_visual_type(mark_type, cols_text, rows_text)
         
         # Build measure bindings from shelf derivations
         measure_bindings = []
@@ -1200,6 +1295,8 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         
         ws_meta = WorksheetMetadata(
             name=ws_name,
+            title=ws_title,
+            visual_type=vis_type,
             datasource_name=datasource_name,
             columns=cols_flat,
             rows=rows_flat,
@@ -1218,13 +1315,21 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
     # Parse dashboards — with zone geometry
     for db_el in root.xpath("//dashboard[@name]"):
         db_name = db_el.attrib.get("name")
+        db_title = _extract_dashboard_title(db_el, db_name)
+        filter_controls = _extract_dashboard_filter_controls(db_el, ds_prefixes, caption_map)
         
         # Dashboard canvas size
         size_el = db_el.find(".//size")
         size_x = int(size_el.get("maxwidth", size_el.get("width", "1000")) or "1000") if size_el is not None else 1000
         size_y = int(size_el.get("maxheight", size_el.get("height", "800")) or "800") if size_el is not None else 800
         
-        db_meta = DashboardMetadata(name=db_name, size_x=size_x, size_y=size_y)
+        db_meta = DashboardMetadata(
+            name=db_name,
+            title=db_title,
+            filter_controls=filter_controls,
+            size_x=size_x,
+            size_y=size_y
+        )
         
         # Extract worksheet references and zone geometry
         zones = []

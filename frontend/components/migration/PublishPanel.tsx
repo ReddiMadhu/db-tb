@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Rocket, RefreshCw, CheckCircle2, ExternalLink, ShieldCheck } from "lucide-react";
 import { useToast } from "@/components/ui/ToastProvider";
-import { deployToDatabricks } from "@/lib/api";
+import { deployToDatabricks, listConnections } from "@/lib/api";
 import styles from "./PublishPanel.module.css";
 
 interface PublishPanelProps {
@@ -31,19 +31,35 @@ export default function PublishPanel({ jobUuid, initialArtifacts = {}, onPublish
   const [schemaName, setSchemaName] = useState("");
 
   useEffect(() => {
-    const saved = localStorage.getItem("lakeview_connections");
-    if (saved) {
+    async function initConnection() {
       try {
-        const parsed = JSON.parse(saved);
-        if (parsed.length > 0) {
-          setHost(parsed[0].host || "");
-          setToken(parsed[0].token || "");
-          setWarehouseId(parsed[0].warehouseId || warehouseId);
-          setCatalog(parsed[0].catalog || "");
-          setSchemaName(parsed[0].schema || "");
+        const conns = await listConnections();
+        if (conns && conns.length > 0) {
+          const def = conns.find((c) => c.is_default) || conns[0];
+          setHost(def.host || "");
+          setToken(def.token_full || def.token || "");
+          if (def.warehouse_id) setWarehouseId(def.warehouse_id);
+          if (def.catalog) setCatalog(def.catalog);
+          if (def.schema_name) setSchemaName(def.schema_name);
+          return;
         }
       } catch {}
+
+      const saved = localStorage.getItem("lakeview_connections");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed.length > 0) {
+            setHost(parsed[0].host || "");
+            setToken(parsed[0].token_full || parsed[0].token || "");
+            setWarehouseId(parsed[0].warehouseId || warehouseId);
+            setCatalog(parsed[0].catalog || "");
+            setSchemaName(parsed[0].schema || "");
+          }
+        } catch {}
+      }
     }
+    initConnection();
   }, []);
 
   const handlePublish = async () => {
