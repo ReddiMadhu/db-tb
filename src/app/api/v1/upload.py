@@ -316,57 +316,18 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                 logs=[f"[INFO] Awaiting user mapping confirmation"],
             ))
 
-            # Stage 4: Calculation Deep Dive (COMPLETED - Formulas indexed)
-            calc_def = PIPELINE_STAGE_DEFS[3]
-            lod_count = sum(
-                1 for ds in workbook_meta.datasources
-                for cf in ds.calculated_fields
-                if cf.formula and '{' in cf.formula and 'FIXED' in cf.formula.upper()
-            )
-            db.add(StageResult(
-                job_uuid=job_uuid,
-                stage_id=calc_def["id"],
-                stage_number=calc_def["number"],
-                stage_name=calc_def["name"],
-                status="COMPLETED",
-                started_at=datetime.utcnow(),
-                completed_at=datetime.utcnow(),
-                duration_ms=85,
-                input_summary=f"{calc_count} raw Tableau formulas",
-                output_summary=f"Indexed {calc_count} calculated fields, {lod_count} LOD expressions, {len(workbook_meta.parameters)} parameters",
-                metrics={
-                    "calculated_fields": calc_count,
-                    "lod_expressions": lod_count,
-                    "parameters": len(workbook_meta.parameters),
-                    "orphan_fields": len(orphans),
-                    "complexity_analysis": "HIGH" if lod_count > 5 else "MEDIUM" if calc_count > 10 else "LOW",
-                },
-                artifacts={
-                    "calculated_fields": [
-                        {
-                            "name": cf.name,
-                            "caption": cf.caption or cf.name,
-                            "formula": cf.formula,
-                            "type": cf.formula_type,
-                            "datasource": ds.name,
-                        }
-                        for ds in workbook_meta.datasources
-                        for cf in ds.calculated_fields
-                    ][:200],
-                    "lod_expressions": [
-                        {"name": cf.name, "formula": cf.formula, "datasource": ds.name}
-                        for ds in workbook_meta.datasources
-                        for cf in ds.calculated_fields
-                        if cf.formula and '{' in cf.formula and 'FIXED' in cf.formula.upper()
-                    ],
-                },
-                logs=[
-                    f"[INFO] Indexing {calc_count} calculated fields across {len(workbook_meta.datasources)} datasources",
-                    f"[INFO] Detected {lod_count} LOD expressions",
-                    f"[SUCCESS] Calculation deep dive completed",
-                ],
-                warnings=[f"Orphan field: {o}" for o in orphans[:10]] if orphans else [],
-            ))
+            # Stages 4-8: Initialize as WAITING (gated by Source Mapping)
+            # These stages will only run when the user triggers pipeline
+            # execution AFTER confirming source mappings.
+            for stage_def in PIPELINE_STAGE_DEFS[3:]:
+                db.add(StageResult(
+                    job_uuid=job_uuid,
+                    stage_id=stage_def["id"],
+                    stage_number=stage_def["number"],
+                    stage_name=stage_def["name"],
+                    status="WAITING",
+                    logs=[f"[INFO] Waiting for Source Mapping validation to complete"],
+                ))
 
             db.commit()
         except Exception as e:

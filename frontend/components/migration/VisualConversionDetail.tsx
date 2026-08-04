@@ -546,16 +546,6 @@ export default function VisualConversionDetail({
           </span>
           <span className={styles.summarySubtext}>Fallback Provided</span>
         </div>
-
-        <div className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>
-            Conversion Accuracy <Zap size={13} style={{ color: "var(--accent-cyan)" }} />
-          </span>
-          <span className={`${styles.summaryValue} ${styles.summaryValueAccuracy}`}>
-            {conversionAccuracy}%
-          </span>
-          <span className={styles.summarySubtext}>Visual Fidelity Match</span>
-        </div>
       </div>
 
       {/* ── Navigation Toolbar ── */}

@@ -108,7 +108,6 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
       { key: "table_calculations", label: "Table Calculations", type: "number", section: "details" },
       { key: "excluded_fields", label: "Excluded Fields", type: "number", section: "details" },
       { key: "complexity_analysis", label: "Complexity", type: "badge", section: "details" },
-      { key: "migration_confidence", label: "Migration Confidence", type: "percentage", section: "details" },
       { key: "schema_mismatches", label: "Schema Mismatches", type: "number", section: "details" },
     ],
   },

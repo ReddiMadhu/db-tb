@@ -44,10 +44,14 @@ export default function MigrationWorkspacePage() {
       // Auto-select a relevant stage
       const runningStage = stagesRes.stages.find((s) => s.status === "RUNNING");
       const failedStage = stagesRes.stages.find((s) => s.status === "FAILED");
-      if (runningStage) setSelectedStageId(runningStage.stage_id);
-      else if (failedStage) setSelectedStageId(failedStage.stage_id);
-      else if (["NEEDS_MAPPING", "NEEDS_REVIEW", "PARSED"].includes(statusRes.status)) {
+      if (runningStage) {
+        setSelectedStageId(runningStage.stage_id);
+      } else if (failedStage) {
+        setSelectedStageId(failedStage.stage_id);
+      } else if (["NEEDS_MAPPING", "NEEDS_REVIEW", "PARSED"].includes(statusRes.status)) {
         setSelectedStageId("SOURCE_MAPPING");
+      } else if (["COMPLETED", "DEPLOYED", "FAILED_VALIDATION"].includes(statusRes.status)) {
+        setSelectedStageId(statusRes.status === "DEPLOYED" ? "PUBLISH" : "SCHEMA_VALIDATION");
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load migration");
@@ -85,6 +89,9 @@ export default function MigrationWorkspacePage() {
           setStatus(progressRes.job_status);
           setExecuting(false);
           if (pollRef.current) clearInterval(pollRef.current);
+          if (progressRes.is_complete) {
+            setSelectedStageId(progressRes.job_status === "DEPLOYED" ? "PUBLISH" : "SCHEMA_VALIDATION");
+          }
         }
       } catch {
         // Silently retry on transient errors
@@ -113,6 +120,9 @@ export default function MigrationWorkspacePage() {
       ]);
       setStatus(statusRes.status);
       setStages(stagesRes.stages);
+      if (["COMPLETED", "DEPLOYED", "FAILED_VALIDATION"].includes(statusRes.status)) {
+        setSelectedStageId(statusRes.status === "DEPLOYED" ? "PUBLISH" : "SCHEMA_VALIDATION");
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Pipeline execution failed");
       const statusRes = await getMigrationStatus(jobUuid).catch(() => null);

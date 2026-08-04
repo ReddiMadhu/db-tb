@@ -110,10 +110,8 @@
 
 /* ── Main Workspace Grid (Left Main + Right Sidebar) ── */
 .workspaceGrid {
-  display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: 1.25rem;
-  align-items: start;
+  display: block;
+  width: 100%;
 }
 
 @media (max-width: 1200px) {
