@@ -209,6 +209,200 @@ def _collect_literal_groupfilter_members(gf_el) -> List[str]:
     return members
 
 
+def _is_universe_only_groupfilter(gf_el) -> bool:
+    """True when a branch only defines the domain (level-members), no literal members."""
+    if gf_el is None:
+        return True
+    func = (gf_el.get("function") or "").lower()
+    if func == "level-members":
+        return True
+    if func == "member":
+        return False
+    return not bool(gf_el.xpath(".//groupfilter[@function='member']"))
+
+
+def _clean_level_to_field(level: str, ds_prefixes: list, caption_map: dict) -> str:
+    """Resolve a groupfilter @level (e.g. [none:Demographics_Gender:nk]) to a clean field name."""
+    if not level:
+        return ""
+    clean = _clean_field(level, ds_prefixes)
+    if caption_map and clean in caption_map:
+        clean = caption_map[clean]
+    return clean
+
+
+def _conjuncts_from_crossjoin(
+    gf_el,
+    ds_prefixes: list,
+    caption_map: dict,
+    clean_member_raw,
+) -> List[Dict[str, Any]]:
+    """Build one AND-group from a crossjoin of per-level unions/members.
+
+    Tableau encodes a tuple product as::
+
+        <groupfilter function='crossjoin'>
+          <groupfilter function='union'>  <!-- Gender -->
+            <groupfilter function='member' level='...' member='"F"'/>
+            ...
+          </groupfilter>
+          <groupfilter function='union'>  <!-- StateName -->
+            ...
+          </groupfilter>
+        </groupfilter>
+    """
+    conjuncts: List[Dict[str, Any]] = []
+    if gf_el is None:
+        return conjuncts
+
+    for child in gf_el.xpath("./groupfilter"):
+        cfunc = (child.get("function") or "").lower()
+        if cfunc == "level-members":
+            continue
+        by_level: Dict[str, List[str]] = {}
+        if cfunc == "member":
+            members_els = [child]
+        else:
+            members_els = child.xpath(".//groupfilter[@function='member']")
+        for m_el in members_els:
+            level = m_el.get("level") or ""
+            field = _clean_level_to_field(level, ds_prefixes, caption_map)
+            val = clean_member_raw(m_el.get("member") or "")
+            if not val or is_tableau_internal_filter_value(val):
+                continue
+            if not field:
+                continue
+            by_level.setdefault(field, []).append(val)
+        for field, members in by_level.items():
+            # Deduplicate preserving order
+            seen: set = set()
+            uniq: List[str] = []
+            for v in members:
+                if v not in seen:
+                    seen.add(v)
+                    uniq.append(v)
+            if uniq:
+                conjuncts.append({"field": field, "members": uniq})
+    return conjuncts
+
+
+def _and_group_from_member_union(
+    gf_el,
+    ds_prefixes: list,
+    caption_map: dict,
+    clean_member_raw,
+    fallback_field: str = "",
+) -> List[Dict[str, Any]]:
+    """Single AND-group from a union/member tree (one conjunct per distinct level)."""
+    by_level: Dict[str, List[str]] = {}
+    for m_el in gf_el.xpath(".//groupfilter[@function='member']") if gf_el is not None else []:
+        level = m_el.get("level") or ""
+        field = _clean_level_to_field(level, ds_prefixes, caption_map) or fallback_field
+        val = clean_member_raw(m_el.get("member") or "")
+        if not val or is_tableau_internal_filter_value(val) or not field:
+            continue
+        by_level.setdefault(field, []).append(val)
+    conjuncts: List[Dict[str, Any]] = []
+    for field, members in by_level.items():
+        seen: set = set()
+        uniq: List[str] = []
+        for v in members:
+            if v not in seen:
+                seen.add(v)
+                uniq.append(v)
+        if uniq:
+            conjuncts.append({"field": field, "members": uniq})
+    return conjuncts
+
+
+def _extract_exclusion_predicate_groups(
+    filt,
+    ds_prefixes: list,
+    caption_map: dict = None,
+    fallback_field: str = "",
+) -> List[List[Dict[str, Any]]]:
+    """Parse exclusive filter structure into OR-of-AND predicate groups.
+
+    Handles:
+      - crossjoin of per-level unions → one AND-group (tuple product)
+      - union of crossjoins → one AND-group per crossjoin (OR of tuples)
+      - lone member / union of members → one single-level AND-group
+    """
+    caption_map = caption_map or {}
+    groups: List[List[Dict[str, Any]]] = []
+
+    def _clean_member_raw(raw: str) -> str:
+        raw = (raw or "").strip().strip('"')
+        if not raw:
+            return ""
+        if (
+            raw.startswith("[")
+            or any(p and p in raw for p in ds_prefixes)
+            or re.match(r'^(sum|avg|cnt|cntd|ctd|min|max|attr|med|none):', raw, re.I)
+        ):
+            clean, _agg, _deriv = _parse_encoding_column_ref(raw, ds_prefixes, caption_map)
+            if clean and caption_map.get(clean):
+                clean = caption_map[clean]
+            return clean
+        return raw
+
+    def _absorb_subtracted(node) -> None:
+        if node is None or _is_universe_only_groupfilter(node):
+            return
+        func = (node.get("function") or "").lower()
+        if func == "crossjoin":
+            conjuncts = _conjuncts_from_crossjoin(
+                node, ds_prefixes, caption_map, _clean_member_raw
+            )
+            if conjuncts:
+                groups.append(conjuncts)
+            return
+        if func == "union":
+            children = node.xpath("./groupfilter")
+            if any((c.get("function") or "").lower() == "crossjoin" for c in children):
+                for c in children:
+                    if (c.get("function") or "").lower() == "crossjoin":
+                        conjuncts = _conjuncts_from_crossjoin(
+                            c, ds_prefixes, caption_map, _clean_member_raw
+                        )
+                        if conjuncts:
+                            groups.append(conjuncts)
+                return
+            conjuncts = _and_group_from_member_union(
+                node, ds_prefixes, caption_map, _clean_member_raw, fallback_field
+            )
+            if conjuncts:
+                groups.append(conjuncts)
+            return
+        if func == "member":
+            level = node.get("level") or ""
+            field = _clean_level_to_field(level, ds_prefixes, caption_map) or fallback_field
+            val = _clean_member_raw(node.get("member") or "")
+            if field and val and not is_tableau_internal_filter_value(val):
+                groups.append([{"field": field, "members": [val]}])
+            return
+        # Nested except/join/etc. — recurse into non-universe children
+        for child in node.xpath("./groupfilter"):
+            _absorb_subtracted(child)
+
+    for gf in filt.xpath("./groupfilter"):
+        func = (gf.get("function") or "").lower()
+        ui_enum = (
+            gf.get("{http://www.tableausoftware.com/xml/user}ui-enumeration")
+            or gf.get("ui-enumeration")
+            or ""
+        ).lower()
+        is_exclusive = func == "except" or ui_enum == "exclusive"
+        if is_exclusive:
+            for child in gf.xpath("./groupfilter"):
+                _absorb_subtracted(child)
+        elif func == "none":
+            # Explicit empty / exclude-all marker — no structured groups
+            continue
+
+    return groups
+
+
 def _extract_filter_include_exclude(filt, ds_prefixes: list, caption_map: dict = None):
     """Return (include_values, exclude_values) from a Tableau <filter> element.
 
@@ -561,6 +755,9 @@ def _extract_worksheet_filters(ws_el, ds_prefixes: list, caption_map: dict = Non
         include_vals, exclude_vals = _extract_filter_include_exclude(
             filt, ds_prefixes, caption_map
         )
+        exclude_groups = _extract_exclusion_predicate_groups(
+            filt, ds_prefixes, caption_map, fallback_field=clean_field
+        )
 
         # Quantitative range — prefer child <min>/<max> elements over attributes
         min_el = filt.find("min")
@@ -576,6 +773,7 @@ def _extract_worksheet_filters(ws_el, ds_prefixes: list, caption_map: dict = Non
             filter_type=ftype,
             include_values=include_vals,
             exclude_values=exclude_vals,
+            exclude_predicate_groups=exclude_groups,
             min_value=min_val,
             max_value=max_val,
             is_context_filter=is_context,
@@ -1184,11 +1382,15 @@ def _extract_datasource_filters(ds_el, ds_prefixes: list, caption_map: dict) -> 
         include_vals, exclude_vals = _extract_filter_include_exclude(
             filt, ds_prefixes, caption_map
         )
+        exclude_groups = _extract_exclusion_predicate_groups(
+            filt, ds_prefixes, caption_map, fallback_field=clean
+        )
         filters.append(FilterMetadata(
             field_name=clean,
             filter_type=filt.get("class", "categorical"),
             include_values=include_vals,
             exclude_values=exclude_vals,
+            exclude_predicate_groups=exclude_groups,
             is_datasource_filter=True,
             scope="datasource",
         ))

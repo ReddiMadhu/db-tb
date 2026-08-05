@@ -67,3 +67,391 @@ Traceback (most recent call last):
               ^^^^^^^^^^
 NameError: name 'mismatches' is not defined
 
+
+--- ERROR AT 2026-08-05 20:11:31.809127 ---
+Exception: 'LakeviewDashboard' object has no attribute 'save_to_file'
+Traceback (most recent call last):
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\cors.py", line 96, in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\cors.py", line 154, in simple_response
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2697, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1789, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1798, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1277, in handle
+    await app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 156, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 143, in app
+    await response(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\responses.py", line 170, in __call__
+    await self.background()
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\background.py", line 36, in __call__
+    await task()
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\background.py", line 23, in __call__
+    await run_in_threadpool(self.func, *self.args, **self.kwargs)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\concurrency.py", line 34, in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\anyio\to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        func, args, abandon_on_cancel=abandon_on_cancel, limiter=limiter
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 2641, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 1033, in run
+    result = context.run(func, *args)
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 103, in _run_pipeline_background
+    lakeview_dash.save_to_file(output_path)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\pydantic\main.py", line 1042, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'LakeviewDashboard' object has no attribute 'save_to_file'
+
+
+--- ERROR AT 2026-08-05 20:37:45.861283 ---
+Exception: 'LakeviewDashboard' object has no attribute 'save_to_file'
+Traceback (most recent call last):
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\cors.py", line 88, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2697, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1789, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1798, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1277, in handle
+    await app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 156, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 142, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 704, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 350, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 280, in execute_migration_pipeline
+    result = _run_pipeline_background(job_uuid, upload_path, table_mapping, catalog, schema_name)
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 103, in _run_pipeline_background
+    lakeview_dash.save_to_file(output_path)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\pydantic\main.py", line 1042, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'LakeviewDashboard' object has no attribute 'save_to_file'
+
+
+--- ERROR AT 2026-08-05 20:55:40.842116 ---
+Exception: 'LakeviewDashboard' object has no attribute 'save_to_file'
+Traceback (most recent call last):
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\cors.py", line 96, in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\cors.py", line 154, in simple_response
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2697, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1789, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1798, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1277, in handle
+    await app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 156, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 143, in app
+    await response(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\responses.py", line 170, in __call__
+    await self.background()
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\background.py", line 36, in __call__
+    await task()
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\background.py", line 23, in __call__
+    await run_in_threadpool(self.func, *self.args, **self.kwargs)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\concurrency.py", line 34, in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\anyio\to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        func, args, abandon_on_cancel=abandon_on_cancel, limiter=limiter
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 2641, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 1033, in run
+    result = context.run(func, *args)
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 154, in _run_pipeline_background
+    lakeview_dash.save_to_file(output_path)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\pydantic\main.py", line 1042, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'LakeviewDashboard' object has no attribute 'save_to_file'
+
+
+--- ERROR AT 2026-08-05 21:10:59.049933 ---
+Exception: 'LakeviewDashboard' object has no attribute 'save_to_file'
+Traceback (most recent call last):
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\cors.py", line 88, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2697, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1789, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1798, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1277, in handle
+    await app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 156, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 142, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 704, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 350, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 444, in execute_migration_pipeline
+    result = _run_pipeline_background(job_uuid, upload_path, table_mapping, catalog, schema_name)
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 267, in _run_pipeline_background
+    lakeview_dash.save_to_file(output_path)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\pydantic\main.py", line 1042, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'LakeviewDashboard' object has no attribute 'save_to_file'
+
+
+--- ERROR AT 2026-08-05 21:16:20.359830 ---
+Exception: 'LakeviewDashboard' object has no attribute 'save_to_file'
+Traceback (most recent call last):
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\cors.py", line 88, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2697, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1789, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1798, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1277, in handle
+    await app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 156, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 142, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 704, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 350, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 444, in execute_migration_pipeline
+    result = _run_pipeline_background(job_uuid, upload_path, table_mapping, catalog, schema_name)
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 267, in _run_pipeline_background
+    lakeview_dash.save_to_file(output_path)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\pydantic\main.py", line 1042, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'LakeviewDashboard' object has no attribute 'save_to_file'
+
+
+--- ERROR AT 2026-08-05 21:16:53.516411 ---
+Exception: 'LakeviewDashboard' object has no attribute 'save_to_file'
+Traceback (most recent call last):
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\cors.py", line 88, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2697, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1789, in _handle_selected
+    await route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1778, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 2752, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1798, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 1277, in handle
+    await app(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 156, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 142, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 704, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\fastapi\routing.py", line 350, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\src\app\api\v1\migrations.py", line 770, in generate_asset_bundle
+    res = generate_databricks_asset_bundle(dashboard_name, lakeview_dash, bundle_dir)
+  File "C:\Users\madhu\Desktop\db-tb\src\app\services\deployer\bundle_generator.py", line 19, in generate_databricks_asset_bundle
+    lakeview_dash.save_to_file(json_filepath)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\madhu\Desktop\db-tb\.venv\Lib\site-packages\pydantic\main.py", line 1042, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'LakeviewDashboard' object has no attribute 'save_to_file'
+

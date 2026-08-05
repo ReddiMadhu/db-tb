@@ -1,0 +1,116 @@
+{
+
+  "migration_rules": [
+
+    {
+
+      "id": "R1",
+
+      "rule": "Resolve every Tableau caption to a physical column before emitting SQL (WHERE and ORDER BY as well as SELECT)."
+
+    },
+
+    {
+
+      "id": "R2",
+
+      "rule": "Never emit a Tableau group name as a column. For exclusive crossjoin filters, preserve per-level member structure and emit NOT (A IN (...) AND B IN (...)). Never invent independent per-column NOT INs from a flattened value list — that can wipe an entire domain (e.g. Gender IN (F,M))."
+
+    },
+
+    {
+
+      "id": "R3",
+
+      "rule": "Measure Names with 2+ members maps to a pivot over a UNION ALL unpivoted (dims..., Metric, Value) dataset. Never rewrite a dataset schema without re-deriving every widget query that reads from it in the same pass. Gate dual-measure map unpivot on resolved ChartType.MAP (not mere Lon/Lat shelves) so a Pie drawn on geo shelves stays wide."
+
+    },
+
+    {
+
+      "id": "R4",
+
+      "rule": "The UNION ALL branches must equal the Measure Names filter member list exactly. Never add a measure the filter excluded."
+
+    },
+
+    {
+
+      "id": "R5",
+
+      "rule": "Never consolidate sibling worksheets that differ only by measure scope. The split is authored intent."
+
+    },
+
+    {
+
+      "id": "R6",
+
+      "rule": "Bind a filter widget only to a dataset whose projection contains the field; encodings.fields[].queryName must equal the widget query name. Every widget query field must resolve to a projected output column of its dataset (not an identifier merely referenced inside SUM/WHERE of a UNION branch) — binding mismatches are schema-validation errors."
+
+    },
+
+    {
+
+      "id": "R7",
+
+      "rule": "Generated maps (Lon/Lat shelves) map to the geographic role or LOD dimension, never to Lon/Lat columns, and never by silently dropping a measure. Dual-measure resolved MAP worksheets unpivot to (dim, Metric, Value) and emit a v3 grouped bar (x=geo dim, y=SUM(Value), color=Metric) with a sorted top-N from settings.MAP_GROUPED_BAR_TOP_N applied once as an outer IN-subquery over the UNION — not a v1 table fallback and not an uncapped 50-state categorical axis. Pie widgets trim query fields to category + single angle measure."
+
+    },
+
+    {
+
+      "id": "R8",
+
+      "rule": "Widget titles fall back to the worksheet caption when the zone title is suppressed; do not emit untitled widgets."
+
+    },
+
+    {
+
+      "id": "R9",
+
+      "rule": "Do not send dataset_catalog/dataset_schema when every FROM/JOIN table ref is fully qualified (catalog.schema.table, including backtick-segmented forms). Never emit a location key into generated dataset JSON — Dataset model and LakeviewDashboard.to_dict only carry {name, displayName, query}; location is API-materialized on the deployed artifact when create-call catalog params are sent. Verify post-deploy via GET dashboard (deployed_dataset_locations). Never invent catalog='main' in the deploy UI."
+
+    },
+
+    {
+
+      "id": "R10",
+
+      "rule": "Lakeview IDs derive from stable content hashes so output is diffable across runs."
+
+    },
+
+    {
+
+      "id": "R11",
+
+      "rule": "Table widgets stay at schema version 1 (official Databricks NYC Taxi sample). Pivot widgets emit version 3 with query-level cubeGroupingSets and orders."
+
+    }
+
+  ],
+
+  "v1_table_verification": {
+
+    "status": "confirmed_keep_v1",
+
+    "finding": "Official Databricks bundle-examples NYC Taxi .lvdash.json uses version 1 table widgets successfully. Insurance deploy specLoadError widgets carried a legacy renderSpec wrapper, not healthy v1 table specs. validate_widget_spec requires table=1 and pivot=3.",
+
+    "recommendation": "Keep table at v1. Use pivot v3 + cubeGroupingSets. Do not force all widgets to a single version."
+
+  },
+
+  "location_verdict": {
+
+    "status": "closed_by_design",
+
+    "finding": "No generator code path can emit location. Dataset has only name/displayName/query; to_dict builds that dict literally. Grep of src/app for location finds only the deploy-time reader of the deployed artifact and unrelated Tableau repository_location parsing.",
+
+    "recommendation": "Do not add location to generated JSON. Confirm catalog outcome via post-deploy deployed_dataset_locations, not by sampling generator output."
+
+  }
+
+}
+

@@ -69,8 +69,8 @@ export default function ConnectionsPage() {
         host: "https://",
         token: "",
         warehouse_id: "",
-        catalog: "main",
-        schema_name: "default",
+        catalog: "",
+        schema_name: "",
         is_default: connections.length === 0,
       });
     }
@@ -200,7 +200,9 @@ export default function ConnectionsPage() {
               <div className={styles.row}>
                 <span className={styles.label}>Catalog / Schema</span>
                 <span className="mono" style={{ fontSize: "0.75rem" }}>
-                  {c.catalog || "main"}.{c.schema_name || "default"}
+                  {c.catalog && c.schema_name
+                    ? `${c.catalog}.${c.schema_name}`
+                    : c.catalog || c.schema_name || "(not set)"}
                 </span>
               </div>
 

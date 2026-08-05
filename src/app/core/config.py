@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     DEFAULT_WAREHOUSE_ID: Optional[str] = None
     DEFAULT_CATALOG: str = ""
     DEFAULT_SCHEMA: str = ""
+    # Dual-measure map → grouped bar: cap categorical geo axis cardinality
+    MAP_GROUPED_BAR_TOP_N: int = 15
     
     model_config = SettingsConfigDict(
         env_file=".env",

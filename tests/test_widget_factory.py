@@ -145,6 +145,49 @@ class TestTableWidget:
         assert q["disaggregatedData"] is True
 
 
+class TestPivotWidget:
+    def test_pivot_widget_v3_with_cube_grouping(self):
+        w = WidgetFactory.create_pivot_widget(
+            dataset_name="ds1",
+            row_fields=["Metric"],
+            column_fields=["Region"],
+            cell_field="sum(Value)",
+            title="Region - Claim Ratio",
+            query_fields=[
+                {"expression": "`Region`", "name": "Region"},
+                {"expression": "`Metric`", "name": "Metric"},
+                {"expression": "SUM(`Value`)", "name": "sum(Value)"},
+            ],
+        )
+        spec = w.spec
+        assert spec["version"] == 3
+        assert spec["widgetType"] == "pivot"
+        assert spec["encodings"]["rows"][0]["fieldName"] == "Metric"
+        assert spec["encodings"]["columns"][0]["fieldName"] == "Region"
+        assert spec["encodings"]["cell"]["fieldName"] == "sum(Value)"
+
+        q = w.queries[0].query
+        assert q["disaggregated"] is False
+        assert q["cubeGroupingSets"]["sets"] == [
+            {"fieldNames": ["Metric"]},
+            {"fieldNames": ["Region"]},
+        ]
+        assert q["orders"] == [
+            {"direction": "ASC", "expression": "`Metric`"},
+            {"direction": "ASC", "expression": "`Region`"},
+        ]
+
+        valid, errors = validate_widget_spec(spec)
+        assert valid, f"Pivot widget spec validation failed: {errors}"
+
+        # Table stays v1; pivot must NOT accept v1
+        bad = dict(spec)
+        bad["version"] = 1
+        ok, errs = validate_widget_spec(bad)
+        assert not ok
+        assert any("version 3" in e for e in errs)
+
+
 class TestSQLAggregationValidation:
     def test_missing_aggregation_rejection(self):
         """Query with non-aggregated column missing from GROUP BY should fail validation."""

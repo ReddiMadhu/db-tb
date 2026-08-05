@@ -49,12 +49,13 @@ def test_layout_artifacts_have_real_visual_types():
 
 
 def test_blank_title_frames_not_invented_in_cards():
+    """Zone-suppressed Tableau titles fall back to worksheet caption (no untitled orphans)."""
     _, art = _build_artifacts()
     cards = {c["worksheet_name"]: c for c in art["artifacts"]["conversion_cards"]}
     for name in ("Region - Claim Ratio", "Region - Claim Ratio (2)"):
         fr = cards[name]["lakeview_json"]["frame"]
-        assert fr["showTitle"] is False
-        assert not (fr.get("title") or "").strip()
+        # showTitle may be True with worksheet-name fallback — never leave frame title blank
+        assert (fr.get("title") or "").strip()
     age = cards["Total Claim Per Region"]
     assert age["lakeview_json"]["widgetType"] == "heatmap"
     assert age["lakeview_json"]["frame"]["title"] == "Claims by Age Group"

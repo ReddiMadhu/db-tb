@@ -180,7 +180,7 @@ def _match_layout_item(
     for page in dashboard.get("pages") or []:
         for item in page.get("layout") or []:
             w = item.get("widget") or {}
-            if w.get("textbox_spec") is not None:
+            if w.get("textbox_spec") is not None or w.get("multilineTextboxSpec") is not None:
                 continue
             spec = w.get("spec") or {}
             queries = w.get("queries") or []

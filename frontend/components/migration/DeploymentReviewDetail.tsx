@@ -87,9 +87,14 @@ export default function DeploymentReviewDetail({
   }>({
     host: artifacts.workspace || "Databricks Workspace",
     warehouse_id: artifacts.warehouse_id || "Serverless Warehouse",
-    catalog: artifacts.catalog || "main",
-    schema_name: artifacts.schema_name || "default",
+    // Never invent a catalog/schema — empty means the deploy call omits
+    // dataset_catalog/dataset_schema and lets FQN SQL stand alone.
+    catalog: artifacts.catalog || "",
+    schema_name: artifacts.schema_name || "",
   });
+  // True when the saved default connection (or its response) has a PAT.
+  // When true, deploy lets the server resolve the token — no paste prompt.
+  const [hasSavedToken, setHasSavedToken] = useState(false);
 
   // Fetch real JSON if missing in props
   useEffect(() => {
@@ -126,12 +131,22 @@ export default function DeploymentReviewDetail({
   useEffect(() => {
     getDefaultConnection()
       .then((res) => {
+        const hasTok = Boolean(
+          res.has_token || res.connection?.has_token || res.connection?.token
+        );
+        setHasSavedToken(hasTok);
         if (res.has_default && res.connection) {
           setConnectionInfo({
             host: res.connection.host || "dbc-prod.cloud.databricks.com",
-            warehouse_id: res.connection.warehouse_id || "Serverless SQL",
-            catalog: res.connection.catalog || "main",
-            schema_name: res.connection.schema_name || "analytics",
+            // Prefer real warehouse; placeholder labels stay empty so the
+            // server can resolve from the saved connection / settings.
+            warehouse_id:
+              res.connection.warehouse_id &&
+              !String(res.connection.warehouse_id).includes("Serverless")
+                ? res.connection.warehouse_id
+                : res.connection.warehouse_id || "",
+            catalog: res.connection.catalog || "",
+            schema_name: res.connection.schema_name || "",
           });
         }
       })
@@ -318,18 +333,26 @@ export default function DeploymentReviewDetail({
 
     try {
       setPublishStep(2);
-      const whId = connectionInfo.warehouse_id && !connectionInfo.warehouse_id.includes("Serverless")
-        ? connectionInfo.warehouse_id
-        : "6ad2e493737245a5";
-      
-      const hostUrl = connectionInfo.host && !connectionInfo.host.includes("Workspace")
-        ? connectionInfo.host
-        : undefined;
+      // Never invent a warehouse id — omit placeholders and let the server
+      // resolve from the saved connection / settings.
+      const whRaw = connectionInfo.warehouse_id || "";
+      const whId =
+        whRaw && !whRaw.includes("Serverless") && !whRaw.includes("Warehouse")
+          ? whRaw
+          : undefined;
+
+      const hostUrl =
+        connectionInfo.host &&
+        !connectionInfo.host.includes("Workspace") &&
+        connectionInfo.host.includes(".")
+          ? connectionInfo.host
+          : undefined;
 
       setPublishStep(3);
       const res = await deployToDatabricks(jobUuid, {
         warehouse_id: whId,
         host: hostUrl,
+        // Only send a pasted override; otherwise the server uses the saved connection PAT
         token: patTokenInput || undefined,
         catalog: connectionInfo.catalog || undefined,
         schema_name: connectionInfo.schema_name || undefined,
@@ -651,23 +674,33 @@ export default function DeploymentReviewDetail({
                   {publishError}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                  <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
-                    Enter Databricks Personal Access Token (PAT):
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="dapi..."
-                    value={patTokenInput}
-                    onChange={(e) => setPatTokenInput(e.target.value)}
-                    style={{
-                      background: "#0d1117",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: "4px",
-                      padding: "0.4rem 0.6rem",
-                      color: "#fff",
-                      fontSize: "0.8rem",
-                    }}
-                  />
+                  {/* Only ask for a PAT when none is saved on the default connection */}
+                  {!hasSavedToken && (
+                    <>
+                      <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
+                        Enter Databricks Personal Access Token (PAT):
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="dapi..."
+                        value={patTokenInput}
+                        onChange={(e) => setPatTokenInput(e.target.value)}
+                        style={{
+                          background: "#0d1117",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: "4px",
+                          padding: "0.4rem 0.6rem",
+                          color: "#fff",
+                          fontSize: "0.8rem",
+                        }}
+                      />
+                    </>
+                  )}
+                  {hasSavedToken && (
+                    <div style={{ fontSize: "0.72rem", color: "var(--text-tertiary)" }}>
+                      Using the PAT saved on your default Databricks connection. Fix the connection under Connections if credentials are wrong.
+                    </div>
+                  )}
                   <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem" }}>
                     <button
                       className={styles.secondaryBtn}

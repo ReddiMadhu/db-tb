@@ -118,12 +118,18 @@ def test_factory_chart_types_valid(factory_call, expected_type, expected_version
     assert w.spec["widgetType"] == expected_type
     assert w.spec["version"] == expected_version
     assert w.queries, "every widget must have a query binding"
-    assert w.queries[0].name == "main_query"
     q = w.queries[0].query
     assert q.get("datasetName") == "ds"
     assert "disaggregated" in q
     assert "disaggregatedData" in q
     assert q["fields"], "query fields must not be empty"
+
+    # Filters: query.name must equal encodings.fields[].queryName (stable binding)
+    if expected_type.startswith("filter-"):
+        enc_qn = ((w.spec.get("encodings") or {}).get("fields") or [{}])[0].get("queryName")
+        assert w.queries[0].name == enc_qn
+    else:
+        assert w.queries[0].name == "main_query"
 
     enc = w.spec["encodings"]
     assert enc, "encodings must not be empty"
@@ -213,6 +219,28 @@ def _ubim_widget(chart_type, x, y, color=None, title="W", extra_qf=None):
 
 
 def _dashboard_for(widget):
+    """Build a UBIM dashboard whose dataset projection matches the widget fields.
+
+    Binding validation now checks projected output columns (not every backtick
+    in the SQL), so the stub dataset must actually project what the widget asks for.
+    """
+    select_parts = []
+    dim_count = 0
+    for qf in getattr(widget, "query_fields", None) or []:
+        name = qf.name
+        expr = qf.expression or f"`{name}`"
+        # Keep aggregate expressions as-is; bare dims get backticked projection
+        if expr.upper().startswith(("SUM", "AVG", "COUNT", "MIN", "MAX", "PERCENTILE")):
+            select_parts.append(f"{expr} AS `{name}`")
+        else:
+            select_parts.append(f"`{name}`")
+            dim_count += 1
+    if not select_parts:
+        select_parts = ["`State`", "`Gender`", "SUM(`Claims`) AS `Claims`"]
+        dim_count = 2
+    sql = f"SELECT {', '.join(select_parts)} FROM catalog.s.t"
+    if dim_count:
+        sql += " GROUP BY " + ", ".join(str(i + 1) for i in range(dim_count))
     return IntermediateDashboard(
         dashboard_id="d1",
         title="Test",
@@ -220,10 +248,7 @@ def _dashboard_for(widget):
         datasets=[
             IntermediateDataset(
                 name="ds1",
-                sql_query=(
-                    "SELECT `State`, `Gender`, SUM(`Claims`) AS `Claims` "
-                    "FROM catalog.s.t GROUP BY 1, 2"
-                ),
+                sql_query=sql,
             )
         ],
     )

@@ -1,0 +1,668 @@
+{
+  "datasets": [
+    {
+      "name": "c9234104",
+      "displayName": "Incident_Vs_Claims___Gender_Distribution",
+      "query": "SELECT `Demographics_Gender`, `StateName`, SUM(`Total_Incidents`) AS `Total_Incidents`, SUM(`Total_Claim`) AS `Total_Claim` FROM hive_metastore.default.insurance_claims_extract WHERE NOT (`Demographics_Gender` IN ('F', 'M') AND `StateName` IN ('Alaska', 'Hawaii', 'Puerto Rico')) GROUP BY 1, 2 ORDER BY 1"
+    },
+    {
+      "name": "803d938b",
+      "displayName": "Region___Claim_Ratio",
+      "query": "SELECT `Region`, 'Total Claim' AS `Metric`, CAST(SUM(`Total_Claim`) AS DOUBLE) AS `Value` FROM hive_metastore.default.insurance_claims_extract GROUP BY 1 UNION ALL SELECT `Region`, 'Total Paid' AS `Metric`, CAST(SUM(`Total_Paid`) AS DOUBLE) AS `Value` FROM hive_metastore.default.insurance_claims_extract GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "fec728ea",
+      "displayName": "Region___Claim_Ratio__2",
+      "query": "SELECT `Region`, SUM(`Total_Incidents`) AS `Total_Incidents` FROM hive_metastore.default.insurance_claims_extract GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "name": "f2acdb86",
+      "displayName": "Sheet_8",
+      "query": "SELECT `INCID`, `Above_Allowed_Threshold`, `Date`, `Region`, SUM(`Total_Payout`) AS `Total_Payout` FROM hive_metastore.default.insurance_claims_extract GROUP BY 1, 2, 3, 4 ORDER BY 1"
+    },
+    {
+      "name": "32bfe874",
+      "displayName": "Total_Claim_Per_Region",
+      "query": "SELECT `Region`, `Demographics_Age_bin`, SUM(`Total_Claim`) AS `Total_Claim` FROM hive_metastore.default.insurance_claims_extract WHERE `Region` NOT IN ('Unknown') GROUP BY 1, 2 ORDER BY 1"
+    },
+    {
+      "name": "e21ed429",
+      "displayName": "Total_Claim_Vs_Total_Payout",
+      "query": "SELECT * FROM (SELECT `StateName`, 'Total Claim' AS `Metric`, CAST(SUM(`Total_Claim`) AS DOUBLE) AS `Value` FROM hive_metastore.default.insurance_claims_extract WHERE `Claim_Paid_Ratio` >= 0.0 AND `Claim_Paid_Ratio` <= 3.1089999999999995 AND `PostalCode` NOT IN (96707.0, 96708.0, 96712.0, 96720.0, 96733.0, 96734.0, 96740.0, 96741.0, 96743.0, 96744.0, 96749.0, 96752.0, 96753.0, 96762.0, 96768.0, 96782.0, 96789.0, 96797.0, 96813.0, 96814.0, 96815.0, 96816.0, 96817.0, 96819.0, 96821.0, 96822.0, 96825.0, 96826.0, 99503.0, 99504.0, 99507.0, 99517.0, 99577.0, 99654.0, 99687.0, 99701.0, 99707.0, 99708.0, 99709.0, 99780.0, 99821.0) AND `StateName` NOT IN ('Florida') GROUP BY 1 UNION ALL SELECT `StateName`, 'Total Payout' AS `Metric`, CAST(SUM(`Total_Payout`) AS DOUBLE) AS `Value` FROM hive_metastore.default.insurance_claims_extract WHERE `Claim_Paid_Ratio` >= 0.0 AND `Claim_Paid_Ratio` <= 3.1089999999999995 AND `PostalCode` NOT IN (96707.0, 96708.0, 96712.0, 96720.0, 96733.0, 96734.0, 96740.0, 96741.0, 96743.0, 96744.0, 96749.0, 96752.0, 96753.0, 96762.0, 96768.0, 96782.0, 96789.0, 96797.0, 96813.0, 96814.0, 96815.0, 96816.0, 96817.0, 96819.0, 96821.0, 96822.0, 96825.0, 96826.0, 99503.0, 99504.0, 99507.0, 99517.0, 99577.0, 99654.0, 99687.0, 99701.0, 99707.0, 99708.0, 99709.0, 99780.0, 99821.0) AND `StateName` NOT IN ('Florida') GROUP BY 1) AS `__map_unpivot` WHERE `StateName` IN (SELECT `StateName` FROM hive_metastore.default.insurance_claims_extract WHERE `Claim_Paid_Ratio` >= 0.0 AND `Claim_Paid_Ratio` <= 3.1089999999999995 AND `PostalCode` NOT IN (96707.0, 96708.0, 96712.0, 96720.0, 96733.0, 96734.0, 96740.0, 96741.0, 96743.0, 96744.0, 96749.0, 96752.0, 96753.0, 96762.0, 96768.0, 96782.0, 96789.0, 96797.0, 96813.0, 96814.0, 96815.0, 96816.0, 96817.0, 96819.0, 96821.0, 96822.0, 96825.0, 96826.0, 99503.0, 99504.0, 99507.0, 99517.0, 99577.0, 99654.0, 99687.0, 99701.0, 99707.0, 99708.0, 99709.0, 99780.0, 99821.0) AND `StateName` NOT IN ('Florida') GROUP BY 1 ORDER BY (CAST(SUM(`Total_Claim`) AS DOUBLE) + CAST(SUM(`Total_Payout`) AS DOUBLE)) DESC LIMIT 15) ORDER BY 1"
+    }
+  ],
+  "pages": [
+    {
+      "name": "a5dd73a1",
+      "displayName": "Insurance Claims Performance",
+      "layout": [
+        {
+          "widget": {
+            "name": "fdb8f393",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "e21ed429",
+                  "disaggregated": false,
+                  "disaggregatedData": false,
+                  "fields": [
+                    {
+                      "expression": "`StateName`",
+                      "name": "StateName"
+                    },
+                    {
+                      "expression": "`Metric`",
+                      "name": "Metric"
+                    },
+                    {
+                      "expression": "SUM(`Value`)",
+                      "name": "sum(Value)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "StateName",
+                  "displayName": "Statename",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "title": "Statename"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(Value)",
+                  "displayName": "Sum(Value)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Sum(Value)"
+                  }
+                },
+                "label": {
+                  "show": false
+                },
+                "color": {
+                  "fieldName": "Metric",
+                  "displayName": "Metric",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "title": "Total Claims and Payout",
+                "showTitle": true,
+                "legend": {
+                  "position": "right",
+                  "visible": true
+                }
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "ad7c9ee5",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "c9234104",
+                  "disaggregated": false,
+                  "disaggregatedData": false,
+                  "fields": [
+                    {
+                      "expression": "`Demographics_Gender`",
+                      "name": "Demographics_Gender"
+                    },
+                    {
+                      "expression": "SUM(`Total_Incidents`)",
+                      "name": "Total_Incidents"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pie",
+              "encodings": {
+                "color": {
+                  "fieldName": "Demographics_Gender",
+                  "displayName": "Demographics Gender",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "angle": {
+                  "fieldName": "Total_Incidents",
+                  "displayName": "Total Incidents",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "title": "Incident Vs Claims - Gender Distribution",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 8,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "4857a287",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "32bfe874",
+                  "disaggregated": false,
+                  "disaggregatedData": false,
+                  "fields": [
+                    {
+                      "expression": "`Region`",
+                      "name": "Region"
+                    },
+                    {
+                      "expression": "`Demographics_Age_bin`",
+                      "name": "Demographics_Age_bin"
+                    },
+                    {
+                      "expression": "SUM(`Total_Claim`)",
+                      "name": "Total_Claim"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "heatmap",
+              "encodings": {
+                "x": {
+                  "fieldName": "Region",
+                  "displayName": "Region",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "title": "Region"
+                  }
+                },
+                "y": {
+                  "fieldName": "Demographics_Age_bin",
+                  "displayName": "Demographics Age Bin",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "title": "Demographics Age Bin"
+                  }
+                },
+                "color": {
+                  "fieldName": "Total_Claim",
+                  "displayName": "Total Claim",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "title": "Claims by Age Group",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "826ac592",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "f2acdb86",
+                  "disaggregated": false,
+                  "disaggregatedData": false,
+                  "fields": [
+                    {
+                      "expression": "`INCID`",
+                      "name": "INCID"
+                    },
+                    {
+                      "expression": "SUM(`Total_Payout`)",
+                      "name": "Total_Payout"
+                    },
+                    {
+                      "expression": "`Above_Allowed_Threshold`",
+                      "name": "Above_Allowed_Threshold"
+                    },
+                    {
+                      "expression": "`Date`",
+                      "name": "Date"
+                    },
+                    {
+                      "expression": "`Region`",
+                      "name": "Region"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "scatter",
+              "encodings": {
+                "x": {
+                  "fieldName": "INCID",
+                  "displayName": "Incid",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Incid"
+                  }
+                },
+                "y": {
+                  "fieldName": "Total_Payout",
+                  "displayName": "Total Payout",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Total Payout"
+                  }
+                },
+                "color": {
+                  "fieldName": "Above_Allowed_Threshold",
+                  "displayName": "Above Allowed Threshold",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "title": "Total Payout - Threshold",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 11,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "f5d8fdff",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "803d938b",
+                  "disaggregated": false,
+                  "disaggregatedData": false,
+                  "fields": [
+                    {
+                      "expression": "`Region`",
+                      "name": "Region"
+                    },
+                    {
+                      "expression": "`Metric`",
+                      "name": "Metric"
+                    },
+                    {
+                      "expression": "SUM(`Value`)",
+                      "name": "sum(Value)"
+                    }
+                  ],
+                  "cubeGroupingSets": {
+                    "sets": [
+                      {
+                        "fieldNames": [
+                          "Metric"
+                        ]
+                      },
+                      {
+                        "fieldNames": [
+                          "Region"
+                        ]
+                      }
+                    ]
+                  },
+                  "orders": [
+                    {
+                      "direction": "ASC",
+                      "expression": "`Metric`"
+                    },
+                    {
+                      "direction": "ASC",
+                      "expression": "`Region`"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pivot",
+              "encodings": {
+                "rows": [
+                  {
+                    "fieldName": "Metric",
+                    "scale": {
+                      "type": "categorical"
+                    }
+                  }
+                ],
+                "columns": [
+                  {
+                    "fieldName": "Region",
+                    "scale": {
+                      "type": "categorical"
+                    }
+                  }
+                ],
+                "cell": {
+                  "type": "single-cell",
+                  "fieldName": "sum(Value)",
+                  "format": {
+                    "type": "number-plain",
+                    "abbreviation": "compact"
+                  }
+                }
+              },
+              "frame": {
+                "title": "Region - Claim Ratio",
+                "showTitle": true
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "fd39cb5f",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "fec728ea",
+                  "disaggregated": false,
+                  "disaggregatedData": false,
+                  "fields": [
+                    {
+                      "expression": "`Region`",
+                      "name": "Region"
+                    },
+                    {
+                      "expression": "SUM(`Total_Incidents`)",
+                      "name": "Total_Incidents"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "Region",
+                  "displayName": "Region",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "title": "Region"
+                  }
+                },
+                "y": {
+                  "fieldName": "Total_Incidents",
+                  "displayName": "Total Incidents",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "title": "Total Incidents"
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "title": "Region - Claim Ratio (2)",
+                "showTitle": true,
+                "legend": {
+                  "position": "right",
+                  "visible": true
+                }
+              },
+              "mark": {
+                "colors": [
+                  "#077A9D",
+                  "#FFAB00",
+                  "#00A972",
+                  "#FF3621",
+                  "#8BCAE7",
+                  "#AB4057",
+                  "#99DDB4",
+                  "#FCA4A1",
+                  "#919191",
+                  "#BF7080"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "a4522cd4",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# **Insurance Claims Dashboard**"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 5,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "e93009f7",
+            "queries": [
+              {
+                "name": "dashboards/b011f547/datasets/f2acdb86_Date",
+                "query": {
+                  "datasetName": "f2acdb86",
+                  "disaggregated": true,
+                  "disaggregatedData": true,
+                  "fields": [
+                    {
+                      "expression": "`Date`",
+                      "name": "Date"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "Date",
+                    "displayName": "Date",
+                    "queryName": "dashboards/b011f547/datasets/f2acdb86_Date"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Date",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "6a0b8a0d",
+            "queries": [
+              {
+                "name": "dashboards/b011f547/datasets/803d938b_Region",
+                "query": {
+                  "datasetName": "803d938b",
+                  "disaggregated": true,
+                  "disaggregatedData": true,
+                  "fields": [
+                    {
+                      "expression": "`Region`",
+                      "name": "Region"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "Region",
+                    "displayName": "Region",
+                    "queryName": "dashboards/b011f547/datasets/803d938b_Region"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Region",
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 2
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ]
+}

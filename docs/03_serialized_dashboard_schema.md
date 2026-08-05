@@ -128,9 +128,11 @@ The visualization instructions.
 | `encodings` | `Encodings` | Data-to-visual mapping payload. | [Verified] |
 
 **widgetType Enum Mapping**:
-* **Version 3**: `bar` [Verified], `scatter` [Verified], `line` [Inferred], `area` [Inferred], `pie` [Inferred], `combo` [Inferred], `heatmap` [Inferred], `histogram` [Inferred], `map` [Inferred]
+* **Version 3**: `bar` [Verified], `scatter` [Verified], `line` [Inferred], `area` [Inferred], `pie` [Inferred], `combo` [Inferred], `heatmap` [Inferred], `histogram` [Inferred], `map` [Inferred], `pivot` [Verified] (live workspace + query-level `cubeGroupingSets`/`orders`; not the same as v1 table)
 * **Version 2**: `counter` [Verified], `filter-multi-select` [Verified], `filter-date-range-picker` [Verified], `filter-single-select` [Inferred], `filter-date-picker` [Inferred]
-* **Version 1**: `table` [Verified], `pivot` [Inferred]
+* **Version 1**: `table` [Verified] (official Databricks bundle-examples NYC Taxi `.lvdash.json`)
+
+> **Note on `specLoadError`:** Insurance deploy failures on widgets `41fe1af8` / `4c0922e0` correlated with a legacy `renderSpec` wrapper, not with healthy `"version": 1, "widgetType": "table"` specs. The official NYC Taxi sample uses table v1 successfully. Do not force table to v3.
 
 ---
 

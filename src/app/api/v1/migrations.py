@@ -1,10 +1,11 @@
 import os
 import json
+import re
 import tempfile
 import shutil
 import logging
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Any, Optional, Dict, List, Tuple
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel as PydanticBaseModel
@@ -24,6 +25,169 @@ router = APIRouter()
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Table refs after FROM/JOIN — covers hive_metastore.default.t and `samples`.`nyctaxi`.`trips`
+_TABLE_REF_RE = re.compile(
+    r"(?i)\b(?:FROM|JOIN)\s+("
+    r"(?:`[^`]+`|\w+)"
+    r"(?:\s*\.\s*(?:`[^`]+`|\w+))*"
+    r")"
+)
+
+
+def _normalize_table_ref(raw: str) -> str:
+    """Strip backticks/whitespace so `a`.`b`.`c` and a.b.c compare the same."""
+    return re.sub(r"[`\s]", "", raw or "")
+
+
+def extract_table_refs(sql: str) -> List[str]:
+    """Return normalized table refs found after FROM/JOIN in ``sql``."""
+    if not sql:
+        return []
+    return [_normalize_table_ref(m.group(1)) for m in _TABLE_REF_RE.finditer(sql)]
+
+
+def is_fully_qualified_table_ref(ref: str) -> bool:
+    """True when a normalized ref has catalog.schema.table (≥2 dots)."""
+    return (ref or "").count(".") >= 2
+
+
+def all_dataset_queries_fully_qualified(queries: List[str]) -> Tuple[bool, str]:
+    """Decide whether every dataset SQL uses fully-qualified table names.
+
+    Returns (omit_catalog, reason). When no FROM/JOIN refs are found, returns
+    False so a caller-supplied catalog is still sent.
+    """
+    nonempty = [q for q in (queries or []) if (q or "").strip()]
+    if not nonempty:
+        return False, "no dataset queries present"
+
+    all_refs: List[str] = []
+    for q in nonempty:
+        refs = extract_table_refs(q)
+        if not refs:
+            return False, "at least one dataset query has no FROM/JOIN table reference"
+        all_refs.extend(refs)
+
+    unqualified = [r for r in all_refs if not is_fully_qualified_table_ref(r)]
+    if unqualified:
+        sample = ", ".join(unqualified[:5])
+        return False, f"unqualified table ref(s): {sample}"
+
+    return True, f"all {len(all_refs)} FROM/JOIN ref(s) are fully qualified (catalog.schema.table)"
+
+
+def catalogs_embedded_in_queries(queries: List[str]) -> List[str]:
+    """Return distinct catalog names from fully-qualified FROM/JOIN refs."""
+    catalogs: List[str] = []
+    seen = set()
+    for q in queries or []:
+        for ref in extract_table_refs(q):
+            if not is_fully_qualified_table_ref(ref):
+                continue
+            catalog = ref.split(".", 1)[0]
+            if catalog and catalog not in seen:
+                seen.add(catalog)
+                catalogs.append(catalog)
+    return catalogs
+
+
+def preflight_dataset_catalog(
+    deploy_catalog: Optional[str],
+    deploy_schema: Optional[str],
+    queries: List[str],
+    *,
+    host: str,
+    token: str,
+    warehouse_id: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str], str]:
+    """Validate a to-be-sent dataset_catalog against the workspace and SQL.
+
+    Returns (catalog, schema, reason). Catalog/schema are None when the param
+    must be omitted to avoid CATALOG_NOT_FOUND.
+    """
+    if not deploy_catalog:
+        return None, None, "no dataset_catalog provided — omitting"
+
+    sql_catalogs = catalogs_embedded_in_queries(queries)
+    if sql_catalogs and deploy_catalog not in sql_catalogs:
+        return (
+            None,
+            None,
+            (
+                f"omitting dataset_catalog={deploy_catalog!r} — conflicts with "
+                f"catalog(s) embedded in dataset SQL: {sql_catalogs}"
+            ),
+        )
+
+    try:
+        from app.services.mapper.unity_catalog_service import UnityCatalogService
+
+        listed = UnityCatalogService.list_catalogs(host, token, warehouse_id)
+        names = {c.get("name", "") for c in (listed or []) if c.get("name")}
+        if names and deploy_catalog not in names:
+            return (
+                None,
+                None,
+                (
+                    f"omitting dataset_catalog={deploy_catalog!r} — catalog not "
+                    f"found in workspace (available: {sorted(names)[:12]})"
+                ),
+            )
+    except Exception as exc:
+        # Fail open on listing errors but record the reason; the create call
+        # may still succeed when SQL is fully qualified.
+        return (
+            deploy_catalog,
+            deploy_schema,
+            (
+                f"sending dataset_catalog={deploy_catalog!r} "
+                f"dataset_schema={deploy_schema!r} — catalog preflight listing "
+                f"failed ({exc}); proceeding with request values"
+            ),
+        )
+
+    return (
+        deploy_catalog,
+        deploy_schema,
+        (
+            f"sending dataset_catalog={deploy_catalog!r} "
+            f"dataset_schema={deploy_schema!r} — catalog exists in workspace"
+            + (f" and matches SQL catalog(s) {sql_catalogs}" if sql_catalogs else "")
+        ),
+    )
+
+
+def collect_deployed_dataset_locations(dashboard_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract per-dataset location from a GET-dashboard response body."""
+    out: List[Dict] = []
+    if not isinstance(dashboard_payload, dict):
+        return out
+
+    serialized = dashboard_payload.get("serialized_dashboard")
+    datasets = []
+    if isinstance(serialized, str) and serialized.strip():
+        try:
+            parsed = json.loads(serialized)
+            datasets = parsed.get("datasets") or []
+        except Exception:
+            datasets = []
+    elif isinstance(serialized, dict):
+        datasets = serialized.get("datasets") or []
+    elif isinstance(dashboard_payload.get("datasets"), list):
+        datasets = dashboard_payload["datasets"]
+
+    for ds in datasets:
+        if not isinstance(ds, dict):
+            continue
+        out.append(
+            {
+                "name": ds.get("name"),
+                "displayName": ds.get("displayName"),
+                "location": ds.get("location"),
+            }
+        )
+    return out
 
 
 @router.get("/")
@@ -100,7 +264,8 @@ def _run_pipeline_background(
         os.makedirs(job_output_dir, exist_ok=True)
         output_filename = f"{job_uuid}.lvdash.json"
         output_path = os.path.join(job_output_dir, output_filename)
-        lakeview_dash.save_to_file(output_path)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(lakeview_dash.to_serialized())
 
         pretty_path = os.path.join(job_output_dir, f"{job_uuid}_pretty.lvdash.json")
         with open(pretty_path, "w", encoding="utf-8") as f:
@@ -377,7 +542,7 @@ async def get_migration_report(job_uuid: str, db: Session = Depends(get_db)):
 
 
 class DeployRequest(PydanticBaseModel):
-    warehouse_id: str
+    warehouse_id: Optional[str] = None
     host: Optional[str] = None
     token: Optional[str] = None
     catalog: Optional[str] = None
@@ -402,28 +567,113 @@ async def deploy_to_databricks(
         )
 
     try:
-        client = LakeviewAPIClient(host=req.host, token=req.token)
+        from app.api.v1.connections import resolve_databricks_credentials
+
+        creds = resolve_databricks_credentials(
+            db,
+            host=req.host,
+            token=req.token,
+            warehouse_id=req.warehouse_id,
+            catalog=req.catalog,
+            schema_name=req.schema_name,
+        )
+        cred_sources = creds["sources"]
+        warehouse_id = creds["warehouse_id"]
+        deploy_catalog_req = creds["catalog"]
+        deploy_schema_req = creds["schema_name"]
+
+        client = LakeviewAPIClient(host=creds["host"], token=creds["token"])
         if not client.host:
             raise HTTPException(
                 status_code=400,
-                detail="Databricks Host URL is required (e.g. https://adb-xxxx.azuredatabricks.net). Set DATABRICKS_HOST in .env or provide host in request."
+                detail=(
+                    "Databricks Host URL is required. Save a connection under "
+                    "Connections, set DATABRICKS_HOST in .env, or provide host in the request."
+                ),
             )
         if not client.token:
             raise HTTPException(
                 status_code=400,
-                detail="Databricks Personal Access Token (PAT) is required. Set DATABRICKS_TOKEN in .env or provide token in request."
+                detail=(
+                    "Databricks Personal Access Token (PAT) is required. Save a "
+                    "connection under Connections, set DATABRICKS_TOKEN in .env, "
+                    "or provide token in the request."
+                ),
+            )
+        if not warehouse_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "SQL Warehouse ID is required. Save a warehouse on your "
+                    "default connection, set DEFAULT_WAREHOUSE_ID in .env, "
+                    "or provide warehouse_id in the request."
+                ),
             )
 
         with open(job.output_lvdash_path, "r", encoding="utf-8") as f:
             serialized_json = f.read()
 
+        # Omit dataset_catalog/schema when every dataset query is already fully
+        # qualified (catalog.schema.table) — sending a wrong default like "main"
+        # causes CATALOG_NOT_FOUND on workspaces that don't have that catalog.
+        # Do NOT emit a `location` key into the serialized JSON; catalog defaults
+        # are create-call query params only (Databricks lakeview create / DAB).
+        # `location` is API-materialized on the deployed artifact when those
+        # params are sent — never a generator field.
+        deploy_catalog = deploy_catalog_req or None
+        deploy_schema = deploy_schema_req or None
+        catalog_decision = "using request catalog/schema (no FQN check run)"
+        queries: List[str] = []
+        try:
+            dash_obj = json.loads(serialized_json)
+            queries = [d.get("query") or "" for d in dash_obj.get("datasets") or []]
+            omit, fqn_reason = all_dataset_queries_fully_qualified(queries)
+            if omit:
+                deploy_catalog = None
+                deploy_schema = None
+                catalog_decision = f"omitting dataset_catalog/schema — {fqn_reason}"
+            else:
+                # Preflight: only send a catalog that exists and does not
+                # conflict with catalogs already embedded in dataset SQL.
+                deploy_catalog, deploy_schema, catalog_decision = preflight_dataset_catalog(
+                    deploy_catalog,
+                    deploy_schema,
+                    queries,
+                    host=client.host,
+                    token=client.token,
+                    warehouse_id=warehouse_id,
+                )
+                catalog_decision = (
+                    f"{catalog_decision} — FQN check: {fqn_reason}"
+                )
+            logger.info("Deploy catalog decision: %s", catalog_decision)
+        except Exception as exc:
+            catalog_decision = f"FQN check failed ({exc}); using request catalog/schema"
+            logger.warning(catalog_decision)
+
         result = client.create_dashboard(
             display_name=job.source_filename.replace('.twbx', '').replace('.twb', ''),
             serialized_dashboard=serialized_json,
-            warehouse_id=req.warehouse_id,
-            dataset_catalog=req.catalog or None,
-            dataset_schema=req.schema_name or None,
+            warehouse_id=warehouse_id,
+            dataset_catalog=deploy_catalog,
+            dataset_schema=deploy_schema,
         )
+
+        # Post-deploy verification: location only exists on the deployed
+        # artifact (API-materialized). Record it so callers can confirm
+        # whether any dataset received a stamped location.
+        deployed_dataset_locations: List[Dict] = []
+        dashboard_id = result.get("dashboard_id")
+        if dashboard_id:
+            try:
+                deployed = client.get_dashboard(dashboard_id)
+                deployed_dataset_locations = collect_deployed_dataset_locations(deployed)
+            except Exception as verify_err:
+                logger.warning(
+                    "Post-deploy location verification failed for %s: %s",
+                    dashboard_id,
+                    verify_err,
+                )
 
         job.status = "DEPLOYED"
         db.commit()
@@ -440,23 +690,50 @@ async def deploy_to_databricks(
                 f"{client.host}/dashboardsv3/{result.get('dashboard_id')}/published"
                 if client.host else f"/dashboardsv3/{result.get('dashboard_id')}/published"
             )
+            cred_source_log = (
+                f"credentials: host={cred_sources['host']}, "
+                f"token={cred_sources['token']}, "
+                f"warehouse={cred_sources['warehouse_id']}, "
+                f"catalog={cred_sources['catalog']}, "
+                f"schema={cred_sources['schema_name']}"
+                + (
+                    f" (connection={creds['connection_name']!r})"
+                    if creds.get("connection_name")
+                    else ""
+                )
+            )
             if pub_stage:
                 pub_stage.status = "COMPLETED"
                 pub_stage.completed_at = datetime.utcnow()
                 pub_stage.metrics = {
                     "dashboard_id": result.get("dashboard_id"),
-                    "warehouse_id": req.warehouse_id,
+                    "warehouse_id": warehouse_id,
                     "status": "DEPLOYED",
+                    "dataset_catalog_sent": deploy_catalog,
+                    "dataset_schema_sent": deploy_schema,
                 }
                 pub_stage.artifacts = {
                     "dashboard_id": result.get("dashboard_id"),
                     "published_url": pub_url,
-                    "warehouse_id": req.warehouse_id,
-                    "catalog": req.catalog,
-                    "schema": req.schema_name,
+                    "warehouse_id": warehouse_id,
+                    "catalog": deploy_catalog_req,
+                    "schema": deploy_schema_req,
+                    "dataset_catalog_sent": deploy_catalog,
+                    "dataset_schema_sent": deploy_schema,
+                    "catalog_decision": catalog_decision,
+                    "deployed_dataset_locations": deployed_dataset_locations,
+                    "credential_sources": cred_sources,
+                    "connection_name": creds.get("connection_name"),
                 }
                 pub_stage.logs = (pub_stage.logs or []) + [
-                    f"[INFO] Deploying Lakeview dashboard JSON to SQL Warehouse {req.warehouse_id}",
+                    f"[INFO] Deploying Lakeview dashboard JSON to SQL Warehouse {warehouse_id}",
+                    f"[INFO] {cred_source_log}",
+                    f"[INFO] {catalog_decision}",
+                    f"[INFO] dataset_catalog_sent={deploy_catalog!r} dataset_schema_sent={deploy_schema!r}",
+                    (
+                        f"[INFO] deployed_dataset_locations="
+                        f"{json.dumps(deployed_dataset_locations)[:2000]}"
+                    ),
                     f"[SUCCESS] Dashboard deployed! ID: {result.get('dashboard_id')}",
                     f"[SUCCESS] Published URL: {pub_url}",
                 ]
@@ -468,8 +745,15 @@ async def deploy_to_databricks(
             "status": "SUCCESS",
             "dashboard_id": result.get("dashboard_id"),
             "published_url": f"{client.host}/dashboardsv3/{result.get('dashboard_id')}/published"
-                if client.host else None
+                if client.host else None,
+            "catalog_decision": catalog_decision,
+            "dataset_catalog_sent": deploy_catalog,
+            "dataset_schema_sent": deploy_schema,
+            "deployed_dataset_locations": deployed_dataset_locations,
+            "credential_sources": cred_sources,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         # Record failure on StageResult if publish fails
         try:

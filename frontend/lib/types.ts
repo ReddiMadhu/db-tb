@@ -320,6 +320,7 @@ export interface DatabricksConnectionItem {
   catalog: string | null;
   schema_name: string | null;
   is_default: boolean;
+  has_token?: boolean;
   created_at: string | null;
 }
 

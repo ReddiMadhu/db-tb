@@ -8,7 +8,8 @@ valid queries & fields, and prevents schema drift across the repository.
 Version rules (verified against Lakeview serialized schema):
   - Charts (bar/line/area/scatter/pie/heatmap/histogram/combo): version 3
   - Counter / filters: version 2
-  - Table / pivot: version 1
+  - Table: version 1 (official NYC Taxi sample + schema docs)
+  - Pivot: version 3 with cubeGroupingSets + orders (live-verified)
 
 Encoding rules:
   - Bar / Line / Area: x + y (+ optional color); every channel has scale.type
@@ -143,8 +144,10 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
         errors.append(f"Counter widget requires version 2, got {v}.")
     elif wt and wt.startswith("filter-") and v != 2:
         errors.append(f"Filter widget '{wt}' requires version 2, got {v}.")
-    elif wt in ("table", "pivot") and v != 1:
-        errors.append(f"Table/pivot widget requires version 1, got {v}.")
+    elif wt == "table" and v != 1:
+        errors.append(f"Table widget requires version 1, got {v}.")
+    elif wt == "pivot" and v != 3:
+        errors.append(f"Pivot widget requires version 3, got {v}.")
     elif v not in (1, 2, 3):
         errors.append(f"Invalid widget spec version '{v}'.")
 
@@ -205,6 +208,17 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
         if not isinstance(cols, list) or not cols:
             errors.append("Table widget missing required 'columns' encodings list.")
 
+    elif wt == "pivot":
+        rows = encodings.get("rows")
+        cols = encodings.get("columns")
+        cell = encodings.get("cell")
+        if not isinstance(rows, list) or not rows:
+            errors.append("Pivot widget missing required 'rows' encodings list.")
+        if not isinstance(cols, list) or not cols:
+            errors.append("Pivot widget missing required 'columns' encodings list.")
+        if not isinstance(cell, dict) or not cell.get("fieldName"):
+            errors.append("Pivot widget missing required 'cell' encoding fieldName.")
+
     elif wt == "counter":
         value = encodings.get("value")
         if not isinstance(value, dict) or not value.get("fieldName"):
@@ -226,10 +240,11 @@ class WidgetFactory:
         dataset_name: str,
         fields: List[Dict[str, str]],
         disaggregated: bool = False,
+        query_name: str = "main_query",
     ) -> WidgetQuery:
         clean_fields = sanitize_query_fields(fields)
         return WidgetQuery(
-            name="main_query",
+            name=query_name,
             query={
                 "datasetName": dataset_name,
                 "disaggregated": disaggregated,
@@ -561,13 +576,23 @@ class WidgetFactory:
 
         columns_enc = []
         for i, col in enumerate(column_fields):
+            # Infer type from matching query field expression when available
+            col_type = "string"
+            display_as = "string"
+            for qf in qfields:
+                if qf.get("name") == col:
+                    expr = (qf.get("expression") or "").upper()
+                    if expr.startswith(("SUM", "AVG", "COUNT", "MIN", "MAX", "PERCENTILE")):
+                        col_type = "float"
+                        display_as = "number"
+                    break
             columns_enc.append({
                 "fieldName": col,
                 "displayName": _clean_title(col),
                 "title": _clean_title(col),
-                "type": "string",
-                "displayAs": "string",
-                "alignContent": "left",
+                "type": col_type,
+                "displayAs": display_as,
+                "alignContent": "right" if display_as == "number" else "left",
                 "visible": True,
                 "order": 100000 + i,
             })
@@ -584,7 +609,97 @@ class WidgetFactory:
         if not ok:
             raise ValueError(f"Invalid table widget spec: {errs}")
 
-        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, True)], spec=spec)
+        # Pre-aggregated measures → disaggregated=False; raw dims-only → True
+        has_agg = any(
+            (qf.get("expression") or "").upper().startswith(
+                ("SUM", "AVG", "COUNT", "MIN", "MAX", "PERCENTILE")
+            )
+            for qf in qfields
+        )
+        return Widget(
+            queries=[cls._create_widget_query(dataset_name, qfields, not has_agg)],
+            spec=spec,
+        )
+
+    @classmethod
+    def create_pivot_widget(
+        cls,
+        dataset_name: str,
+        row_fields: List[str],
+        column_fields: List[str],
+        cell_field: str = "sum(Value)",
+        title: str = "",
+        query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
+        cell_expression: str = "SUM(`Value`)",
+    ) -> Widget:
+        """Create a Version 3 Pivot widget over an unpivoted (Metric, Value) dataset.
+
+        Live-verified Lakeview shape: version 3 with query-level cubeGroupingSets
+        and orders (ASC on each row then column field). Measure Names → pivot
+        must pass row_fields=['Metric'] and column_fields=[dim] with cell_field
+        matching the Value aggregate alias.
+        """
+        qfields = list(query_fields) if query_fields else []
+        for rf in row_fields:
+            cls._ensure_field(qfields, rf, f"`{rf}`")
+        for cf in column_fields:
+            cls._ensure_field(qfields, cf, f"`{cf}`")
+        cls._ensure_field(qfields, cell_field, cell_expression)
+
+        rows_enc = [
+            {"fieldName": rf, "scale": {"type": "categorical"}}
+            for rf in row_fields
+        ]
+        cols_enc = [
+            {"fieldName": cf, "scale": {"type": "categorical"}}
+            for cf in column_fields
+        ]
+
+        cube_sets = (
+            [{"fieldNames": list(row_fields)}] if row_fields else []
+        ) + (
+            [{"fieldNames": list(column_fields)}] if column_fields else []
+        )
+        orders = [
+            {"direction": "ASC", "expression": f"`{f}`"}
+            for f in list(row_fields) + list(column_fields)
+        ]
+
+        query_body: Dict[str, Any] = {
+            "datasetName": dataset_name,
+            "disaggregated": False,
+            "disaggregatedData": False,
+            "fields": sanitize_query_fields(qfields),
+        }
+        if cube_sets:
+            query_body["cubeGroupingSets"] = {"sets": cube_sets}
+        if orders:
+            query_body["orders"] = orders
+
+        spec = {
+            "version": 3,
+            "widgetType": "pivot",
+            "encodings": {
+                "rows": rows_enc,
+                "columns": cols_enc,
+                "cell": {
+                    "type": "single-cell",
+                    "fieldName": cell_field,
+                    "format": {"type": "number-plain", "abbreviation": "compact"},
+                },
+            },
+            "frame": _frame(title, show_title, fallback="Pivot View"),
+            "data": {"queryName": "main_query"},
+        }
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid pivot widget spec: {errs}")
+
+        return Widget(
+            queries=[WidgetQuery(name="main_query", query=query_body)],
+            spec=spec,
+        )
 
     @classmethod
     def create_counter_widget(
@@ -627,8 +742,17 @@ class WidgetFactory:
         filter_type: str = "filter-multi-select",
         query_fields: Optional[List[Dict[str, str]]] = None,
         show_title: bool = True,
+        dashboard_id: Optional[str] = None,
+        query_name: Optional[str] = None,
     ) -> Widget:
-        """Create a Version 2 Filter widget."""
+        """Create a Version 2 Filter widget.
+
+        ``queryName`` in encodings must equal the widget query ``name``. When
+        ``dashboard_id`` is provided the path is stable; otherwise a relative
+        dataset-scoped name is used (no random per-call dashboard UUID).
+        """
+        from app.models.lakeview_model import stable_lakeview_id
+
         allowed = {
             "filter-multi-select",
             "filter-single-select",
@@ -643,6 +767,9 @@ class WidgetFactory:
         ]
         cls._ensure_field(qfields, field_name)
 
+        dash = dashboard_id or "local"
+        qname = query_name or f"dashboards/{dash}/datasets/{dataset_name}_{field_name}"
+
         spec = {
             "version": 2,
             "widgetType": filter_type,
@@ -651,10 +778,7 @@ class WidgetFactory:
                     {
                         "fieldName": field_name,
                         "displayName": _clean_title(field_name),
-                        "queryName": (
-                            f"dashboards/{generate_lakeview_id()}/datasets/"
-                            f"{dataset_name}_{field_name}"
-                        ),
+                        "queryName": qname,
                     }
                 ]
             },
@@ -664,4 +788,7 @@ class WidgetFactory:
         if not ok:
             raise ValueError(f"Invalid filter widget spec: {errs}")
 
-        return Widget(queries=[cls._create_widget_query(dataset_name, qfields, True)], spec=spec)
+        return Widget(
+            queries=[cls._create_widget_query(dataset_name, qfields, True, query_name=qname)],
+            spec=spec,
+        )

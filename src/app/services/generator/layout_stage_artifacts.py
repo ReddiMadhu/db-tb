@@ -80,13 +80,14 @@ def _extract_lakeview_widget_info(item) -> Dict[str, Any]:
         "position": pos,
     }
 
-    if getattr(w, "textbox_spec", None) is not None:
+    if getattr(w, "is_text_widget", False):
+        text = getattr(w, "text_content", "") or ""
         info["type"] = "textbox"
         info["visual_type"] = "textbox"
         info["visual_type_label"] = "Text Box"
-        info["title"] = (w.textbox_spec or "")[:120]
+        info["title"] = text[:120]
         info["show_title"] = True
-        info["textbox_spec"] = w.textbox_spec
+        info["textbox_spec"] = text
         return info
 
     spec = w.spec or {}

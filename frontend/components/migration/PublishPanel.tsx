@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Rocket, RefreshCw, CheckCircle2, ExternalLink, ShieldCheck } from "lucide-react";
+import { Rocket, RefreshCw, CheckCircle2, ExternalLink } from "lucide-react";
 import { useToast } from "@/components/ui/ToastProvider";
 import { deployToDatabricks, listConnections } from "@/lib/api";
 import styles from "./PublishPanel.module.css";
@@ -26,9 +26,11 @@ export default function PublishPanel({ jobUuid, initialArtifacts = {}, onPublish
 
   const [host, setHost] = useState("");
   const [token, setToken] = useState("");
-  const [warehouseId, setWarehouseId] = useState("a1b2c3d4e5f67890");
+  const [warehouseId, setWarehouseId] = useState("");
   const [catalog, setCatalog] = useState("");
   const [schemaName, setSchemaName] = useState("");
+  const [hasSavedToken, setHasSavedToken] = useState(false);
+  const [savedConnectionName, setSavedConnectionName] = useState<string | null>(null);
 
   useEffect(() => {
     async function initConnection() {
@@ -37,7 +39,11 @@ export default function PublishPanel({ jobUuid, initialArtifacts = {}, onPublish
         if (conns && conns.length > 0) {
           const def = conns.find((c) => c.is_default) || conns[0];
           setHost(def.host || "");
-          setToken(def.token_full || def.token || "");
+          // Do not pre-fill the PAT into the browser — server resolves it.
+          const tok = Boolean(def.has_token || def.token_full || def.token);
+          setHasSavedToken(tok);
+          setSavedConnectionName(def.name || null);
+          setToken("");
           if (def.warehouse_id) setWarehouseId(def.warehouse_id);
           if (def.catalog) setCatalog(def.catalog);
           if (def.schema_name) setSchemaName(def.schema_name);
@@ -51,8 +57,10 @@ export default function PublishPanel({ jobUuid, initialArtifacts = {}, onPublish
           const parsed = JSON.parse(saved);
           if (parsed.length > 0) {
             setHost(parsed[0].host || "");
-            setToken(parsed[0].token_full || parsed[0].token || "");
-            setWarehouseId(parsed[0].warehouseId || warehouseId);
+            const tok = Boolean(parsed[0].token_full || parsed[0].token);
+            setHasSavedToken(tok);
+            setToken("");
+            setWarehouseId(parsed[0].warehouseId || "");
             setCatalog(parsed[0].catalog || "");
             setSchemaName(parsed[0].schema || "");
           }
@@ -63,16 +71,13 @@ export default function PublishPanel({ jobUuid, initialArtifacts = {}, onPublish
   }, []);
 
   const handlePublish = async () => {
-    if (!warehouseId) {
-      toastError("SQL Warehouse ID is required.", "Warehouse Required");
-      return;
-    }
-
     setPublishing(true);
     try {
+      // Omit empty fields so the server can resolve from the saved connection
       const res = await deployToDatabricks(jobUuid, {
-        warehouse_id: warehouseId,
+        warehouse_id: warehouseId || undefined,
         host: host || undefined,
+        // Only send an override PAT; otherwise the server uses the saved connection
         token: token || undefined,
         catalog: catalog || undefined,
         schema_name: schemaName || undefined,
@@ -128,13 +133,18 @@ export default function PublishPanel({ jobUuid, initialArtifacts = {}, onPublish
           <div className={styles.title}>Publish to Databricks SQL Warehouse</div>
           <div className={styles.desc}>
             Deploy the transpiled Lakeview JSON dashboard directly into your Databricks workspace via REST API.
+            {hasSavedToken && savedConnectionName
+              ? ` Using saved connection "${savedConnectionName}" for credentials.`
+              : ""}
           </div>
         </div>
       </div>
 
       <div className={styles.grid}>
         <div className={styles.formGroup}>
-          <label className={styles.label}>SQL Warehouse ID *</label>
+          <label className={styles.label}>
+            SQL Warehouse ID{hasSavedToken ? " (optional — uses saved connection)" : " *"}
+          </label>
           <input
             type="text"
             className={styles.input}
@@ -156,11 +166,18 @@ export default function PublishPanel({ jobUuid, initialArtifacts = {}, onPublish
         </div>
 
         <div className={styles.formGroup}>
-          <label className={styles.label}>Personal Access Token (PAT)</label>
+          <label className={styles.label}>
+            Personal Access Token (PAT)
+            {hasSavedToken ? " — optional override" : ""}
+          </label>
           <input
             type="password"
             className={styles.input}
-            placeholder="dapi..."
+            placeholder={
+              hasSavedToken
+                ? "Leave blank to use saved connection PAT"
+                : "dapi..."
+            }
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />

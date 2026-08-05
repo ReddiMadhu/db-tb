@@ -32,6 +32,7 @@ MIN_WIDTH_BY_TYPE = {
     ChartType.PIE: 2,
     ChartType.COUNTER: 2,
     ChartType.TABLE: 3,
+    ChartType.PIVOT: 3,
     ChartType.TEXT_BOX: 2,
     ChartType.HEATMAP: 3,
     ChartType.HISTOGRAM: 2,
@@ -52,6 +53,7 @@ DEFAULT_HEIGHT_BY_TYPE = {
     ChartType.PIE: 5,
     ChartType.COUNTER: 3,
     ChartType.TABLE: 6,
+    ChartType.PIVOT: 6,
     ChartType.TEXT_BOX: 2,
     ChartType.HEATMAP: 5,
     ChartType.HISTOGRAM: 5,
@@ -98,7 +100,7 @@ def _get_ideal_width(widget: IntermediateWidget) -> int:
         return max(min_w, min(6, pos.grid_w))
     else:
         # Default: full width for tables, half for charts, third for counters/filters
-        if chart_type == ChartType.TABLE:
+        if chart_type in (ChartType.TABLE, ChartType.PIVOT):
             return 6
         elif chart_type == ChartType.COUNTER:
             return 2

@@ -737,7 +737,7 @@ class MigrationPipeline:
                 for p in lakeview_dash.pages:
                     for item in p.layout:
                         w = item.widget
-                        if getattr(w, "textbox_spec", None):
+                        if getattr(w, "is_text_widget", False):
                             lakeview_text += 1
                         wt = (w.spec or {}).get("widgetType", "") if w.spec else ""
                         if isinstance(wt, str) and wt.startswith("filter-"):

@@ -216,6 +216,11 @@ class FilterMetadata(BaseModel):
     filter_type: str = "categorical"  # categorical | quantitative | relative-date | top | wildcard
     include_values: List[str] = Field(default_factory=list)
     exclude_values: List[str] = Field(default_factory=list)
+    # Structured exclusive filters: OR of AND-groups. Each conjunct is
+    # {"field": <clean field name>, "members": [<literal>, ...]}.
+    # Used for crossjoin exclusions (tuple product) so SQL can emit
+    # NOT (A IN (...) AND B IN (...)) instead of independent NOT INs.
+    exclude_predicate_groups: List[List[Dict[str, Any]]] = Field(default_factory=list)
     min_value: Optional[str] = None
     max_value: Optional[str] = None
     is_context_filter: bool = False

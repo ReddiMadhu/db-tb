@@ -16,7 +16,7 @@ Maps the Tableau Object Model (WorkbookMetadata) to the Universal BI Model
 import uuid
 import re
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from app.models.metadata import (
     WorkbookMetadata, WorksheetMetadata, DatasourceMetadata,
     ShelfField, EncodingMetadata, FilterMetadata
@@ -39,6 +39,7 @@ from app.services.compiler.field_classifier import (
     FieldSemantic
 )
 from app.services.compiler.canonical_field_resolver import CanonicalFieldResolver
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -297,24 +298,231 @@ def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = N
     return from_clause
 
 
-def _build_where_clause(filters: List[FilterMetadata]) -> str:
-    """Build WHERE clause from worksheet filters, skipping any remaining pseudo-fields."""
-    conditions = []
+def _normalize_group_name(name: str) -> str:
+    """Strip Tableau brackets and whitespace for group name matching."""
+    return (name or "").strip().strip("[]").strip()
+
+
+def _find_matching_group(field_name: str, groups: Optional[List[Any]]) -> Optional[Any]:
+    """Find a workbook group whose name matches the filter field (with/without brackets)."""
+    if not groups or not field_name:
+        return None
+    target = _normalize_group_name(field_name).lower()
+    if not target:
+        return None
+    for g in groups:
+        gname = _normalize_group_name(getattr(g, "name", "") or "")
+        if gname.lower() == target:
+            return g
+        # Also match when filter is just the inner caption without "Exclusions (...)" wrappers
+        gfield = (getattr(g, "field", "") or "").strip().strip("[]")
+        if gfield and gfield.lower() == target:
+            return g
+    return None
+
+
+def _column_datatype(physical_name: str, ds: Optional[DatasourceMetadata],
+                     resolver: Optional[CanonicalFieldResolver] = None) -> str:
+    """Resolve datatype for a physical column (string/real/integer/...)."""
+    if resolver and hasattr(resolver, "get_field_metadata"):
+        rf = resolver.get_field_metadata(physical_name)
+        if rf is not None:
+            dt = (getattr(rf, "datatype", "") or "").lower()
+            if dt:
+                return dt
+    meta = _get_column_metadata(physical_name, ds)
+    return (meta.get("datatype") or "").lower()
+
+
+def _format_sql_literal(value: str, datatype: str) -> str:
+    """Quote filter values according to column datatype.
+
+    Numeric/real columns emit bare numbers (e.g. 96707.0); strings stay quoted.
+    """
+    dt = (datatype or "").lower()
+    raw = str(value).strip()
+    if dt in ("real", "integer", "float", "double", "number", "int", "long", "decimal"):
+        try:
+            # Preserve Tableau float-looking members like '96707.0'
+            float(raw)
+            return raw
+        except (TypeError, ValueError):
+            pass
+    escaped = raw.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _sql_from_exclude_predicate_groups(
+    groups: List[List[Dict[str, Any]]],
+    resolver: Optional[CanonicalFieldResolver],
+    ds: Optional[DatasourceMetadata],
+) -> Optional[str]:
+    """Emit SQL for structured exclusive filters (OR of AND-groups).
+
+    Crossjoin of per-level unions → ``NOT (A IN (...) AND B IN (...))``.
+    A single single-conjunct group collapses to ``A NOT IN (...)``.
+    """
+    if not groups:
+        return None
+
+    # Collapse: exactly one group with exactly one conjunct → plain NOT IN
+    if len(groups) == 1 and len(groups[0]) == 1:
+        conjunct = groups[0][0]
+        field = conjunct.get("field") or ""
+        members = list(conjunct.get("members") or [])
+        if not field or not members:
+            return None
+        phys = _resolve_field_for_sql(field, resolver, ds)
+        dt = _column_datatype(phys, ds, resolver)
+        lit = ", ".join(_format_sql_literal(v, dt) for v in members)
+        return f"`{phys}` NOT IN ({lit})"
+
+    or_parts: List[str] = []
+    for and_group in groups:
+        and_parts: List[str] = []
+        for conjunct in and_group:
+            field = conjunct.get("field") or ""
+            members = list(conjunct.get("members") or [])
+            if not field or not members:
+                continue
+            phys = _resolve_field_for_sql(field, resolver, ds)
+            dt = _column_datatype(phys, ds, resolver)
+            lit = ", ".join(_format_sql_literal(v, dt) for v in members)
+            and_parts.append(f"`{phys}` IN ({lit})")
+        if not and_parts:
+            continue
+        if len(and_parts) == 1:
+            or_parts.append(and_parts[0])
+        else:
+            or_parts.append("(" + " AND ".join(and_parts) + ")")
+
+    if not or_parts:
+        return None
+    if len(or_parts) == 1:
+        return f"NOT {or_parts[0]}"
+    return "NOT (" + " OR ".join(or_parts) + ")"
+
+
+def _build_where_clause(
+    filters: List[FilterMetadata],
+    resolver: Optional[CanonicalFieldResolver] = None,
+    ds: Optional[DatasourceMetadata] = None,
+    groups: Optional[List[Any]] = None,
+) -> str:
+    """Build WHERE clause from worksheet filters.
+
+    Resolves every filter field through the caption→physical map (same path as
+    SELECT). Tableau exclusion groups with structured crossjoin predicates emit
+    ``NOT (A IN (...) AND B IN (...))``; unstructured multi-column groups are
+    skipped with MANUAL_REVIEW rather than guessed as independent NOT INs.
+    """
+    conditions: List[str] = []
     for f in filters:
         if is_tableau_pseudo_field(f.field_name):
             continue
+        pred_groups = list(getattr(f, "exclude_predicate_groups", None) or [])
+        # Action / sheet-link filters with no members are interaction wiring, not SQL
+        if (
+            not f.exclude_values
+            and not f.include_values
+            and not pred_groups
+            and f.filter_type != "quantitative"
+        ):
+            continue
+
+        group = _find_matching_group(f.field_name, groups)
+        if group is not None and (getattr(group, "auto_column", None) or "").lower() == "exclude":
+            if pred_groups:
+                sql = _sql_from_exclude_predicate_groups(pred_groups, resolver, ds)
+                if sql:
+                    conditions.append(sql)
+                else:
+                    logger.warning(
+                        "MANUAL_REVIEW: exclusion group '%s' had empty structured predicates — skipping",
+                        f.field_name,
+                    )
+                continue
+
+            member_names = list(getattr(group, "members", None) or [])
+            if not member_names:
+                logger.warning(
+                    "MANUAL_REVIEW: exclusion group '%s' has no members — skipping filter",
+                    f.field_name,
+                )
+                continue
+            member_physicals = [
+                _resolve_field_for_sql(m, resolver, ds) for m in member_names
+            ]
+            seen_m: set = set()
+            uniq_members: List[str] = []
+            for m in member_physicals:
+                if m.lower() not in seen_m:
+                    seen_m.add(m.lower())
+                    uniq_members.append(m)
+
+            values = list(f.exclude_values or f.include_values or [])
+            if not values:
+                continue
+
+            # Unstructured fallback: single member column → exact NOT IN / IN.
+            # Multi-column without structure → skip (never guess; avoids data loss).
+            if len(uniq_members) == 1:
+                phys = uniq_members[0]
+                dt = _column_datatype(phys, ds, resolver)
+                lit = ", ".join(_format_sql_literal(v, dt) for v in values)
+                op = "NOT IN" if f.exclude_values else "IN"
+                conditions.append(f"`{phys}` {op} ({lit})")
+            else:
+                logger.warning(
+                    "MANUAL_REVIEW: unstructured multi-column exclusion group '%s' "
+                    "(members=%s) — skipping rather than inventing independent NOT INs",
+                    f.field_name,
+                    uniq_members,
+                )
+            continue
+
+        if group is not None and (getattr(group, "auto_column", None) or "").lower() not in (
+            "exclude", "", None,
+        ):
+            # sheet_link / Action groups are dashboard interaction, not SQL predicates
+            logger.debug("Skipping non-SQL group filter '%s' (auto_column=%s)",
+                         f.field_name, getattr(group, "auto_column", None))
+            continue
+
+        # Non-group filters may still carry structured exclusive predicates
+        if pred_groups and f.exclude_values:
+            sql = _sql_from_exclude_predicate_groups(pred_groups, resolver, ds)
+            if sql:
+                conditions.append(sql)
+                continue
+
+        physical = _resolve_field_for_sql(f.field_name, resolver, ds)
+        # Guard: never emit a group-looking caption that failed resolution
+        if "exclusions (" in physical.lower() or (
+            "(" in physical and physical != f.field_name and " " in physical
+        ):
+            # Still looks like a caption/group — try one more resolve pass
+            physical = _resolve_field_for_sql(physical, resolver, ds)
+        if physical == f.field_name and "exclusions (" in (f.field_name or "").lower():
+            logger.warning(
+                "MANUAL_REVIEW: unresolved exclusion-group filter '%s' — skipping",
+                f.field_name,
+            )
+            continue
+
+        dt = _column_datatype(physical, ds, resolver)
+
         if f.filter_type == "categorical" and f.exclude_values:
-            # Prefer exclude (exclusive Tableau filters) over include when both set
-            vals = ", ".join(f"'{v}'" for v in f.exclude_values)
-            conditions.append(f"`{f.field_name}` NOT IN ({vals})")
+            lit = ", ".join(_format_sql_literal(v, dt) for v in f.exclude_values)
+            conditions.append(f"`{physical}` NOT IN ({lit})")
         elif f.filter_type == "categorical" and f.include_values:
-            vals = ", ".join(f"'{v}'" for v in f.include_values)
-            conditions.append(f"`{f.field_name}` IN ({vals})")
+            lit = ", ".join(_format_sql_literal(v, dt) for v in f.include_values)
+            conditions.append(f"`{physical}` IN ({lit})")
         elif f.filter_type == "quantitative":
             if f.min_value is not None:
-                conditions.append(f"`{f.field_name}` >= {f.min_value}")
+                conditions.append(f"`{physical}` >= {f.min_value}")
             if f.max_value is not None:
-                conditions.append(f"`{f.field_name}` <= {f.max_value}")
+                conditions.append(f"`{physical}` <= {f.max_value}")
 
     return " AND ".join(conditions) if conditions else ""
 
@@ -350,6 +558,124 @@ def _default_agg_for_field(field_name: str, ds: Optional[DatasourceMetadata]) ->
     if agg == AggregationType.NONE:
         agg = AggregationType.SUM
     return agg
+
+
+def _metric_display_label(physical_name: str) -> str:
+    """Human-readable Metric label for unpivot UNION ALL branches."""
+    return (physical_name or "").replace("_", " ").strip()
+
+
+def _non_geo_dimensions(dimensions: List[str]) -> List[str]:
+    """Drop Tableau generated Lon/Lat from a dimension list."""
+    return [
+        d for d in dimensions
+        if "latitude" not in (d or "").lower()
+        and "longitude" not in (d or "").lower()
+    ]
+
+
+def _needs_measure_unpivot(
+    *,
+    has_measure_names: bool,
+    expand_src: str,
+    measures: List[tuple],
+    dimensions: List[str],
+    chart_type: Optional[ChartType] = None,
+) -> Tuple[bool, List[str], List[tuple]]:
+    """Decide whether a worksheet dataset must be UNION ALL unpivoted.
+
+    Returns ``(use_unpivot, dims_for_sql, measures_for_sql)``.
+
+    Covers:
+      1. Measure Names filter with 2+ members (pivot path)
+      2. Dual-measure *resolved* MAP (grouped bar over Metric/Value)
+
+    Dataset SQL generation and ``_build_widget`` must share this predicate and
+    the same resolved ``chart_type`` so a pie drawn on Lon/Lat shelves is never
+    half-unpivoted (dataset rewritten, widget still wide).
+    """
+    if len(measures) < 2:
+        return False, dimensions, measures
+
+    # Measure Names filter → unpivot (exact member list)
+    if has_measure_names and expand_src == "measure_names_filter" and dimensions:
+        return True, list(dimensions), list(measures)
+
+    # Dual-measure map only — require resolved ChartType.MAP, not mere geo shelves
+    # (a Pie on Lon/Lat must stay wide so angle still binds to Total_Incidents).
+    if chart_type == ChartType.MAP:
+        dims = _non_geo_dimensions(dimensions)
+        if dims:
+            return True, dims, list(measures)
+
+    return False, dimensions, measures
+
+
+def _build_unpivot_measure_sql(
+    dimensions: List[str],
+    measures: List[tuple],
+    from_clause: str,
+    where: str = "",
+    top_n: Optional[int] = None,
+) -> str:
+    """Build UNION ALL unpivot SQL: (dims..., Metric, Value) per measure.
+
+    Branches are exactly the measures list — callers must pass the Measure Names
+    filter member list verbatim (never re-include excluded measures).
+
+    When ``top_n`` is set (map grouped-bar fallback), apply the cap once as an
+    outer ``WHERE dim IN (SELECT … LIMIT n)`` over the UNION — not per branch —
+    so the base WHERE is not string-duplicated into every UNION arm. Uses a
+    fully-qualified IN-subquery (no CTE) so deploy FQN detection still omits
+    dataset_catalog.
+    """
+    if not measures:
+        return f"SELECT 1 AS `__incomplete_projection__` FROM {from_clause}"
+
+    where_sql = f" WHERE {where}" if where else ""
+    dim_select = ", ".join(f"`{d}`" for d in dimensions) if dimensions else ""
+    dim_prefix = f"{dim_select}, " if dim_select else ""
+    group_by = ""
+    if dimensions:
+        group_by = " GROUP BY " + ", ".join(str(i + 1) for i in range(len(dimensions)))
+
+    branches = []
+    for mname, magg in measures:
+        label = _metric_display_label(mname).replace("'", "''")
+        agg = magg if magg != AggregationType.NONE else AggregationType.SUM
+        value_expr = _build_field_expression(mname, agg)
+        # CAST numeric aggregates to DOUBLE so UNION ALL types align (incidents vs money)
+        branch = (
+            f"SELECT {dim_prefix}'{label}' AS `Metric`, "
+            f"CAST({value_expr} AS DOUBLE) AS `Value` "
+            f"FROM {from_clause}{where_sql}{group_by}"
+        )
+        branches.append(branch)
+
+    sql = " UNION ALL ".join(branches)
+
+    if top_n and dimensions:
+        dim0 = dimensions[0]
+        rank_parts = []
+        for mname, magg in measures:
+            agg = magg if magg != AggregationType.NONE else AggregationType.SUM
+            rank_parts.append(
+                f"CAST({_build_field_expression(mname, agg)} AS DOUBLE)"
+            )
+        rank_expr = " + ".join(rank_parts)
+        top_n_subq = (
+            f"SELECT `{dim0}` FROM {from_clause}{where_sql} "
+            f"GROUP BY 1 ORDER BY ({rank_expr}) DESC LIMIT {int(top_n)}"
+        )
+        # Outer wrap applies the cap once — branches keep a single copy of WHERE
+        sql = (
+            f"SELECT * FROM ({sql}) AS `__map_unpivot` "
+            f"WHERE `{dim0}` IN ({top_n_subq})"
+        )
+
+    if dimensions:
+        sql += " ORDER BY 1"
+    return sql
 
 
 def _expand_worksheet_measures(
@@ -589,8 +915,9 @@ def normalize_tom_to_ubim(
 
         # Expand measures from Measure Names filter / encodings / ws.measures
         # — never dump the full datasource measure list.
+        expand_src = ""
         if not measures or has_measure_names:
-            expanded, _src = _expand_worksheet_measures(ws, ds, resolver)
+            expanded, expand_src = _expand_worksheet_measures(ws, ds, resolver)
             for mname, magg in expanded:
                 if mname not in seen_measure_names:
                     measures.append((mname, magg))
@@ -644,51 +971,97 @@ def normalize_tom_to_ubim(
                     dimensions.append(mname)
                     seen_dim_names.add(mname)
 
-        # Build SQL — preserve original column names in backtick-quoted SQL
-        select_parts = []
-        for dim in dimensions:
-            alias = _make_safe_alias(dim)
-            if alias != dim:
-                select_parts.append(f"`{dim}` AS `{alias}`")
-            else:
-                select_parts.append(f"`{dim}`")
-        for mname, magg in measures:
-            expr = _build_field_expression(mname, magg)
-            alias = _make_safe_alias(mname)
-            select_parts.append(f"{expr} AS `{alias}`")
+        # WHERE clause — resolve captions→physical and expand Tableau groups
+        where = _build_where_clause(
+            ws.filters,
+            resolver=resolver,
+            ds=ds,
+            groups=workbook_meta.groups,
+        )
 
-        if select_parts:
-            sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
+        # Multi-measure Measure Names → UNION ALL unpivot (exact member list only).
+        # Dual-measure *resolved* MAP also unpivots so the widget can emit a
+        # grouped bar (x=geo dim, y=SUM(Value), color=Metric). Gate on the same
+        # resolve_mark_type → MARK_TO_CHART path that _build_widget uses — a Pie
+        # drawn on Lon/Lat shelves must NOT unpivot here while the pie widget
+        # still binds SUM(Total_Incidents).
+        resolved_mark = resolve_mark_type(
+            ws.mark_type, ws.columns, ws.rows, ws.measure_bindings
+        )
+        resolved_chart = MARK_TO_CHART.get(resolved_mark, ChartType.BAR)
+        use_unpivot, up_dims, up_measures = _needs_measure_unpivot(
+            has_measure_names=has_measure_names,
+            expand_src=expand_src,
+            measures=measures,
+            dimensions=dimensions,
+            chart_type=resolved_chart,
+        )
+
+        if use_unpivot:
+            # Top-N only for map grouped-bar fallback (high-cardinality geo dims)
+            top_n = (
+                settings.MAP_GROUPED_BAR_TOP_N
+                if resolved_chart == ChartType.MAP
+                else None
+            )
+            sql = _build_unpivot_measure_sql(
+                up_dims, up_measures, from_clause, where, top_n=top_n
+            )
+            field_meta = (
+                [{"name": d, "type": "string"} for d in up_dims]
+                + [{"name": "Metric", "type": "string"}, {"name": "Value", "type": "number"}]
+            )
         else:
-            # Do NOT fabricate SELECT of first N datasource columns — that invents
-            # unrelated schemas and feeds the Lakeview invent-binder cascade.
-            sql = f"SELECT 1 AS `__incomplete_projection__` FROM {from_clause}"
+            # Build SQL — preserve original column names in backtick-quoted SQL
+            select_parts = []
+            for dim in dimensions:
+                alias = _make_safe_alias(dim)
+                if alias != dim:
+                    select_parts.append(f"`{dim}` AS `{alias}`")
+                else:
+                    select_parts.append(f"`{dim}`")
+            for mname, magg in measures:
+                expr = _build_field_expression(mname, magg)
+                alias = _make_safe_alias(mname)
+                select_parts.append(f"{expr} AS `{alias}`")
 
-        # WHERE clause from filters (already sanitized by parser)
-        where = _build_where_clause(ws.filters)
-        if where:
-            sql += f" WHERE {where}"
+            if select_parts:
+                sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
+            else:
+                # Do NOT fabricate SELECT of first N datasource columns — that invents
+                # unrelated schemas and feeds the Lakeview invent-binder cascade.
+                sql = f"SELECT 1 AS `__incomplete_projection__` FROM {from_clause}"
 
-        if dimensions and measures:
-            group_by_indices = ", ".join(str(i + 1) for i in range(len(dimensions)))
-            sql += f" GROUP BY {group_by_indices}"
+            if where:
+                sql += f" WHERE {where}"
 
-        if ws.sorts:
-            clean_sorts = [s for s in ws.sorts if not is_tableau_pseudo_field(s.field_name)]
-            if clean_sorts:
-                order_parts = [f"`{s.field_name}` {s.direction}" for s in clean_sorts]
-                sql += f" ORDER BY {', '.join(order_parts)}"
+            if dimensions and measures:
+                group_by_indices = ", ".join(str(i + 1) for i in range(len(dimensions)))
+                sql += f" GROUP BY {group_by_indices}"
+
+            if ws.sorts:
+                clean_sorts = [s for s in ws.sorts if not is_tableau_pseudo_field(s.field_name)]
+                if clean_sorts:
+                    order_parts = []
+                    for s in clean_sorts:
+                        phys = _resolve_field_for_sql(s.field_name, resolver, ds)
+                        order_parts.append(f"`{phys}` {s.direction}")
+                    sql += f" ORDER BY {', '.join(order_parts)}"
+                elif dimensions:
+                    sql += f" ORDER BY 1"
             elif dimensions:
                 sql += f" ORDER BY 1"
-        elif dimensions:
-            sql += f" ORDER BY 1"
+
+            field_meta = (
+                [{"name": d, "type": "string"} for d in dimensions]
+                + [{"name": _make_safe_alias(m[0]), "type": "number"} for m in measures]
+            )
 
         ubim_ds = IntermediateDataset(
             name=ds_id,
             sql_query=sql,
             tables_referenced=[t.name for t in ds.tables],
-            fields=[{"name": d, "type": "string"} for d in dimensions] +
-                   [{"name": _make_safe_alias(m[0]), "type": "number"} for m in measures]
+            fields=field_meta,
         )
         ubim_dash.datasets.append(ubim_ds)
         ws_dataset_map[ws.name] = ds_id
@@ -719,12 +1092,23 @@ def normalize_tom_to_ubim(
 
             # Ontology chrome: title text zones + dashboard filter cards
             chrome = _build_dashboard_chrome_widgets(db, y_offset=0)
-            # Bind filter widgets to the first dataset on the page when possible
-            default_ds = next((w.dataset_name for w in page.widgets if w.dataset_name), "")
+            # Bind each filter to a dataset that projects the filter field
             for cw in chrome:
-                for f in cw.filters:
-                    if not f.dataset_name:
-                        f.dataset_name = default_ds
+                if cw.chart_type not in (
+                    ChartType.FILTER_MULTI, ChartType.FILTER_SINGLE, ChartType.FILTER_DATE
+                ):
+                    page.widgets.append(cw)
+                    continue
+                fname = ""
+                if cw.filters:
+                    fname = cw.filters[0].field_name
+                elif cw.query_fields:
+                    fname = cw.query_fields[0].name
+                bound = _find_dataset_projecting_field(ubim_dash.datasets, fname)
+                if bound:
+                    cw.dataset_name = bound
+                    for f in cw.filters:
+                        f.dataset_name = bound
                 page.widgets.append(cw)
             
             ubim_dash.pages.append(page)
@@ -743,6 +1127,52 @@ def normalize_tom_to_ubim(
         ubim_dash.pages.append(page)
 
     return ubim_dash
+
+
+def _dataset_sql_projects_field(sql: str, field_name: str) -> bool:
+    """Return True if ``field_name`` appears as an output column of the dataset SQL."""
+    if not sql or not field_name:
+        return False
+    # Match backtick-wrapped identifiers or AS aliases / bare SELECT names
+    patterns = [
+        rf"`{re.escape(field_name)}`",
+        rf"\bAS\s+`{re.escape(field_name)}`",
+        rf"'[^']*'\s+AS\s+`{re.escape(field_name)}`",
+    ]
+    return any(re.search(p, sql, flags=re.IGNORECASE) for p in patterns)
+
+
+def _find_dataset_projecting_field(
+    datasets: List[IntermediateDataset],
+    field_name: str,
+) -> Optional[str]:
+    """Pick the first dataset whose SQL projects ``field_name``."""
+    if not field_name:
+        return None
+    # Prefer exact physical / alias match
+    candidates = []
+    for ds in datasets:
+        if _dataset_sql_projects_field(ds.sql_query, field_name):
+            candidates.append(ds.name)
+            continue
+        # Also try safe-alias form
+        alias = _make_safe_alias(field_name)
+        if alias != field_name and _dataset_sql_projects_field(ds.sql_query, alias):
+            candidates.append(ds.name)
+    return candidates[0] if candidates else None
+
+
+def _has_generated_geo_shelves(ws: WorksheetMetadata) -> bool:
+    """True when Columns/Rows use Tableau generated Longitude/Latitude."""
+    for sf in (ws.columns_shelves or []) + (ws.rows_shelves or []):
+        n = (sf.field_name or "").lower()
+        if "longitude" in n or "latitude" in n:
+            return True
+    for name in (ws.columns or []) + (ws.rows or []):
+        n = (name or "").lower()
+        if "longitude" in n or "latitude" in n:
+            return True
+    return False
 
 
 def _promote_extra_categorical_dims_to_color(
@@ -1127,19 +1557,246 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     show_title = bool(display_title)
     if zone is not None and getattr(zone, "show_title", None) is False:
         show_title = False
+    # Title fallback: never emit untitled orphan widgets — use worksheet name
     if not display_title:
-        show_title = False
+        display_title = (ws.name or "").strip()
+        show_title = True
+
     expanded_measures, expand_src = _expand_worksheet_measures(ws, ds, resolver)
 
-    # Multi-measure Measure Names → table (Lakeview has no faithful combo)
+    # Multi-measure Measure Names → pivot over unpivoted (dim, Metric, Value) dataset.
+    # Never merge sibling worksheets — Measure Names filter scope is authoritative.
     has_mn = any(
         sf.field_name.lower().replace(":", "").strip() in ("measure names", "measure values")
         for sf in (ws.columns_shelves or []) + (ws.rows_shelves or [])
     )
     y_count = sum(1 for e in encodings if e.channel == EncodingChannel.Y)
-    if has_mn and (y_count > 1 or (expand_src == "measure_names_filter" and len(expanded_measures) > 1)):
-        chart_type = ChartType.TABLE
-        is_disaggregated = True
+    use_pivot = has_mn and (
+        y_count > 1
+        or (expand_src == "measure_names_filter" and len(expanded_measures) > 1)
+    )
+    if use_pivot:
+        chart_type = ChartType.PIVOT
+        is_disaggregated = False  # dataset is pre-aggregated per branch
+        # Rebuild encodings/query_fields for unpivot schema
+        dim_aliases = [
+            e.field_name for e in encodings
+            if e.aggregation == AggregationType.NONE and e.channel in (
+                EncodingChannel.X, EncodingChannel.COLOR, EncodingChannel.COLUMN_HEADER
+            )
+        ]
+        if not dim_aliases:
+            # Fallback: any non-measure encoding
+            dim_aliases = [
+                e.field_name for e in encodings if e.aggregation == AggregationType.NONE
+            ]
+        encodings = []
+        query_fields = []
+        for dim in dim_aliases:
+            encodings.append(IntermediateEncoding(
+                channel=EncodingChannel.COLUMN_HEADER,
+                field_name=dim,
+                dataset_name=dataset_id,
+                aggregation=AggregationType.NONE,
+                expression_sql=f"`{dim}`",
+                data_type="string",
+            ))
+            query_fields.append(IntermediateQueryField(
+                expression=f"`{dim}`", name=dim, data_type="string"
+            ))
+        encodings.append(IntermediateEncoding(
+            channel=EncodingChannel.X,  # rows in pivot = Metric
+            field_name="Metric",
+            dataset_name=dataset_id,
+            aggregation=AggregationType.NONE,
+            expression_sql="`Metric`",
+            data_type="string",
+        ))
+        query_fields.append(IntermediateQueryField(
+            expression="`Metric`", name="Metric", data_type="string"
+        ))
+        encodings.append(IntermediateEncoding(
+            channel=EncodingChannel.Y,
+            field_name="sum(Value)",
+            dataset_name=dataset_id,
+            aggregation=AggregationType.SUM,
+            expression_sql="SUM(`Value`)",
+            data_type="number",
+        ))
+        query_fields.append(IntermediateQueryField(
+            expression="SUM(`Value`)", name="sum(Value)", data_type="number"
+        ))
+
+    # Lon/Lat / Map → geo-LOD dimension as categorical axis (never Lon/Lat columns)
+    # Skip when an explicit non-map mark (Pie/Circle/…) already won.
+    if (
+        chart_type == ChartType.MAP
+        or (_has_generated_geo_shelves(ws) and chart_type == ChartType.MAP)
+    ) and not use_pivot:
+        # Drop Lon/Lat from encodings/query_fields
+        encodings = [
+            e for e in encodings
+            if "latitude" not in e.field_name.lower()
+            and "longitude" not in e.field_name.lower()
+        ]
+        query_fields = [
+            q for q in query_fields
+            if "latitude" not in q.name.lower() and "longitude" not in q.name.lower()
+        ]
+        # Promote first non-geo categorical (e.g. StateName from LOD) to X
+        has_x = any(
+            e.channel == EncodingChannel.X and e.aggregation == AggregationType.NONE
+            for e in encodings
+        )
+        if not has_x:
+            for e in encodings:
+                if e.aggregation == AggregationType.NONE:
+                    e.channel = EncodingChannel.X
+                    has_x = True
+                    break
+            if not has_x:
+                # Pull first string query field that isn't a measure
+                for q in query_fields:
+                    if not q.expression.upper().startswith(
+                        ("SUM", "AVG", "COUNT", "MIN", "MAX", "PERCENTILE")
+                    ):
+                        encodings.insert(0, IntermediateEncoding(
+                            channel=EncodingChannel.X,
+                            field_name=q.name,
+                            dataset_name=dataset_id,
+                            aggregation=AggregationType.NONE,
+                            expression_sql=q.expression,
+                            data_type="string",
+                        ))
+                        break
+
+        measure_qfs = [
+            q for q in query_fields
+            if q.expression.upper().startswith(
+                ("SUM", "AVG", "COUNT", "MIN", "MAX", "PERCENTILE")
+            )
+        ]
+        # Shared predicate with the dataset loop — dual-measure map must
+        # unpivot to (dim, Metric, Value) and become a grouped bar, never a
+        # lossy single-measure chart or a v1 table fallback.
+        measure_pairs = [
+            (q.name, AggregationType.SUM) for q in measure_qfs
+        ]
+        dim_names = [
+            e.field_name for e in encodings
+            if e.aggregation == AggregationType.NONE
+            and "latitude" not in e.field_name.lower()
+            and "longitude" not in e.field_name.lower()
+        ]
+        use_unpivot_map, up_dims, _up_measures = _needs_measure_unpivot(
+            has_measure_names=False,
+            expand_src="",
+            measures=measure_pairs,
+            dimensions=dim_names,
+            chart_type=chart_type,  # still MAP inside this block
+        )
+        if use_unpivot_map and up_dims:
+            chart_type = ChartType.BAR
+            is_disaggregated = False
+            dim_name = up_dims[0]
+            encodings = [
+                IntermediateEncoding(
+                    channel=EncodingChannel.X,
+                    field_name=dim_name,
+                    dataset_name=dataset_id,
+                    aggregation=AggregationType.NONE,
+                    expression_sql=f"`{dim_name}`",
+                    data_type="string",
+                ),
+                IntermediateEncoding(
+                    channel=EncodingChannel.Y,
+                    field_name="sum(Value)",
+                    dataset_name=dataset_id,
+                    aggregation=AggregationType.SUM,
+                    expression_sql="SUM(`Value`)",
+                    data_type="number",
+                ),
+                IntermediateEncoding(
+                    channel=EncodingChannel.COLOR,
+                    field_name="Metric",
+                    dataset_name=dataset_id,
+                    aggregation=AggregationType.NONE,
+                    expression_sql="`Metric`",
+                    data_type="string",
+                ),
+            ]
+            query_fields = [
+                IntermediateQueryField(
+                    expression=f"`{dim_name}`", name=dim_name, data_type="string"
+                ),
+                IntermediateQueryField(
+                    expression="`Metric`", name="Metric", data_type="string"
+                ),
+                IntermediateQueryField(
+                    expression="SUM(`Value`)", name="sum(Value)", data_type="number"
+                ),
+            ]
+        elif len(measure_qfs) >= 2:
+            # No geo dim available — keep both measures as a table (non-lossy)
+            chart_type = ChartType.TABLE
+            is_disaggregated = False
+        else:
+            chart_type = ChartType.BAR
+            is_disaggregated = False
+            for e in encodings:
+                if e.aggregation != AggregationType.NONE:
+                    e.channel = EncodingChannel.Y
+
+    map_grouped_bar = (
+        chart_type == ChartType.BAR
+        and any(e.field_name == "Metric" for e in encodings)
+        and any(e.field_name == "sum(Value)" for e in encodings)
+        and (_has_generated_geo_shelves(ws) or getattr(ws, "mark_type", "") == "Map")
+    )
+
+    # Pie: keep category (COLOR + X) + a single angle measure. Drop surplus Y
+    # measures and LOD dims from encodings and widget query fields.
+    if chart_type == ChartType.PIE and encodings:
+        color = next(
+            (
+                e for e in encodings
+                if e.channel == EncodingChannel.COLOR
+                and e.aggregation == AggregationType.NONE
+            ),
+            None,
+        )
+        x_cat = next(
+            (
+                e for e in encodings
+                if e.channel == EncodingChannel.X
+                and e.aggregation == AggregationType.NONE
+            ),
+            None,
+        )
+        angle = next(
+            (e for e in encodings if e.aggregation != AggregationType.NONE),
+            None,
+        )
+        kept = []
+        if color:
+            kept.append(color)
+        if x_cat:
+            kept.append(x_cat)
+        elif color:
+            # Lakeview pie path resolves category from X — mirror COLOR onto X
+            kept.append(IntermediateEncoding(
+                channel=EncodingChannel.X,
+                field_name=color.field_name,
+                dataset_name=color.dataset_name,
+                aggregation=AggregationType.NONE,
+                expression_sql=color.expression_sql,
+                data_type=color.data_type,
+            ))
+        if angle:
+            kept.append(angle)
+        encodings = kept
+        used = {e.field_name for e in encodings}
+        query_fields = [q for q in query_fields if q.name in used]
 
     presentation = {
         k: v for k, v in {
@@ -1149,6 +1806,16 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
             "hidden": getattr(ws, "hidden", False),
             "worksheet_uuid": getattr(ws, "uuid", None),
             "measure_expand_source": expand_src or None,
+            "unpivoted": True if (use_pivot or map_grouped_bar) else None,
+            "manual_review": (
+                "map_fallback_grouped_bar"
+                if map_grouped_bar
+                else (
+                    "map_fallback_geo_lod"
+                    if (_has_generated_geo_shelves(ws) or getattr(ws, "mark_type", "") == "Map")
+                    else None
+                )
+            ),
         }.items() if v not in (None, False, "")
     }
 

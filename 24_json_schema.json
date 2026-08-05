@@ -117,7 +117,7 @@
     "Widget": {
       "type": "object",
       "required": ["name"],
-      "description": "Widget definition. Must have either 'spec' + 'queries' (visualization/filter) or 'textbox_spec' (text/markdown).",
+      "description": "Widget definition. Must have either 'spec' + 'queries' (visualization/filter), or text content as 'multilineTextboxSpec' (current Lakeview chrome) or 'textbox_spec' (legacy).",
       "properties": {
         "name": {
           "type": "string",
@@ -132,17 +132,34 @@
         "spec": { "$ref": "#/$defs/WidgetSpec" },
         "textbox_spec": {
           "type": "string",
-          "description": "Markdown content for text widgets."
+          "description": "Legacy markdown content for text widgets."
+        },
+        "multilineTextboxSpec": {
+          "type": "object",
+          "required": ["lines"],
+          "additionalProperties": false,
+          "description": "Markdown content for text widgets, one entry per line.",
+          "properties": {
+            "lines": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            }
+          }
         }
       },
       "oneOf": [
         {
           "required": ["spec", "queries"],
-          "properties": { "textbox_spec": false }
+          "properties": { "textbox_spec": false, "multilineTextboxSpec": false }
         },
         {
           "required": ["textbox_spec"],
-          "properties": { "spec": false, "queries": false }
+          "properties": { "spec": false, "queries": false, "multilineTextboxSpec": false }
+        },
+        {
+          "required": ["multilineTextboxSpec"],
+          "properties": { "spec": false, "queries": false, "textbox_spec": false }
         }
       ]
     },

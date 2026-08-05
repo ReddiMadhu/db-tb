@@ -10,6 +10,7 @@ source of truth for Databricks AI/BI schema versions, encodings, and queries.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.models.universal_model import (
@@ -210,6 +211,7 @@ def _create_widget_via_factory(
     color_field: Optional[str],
     query_fields_list: List[Dict[str, str]],
     show_title: bool = True,
+    dashboard_id: Optional[str] = None,
 ):
     """Dispatch to WidgetFactory. Returns Widget or None if incomplete."""
     # Attempt recovery again at dispatch boundary (belt + suspenders)
@@ -466,6 +468,36 @@ def _create_widget_via_factory(
             filter_type=filt_type,
             query_fields=query_fields_list or None,
             show_title=show_title,
+            dashboard_id=dashboard_id,
+        )
+
+    if chart_type == ChartType.PIVOT:
+        row_fields = ["Metric"]
+        column_fields: List[str] = []
+        cell_field = "sum(Value)"
+        for qf in query_fields_list or []:
+            n = qf.get("name") or ""
+            if n in PLACEHOLDER_FIELDS:
+                continue
+            if n == "Metric":
+                continue
+            if n in ("sum(Value)", "Value") or "Value" in n:
+                cell_field = n
+                continue
+            column_fields.append(n)
+        if not column_fields and x_field and x_field not in PLACEHOLDER_FIELDS and x_field != "Metric":
+            column_fields = [x_field]
+        if not column_fields:
+            logger.warning("Skipping pivot widget '%s' — no column dimension", title)
+            return None
+        return WidgetFactory.create_pivot_widget(
+            dataset_name=dataset_ref,
+            row_fields=row_fields,
+            column_fields=column_fields,
+            cell_field=cell_field,
+            title=title,
+            query_fields=query_fields_list or None,
+            show_title=show_title,
         )
 
     # MAP / BOXPLOT / COMBO / TABLE / fallback → table
@@ -493,13 +525,38 @@ def _create_widget_via_factory(
     )
 
 
+def _dataset_projects_field_sql(sql: str, field_name: str) -> bool:
+    if not sql or not field_name:
+        return False
+    return bool(re.search(rf"`{re.escape(field_name)}`", sql, flags=re.IGNORECASE))
+
+
+def _pick_dataset_for_filter(
+    datasets: List[Dataset],
+    field_name: str,
+    preferred: Optional[str] = None,
+) -> Optional[str]:
+    """Choose a dataset whose SQL projects ``field_name``."""
+    if preferred:
+        for ds in datasets:
+            if ds.name == preferred and _dataset_projects_field_sql(ds.query, field_name):
+                return ds.name
+    for ds in datasets:
+        if _dataset_projects_field_sql(ds.query, field_name):
+            return ds.name
+    return preferred or (datasets[0].name if datasets else None)
+
+
 def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboard:
     """Stage 8 Lakeview Generator: UBIM → Databricks Lakeview AST via WidgetFactory."""
+    from app.models.lakeview_model import stable_lakeview_id
+
     lakeview = LakeviewDashboard(datasets=[], pages=[])
+    dash_id = stable_lakeview_id("dashboard", ubim.dashboard_id or ubim.title or "main")
 
     ds_id_map: Dict[str, str] = {}
     for ubim_ds in ubim.datasets:
-        dataset_id = generate_lakeview_id()
+        dataset_id = stable_lakeview_id("dataset", ubim_ds.name)
         ds_id_map[ubim_ds.name] = dataset_id
         lakeview.datasets.append(Dataset(
             name=dataset_id,
@@ -508,7 +565,11 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
         ))
 
     for ubim_page in ubim.pages:
-        page = Page(name=generate_lakeview_id(), displayName=ubim_page.name, layout=[])
+        page = Page(
+            name=stable_lakeview_id("page", ubim_page.page_id or ubim_page.name),
+            displayName=ubim_page.name,
+            layout=[],
+        )
         projected_widgets = project_to_6column_grid(ubim_page.widgets)
 
         for w_ubim in projected_widgets:
@@ -523,12 +584,16 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                 height=w_ubim.position.grid_h,
             )
 
-            # Do not invent sheet-name titles for blank worksheet titles
-            title = (w_ubim.title or "").strip()
+            # Title fallback: worksheet name when zone title blank
+            title = (w_ubim.title or "").strip() or (w_ubim.name or "").strip()
             if w_ubim.show_title is not None:
-                show_title = bool(w_ubim.show_title)
+                show_title = bool(w_ubim.show_title) or bool(title)
             else:
                 show_title = bool(title)
+            # Never emit untitled content widgets
+            if not title and w_ubim.chart_type != ChartType.TEXT_BOX:
+                title = w_ubim.name or "Untitled"
+                show_title = True
             log_label = title or w_ubim.name
 
             # Ontology chrome: dashboard text zones → Lakeview textbox widgets
@@ -538,7 +603,14 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     continue
                 from app.models.lakeview_model import Widget
                 page.layout.append(LayoutItem(
-                    widget=Widget(textbox_spec=text),
+                    widget=Widget(
+                        name=stable_lakeview_id("textbox", w_ubim.widget_id or text[:32]),
+                        multiline_textbox_spec={
+                            "lines": [
+                                f"# **{text}**" if not text.lstrip().startswith("#") else text
+                            ]
+                        },
+                    ),
                     position=pos,
                 ))
                 continue
@@ -546,7 +618,7 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
             query_fields_list = _build_query_fields(w_ubim)
             x_field, y_field, color_field = _resolve_xy_fields(w_ubim, query_fields_list)
 
-            # Ontology chrome: filter cards may only have filter metadata
+            # Ontology chrome: filter cards — bind to dataset projecting the field
             if w_ubim.chart_type in (
                 ChartType.FILTER_MULTI, ChartType.FILTER_SINGLE, ChartType.FILTER_DATE
             ):
@@ -555,6 +627,23 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     fname = f0.field_name
                     query_fields_list = [{"expression": f"`{fname}`", "name": fname}]
                     x_field = fname
+                f_field = x_field
+                if (not f_field or f_field in PLACEHOLDER_FIELDS) and query_fields_list:
+                    f_field = query_fields_list[0]["name"]
+                # Resolve physical field for dataset scan (prefer display_field)
+                display_field = (w_ubim.properties or {}).get("display_field") or f_field
+                bound = _pick_dataset_for_filter(
+                    lakeview.datasets,
+                    display_field or f_field or "",
+                    preferred=dataset_ref if w_ubim.dataset_name else None,
+                )
+                if bound:
+                    dataset_ref = bound
+                # Also try safe alias / original
+                if bound is None and f_field:
+                    bound = _pick_dataset_for_filter(lakeview.datasets, f_field)
+                    if bound:
+                        dataset_ref = bound
 
             incomplete_sql = False
             if lakeview.datasets:
@@ -581,6 +670,7 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     color_field=color_field,
                     query_fields_list=query_fields_list,
                     show_title=show_title,
+                    dashboard_id=dash_id,
                 )
             except ValueError as exc:
                 logger.warning("Skipping widget '%s' — factory rejected spec: %s", log_label, exc)
@@ -598,7 +688,9 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     )
                     continue
 
-            widget.name = generate_lakeview_id()
+            widget.name = stable_lakeview_id(
+                "widget", w_ubim.widget_id or w_ubim.name or title
+            )
             page.layout.append(LayoutItem(widget=widget, position=pos))
 
         lakeview.pages.append(page)

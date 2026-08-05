@@ -34,6 +34,11 @@ def resolve_mark_type(
     cols_str = " ".join(cols).lower()
     rows_str = " ".join(rows).lower()
     combined_shelves = f"{cols_str} {rows_str}"
+
+    # Generated Lon/Lat on Automatic mark → geographic map
+    # (explicit marks like Pie/Circle above already returned)
+    if "longitude" in combined_shelves or "latitude" in combined_shelves:
+        return "Map"
     
     has_dates = any(dt in combined_shelves for dt in ['yr:', 'mn:', 'dy:', 'qr:', 'wk:', 'mdy:', 'date:'])
     measure_tokens = ['sum:', 'avg:', 'cnt:', 'count:', 'countd:', 'min:', 'max:', 'attr:', 'median:', 'pct:']

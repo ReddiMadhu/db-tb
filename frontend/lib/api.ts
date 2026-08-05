@@ -165,10 +165,10 @@ export async function getDiff(jobUuid: string): Promise<DiffResponse> {
 // ── Deploy ──
 export async function deployToDatabricks(
   jobUuid: string,
-  warehouseIdOrPayload: string | { warehouse_id: string; host?: string; token?: string; catalog?: string; schema_name?: string },
+  warehouseIdOrPayload: string | { warehouse_id?: string; host?: string; token?: string; catalog?: string; schema_name?: string },
   host?: string,
   token?: string
-): Promise<{ status: string; dashboard_id: string; published_url?: string }> {
+): Promise<{ status: string; dashboard_id: string; published_url?: string; credential_sources?: Record<string, string> }> {
   let body: Record<string, unknown>;
   if (typeof warehouseIdOrPayload === "object") {
     body = warehouseIdOrPayload;
@@ -233,6 +233,7 @@ export async function deleteConnection(id: number): Promise<{ message: string }>
 // ── Get Default Connection ──
 export async function getDefaultConnection(): Promise<{
   has_default: boolean;
+  has_token: boolean;
   connection: DatabricksConnectionItem | null;
 }> {
   return apiFetch("/connections/default");
