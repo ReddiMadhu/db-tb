@@ -1,7 +1,8 @@
 /* ═══════════════════════════════════════════════
    Tableau to Databricks Migration — Pipeline Configuration
    
-   Single source of truth for all 8 pipeline stages.
+   Single source of truth for all 7 pipeline stages.
+   (Calculation Deep Dive folded into Calculation Logic Conversion.)
    Edit this file to add/rename/reorder stages without UI changes.
    ═══════════════════════════════════════════════ */
 
@@ -92,45 +93,26 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
     ],
   },
   {
-    id: "CALC_DEEP_DIVE",
-    number: 4,
-    title: "Calculation Deep Dive",
-    shortTitle: "Calc Dive",
-    description: "Analyze calculated fields, LOD expressions, window functions, and dependencies",
-    icon: "Calculator",
-    backendStages: ["EXPRESSIONS"],
-    color: "var(--accent-purple)",
-    detailFields: [
-      { key: "calculated_fields", label: "Calculated Fields", type: "number", section: "metrics" },
-      { key: "lod_expressions", label: "LOD Expressions", type: "number", section: "metrics" },
-      { key: "window_functions", label: "Window Functions", type: "number", section: "metrics" },
-      { key: "nested_calculations", label: "Nested Calculations", type: "number", section: "metrics" },
-      { key: "table_calculations", label: "Table Calculations", type: "number", section: "details" },
-      { key: "excluded_fields", label: "Excluded Fields", type: "number", section: "details" },
-      { key: "complexity_analysis", label: "Complexity", type: "badge", section: "details" },
-      { key: "schema_mismatches", label: "Schema Mismatches", type: "number", section: "details" },
-    ],
-  },
-  {
     id: "CALC_LOGIC_CONVERSION",
-    number: 5,
+    number: 4,
     title: "Calculation Logic Conversion",
     shortTitle: "SQL Conv.",
-    description: "Convert Tableau formulas to Databricks-compatible Spark SQL",
+    description: "Resolve fields, analyze expressions, and convert Tableau formulas to Databricks Spark SQL",
     icon: "Code",
-    backendStages: ["SQL"],
+    backendStages: ["EXPRESSIONS", "SQL"],
     color: "var(--accent-orange)",
     detailFields: [
       { key: "expressions_compiled", label: "Expressions Compiled", type: "number", section: "metrics" },
       { key: "expressions_unsupported", label: "Unsupported", type: "number", section: "metrics" },
       { key: "total_expressions", label: "Total Expressions", type: "number", section: "metrics" },
       { key: "compilation_rate", label: "Compilation Rate", type: "text", section: "metrics" },
+      { key: "calculated_fields", label: "Calculated Fields", type: "number", section: "details" },
       { key: "databricks_compatibility", label: "Databricks Compatibility", type: "badge", section: "details" },
     ],
   },
   {
     id: "LAYOUT_GENERATION",
-    number: 6,
+    number: 5,
     title: "Visual Conversion Report",
     shortTitle: "Visual Conv.",
     description: "Side-by-side Tableau visual to Databricks Lakeview visual conversion report & JSON spec",
@@ -147,7 +129,7 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
   },
   {
     id: "SCHEMA_VALIDATION",
-    number: 7,
+    number: 6,
     title: "Lakeview Schema Validation",
     shortTitle: "Schema Validation",
     description: "Inspect, edit, validate Lakeview JSON schema, preview deployment readiness, and publish directly to Databricks",
@@ -164,7 +146,7 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
   },
   {
     id: "PUBLISH",
-    number: 8,
+    number: 7,
     title: "Publish to Databricks",
     shortTitle: "Publish",
     description: "Deploy dashboard to Databricks workspace via REST API",

@@ -89,6 +89,64 @@ export async function getLakeviewJson(jobUuid: string): Promise<LakeviewDashboar
   return apiFetch<LakeviewDashboard>(`/migrations/${jobUuid}/json`);
 }
 
+// ── Migration export package (calc + layout review) ──
+export async function exportMigrationAsset(
+  jobUuid: string,
+  exportType: string
+): Promise<{ filename: string; content: string; mime_type: string }> {
+  return apiFetch(`/migrations/${jobUuid}/exports/${exportType}`);
+}
+
+export async function acceptLayoutReviewCard(
+  jobUuid: string,
+  cardId: string
+): Promise<{ card: Record<string, unknown>; metrics: Record<string, number> }> {
+  return apiFetch(`/migrations/${jobUuid}/layout-review/cards/${cardId}/accept`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function overrideLayoutReviewWidget(
+  jobUuid: string,
+  cardId: string,
+  payload: {
+    widget_type: string;
+    x_field?: string;
+    y_field?: string;
+    color_field?: string;
+  }
+): Promise<{ card: Record<string, unknown>; metrics: Record<string, number>; spec: Record<string, unknown> }> {
+  return apiFetch(`/migrations/${jobUuid}/layout-review/cards/${cardId}/override`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function patchLayoutReviewEncodings(
+  jobUuid: string,
+  cardId: string,
+  encodings: Record<string, string | string[]>
+): Promise<{ card: Record<string, unknown>; metrics: Record<string, number>; spec: Record<string, unknown> }> {
+  return apiFetch(`/migrations/${jobUuid}/layout-review/cards/${cardId}/encodings`, {
+    method: "POST",
+    body: JSON.stringify({ encodings }),
+  });
+}
+
+export async function getLayoutReviewCardFields(
+  jobUuid: string,
+  cardId: string
+): Promise<{
+  card_id: string;
+  dataset_name: string;
+  widget_type?: string;
+  fields: { name: string; expression: string }[];
+  override_types: string[];
+}> {
+  return apiFetch(`/migrations/${jobUuid}/layout-review/cards/${cardId}/fields`);
+}
+
 // ── Get Report ──
 export async function getMigrationReport(jobUuid: string): Promise<MigrationReport> {
   return apiFetch<MigrationReport>(`/migrations/${jobUuid}/report`);

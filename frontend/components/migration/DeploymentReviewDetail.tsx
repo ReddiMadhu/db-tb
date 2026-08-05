@@ -374,6 +374,7 @@ export default function DeploymentReviewDetail({
 
   return (
     <div className={styles.container}>
+
       {/* ── View Controls & Action Toolbar ── */}
       <div className={styles.controlsBar}>
         <div className={styles.viewModeGroup}>

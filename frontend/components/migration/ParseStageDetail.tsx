@@ -25,6 +25,9 @@ import styles from "./ParseStageDetail.module.css";
 interface WorksheetVisual {
   name: string;
   title: string;
+  caption?: string;
+  description?: string;
+  hidden?: boolean;
   type: string;
   mark_type: string;
   worksheet: string;
@@ -37,11 +40,29 @@ interface WorksheetVisual {
   tooltip: string;
   datasource_name?: string;
   used_calculated_fields?: string[];
+  used_parameters?: string[];
+  used_sets?: string[];
+  used_groups?: string[];
+  used_hierarchies?: string[];
+  used_table_calcs?: string[];
+  used_lod_calcs?: string[];
   rows_shelves?: { field_name: string; derivation: string | null; raw: string }[];
   columns_shelves?: { field_name: string; derivation: string | null; raw: string }[];
+  pages_shelf?: { field_name: string; derivation: string | null; raw: string }[];
+  measure_values_used?: boolean;
   encodings?: { channel: string; field_name: string; field_type: string; aggregation: string | null; derivation: string | null }[];
+  mark_properties?: { channel: string; field_name: string; palette_name?: string; palette_colors?: string[]; show_mark_labels?: boolean; label_alignment?: string }[];
+  axes?: { shelf: string; field_name: string; title?: string; range_type?: string; reversed?: boolean; logarithmic?: boolean }[];
+  legends?: { field_name: string; legend_type?: string; title?: string; position?: string; hidden?: boolean }[];
+  tooltip_fields?: { field_name: string; aggregation?: string; custom_label?: string; has_viz_in_tooltip?: boolean; viz_worksheet?: string }[];
+  analytics?: { overlay_type: string; field_name?: string; label?: string; scope?: string }[];
   sorts?: { field_name: string; direction: string; sort_type: string }[];
-  filter_details?: { field_name: string; filter_type: string; is_context_filter: boolean; is_global: boolean; scope: string }[];
+  filter_details?: { field_name: string; filter_type: string; min_value?: string | null; max_value?: string | null; is_context_filter: boolean; is_global: boolean; scope: string; ui_mode?: string }[];
+  related_actions?: string[];
+  dashboard_consumers?: string[];
+  complexity?: { score: string; numeric_score: number; field_count: number; calculation_count: number; lod_count: number; lod_channel_count?: number; table_calc_count: number; filter_count: number; parameter_count: number; action_count: number; analytics_overlay_count: number; unsupported_features: string[]; conversion_notes: string[] };
+  map_style?: string;
+  uuid?: string;
 }
 
 interface CalcField {
@@ -50,6 +71,9 @@ interface CalcField {
   formula: string;
   type: string;
   datasource: string;
+  return_type?: string;
+  dependencies?: string[];
+  is_used?: boolean;
 }
 
 interface ParseStageDetailProps {
@@ -111,6 +135,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const [calcSearch, setCalcSearch] = useState("");
   const [expandedWs, setExpandedWs] = useState<Set<string>>(new Set());
   const [expandedCalcs, setExpandedCalcs] = useState<Set<string>>(new Set());
+  const [showOntology, setShowOntology] = useState(false);
 
   const artifacts = (stage.artifacts || {}) as Record<string, any>;
   const metrics = (stage.metrics || {}) as Record<string, any>;
@@ -147,6 +172,9 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       formula: cf.formula || "",
       type: cf.type || cf.formula_type || "STANDARD",
       datasource: cf.datasource || "Default",
+      return_type: cf.return_type || undefined,
+      dependencies: Array.isArray(cf.dependencies) ? cf.dependencies : undefined,
+      is_used: typeof cf.is_used === "boolean" ? cf.is_used : undefined,
     }));
   }, [artifacts]);
 
@@ -155,7 +183,14 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const relationships = Array.isArray(artifacts.relationships) ? artifacts.relationships : [];
   const datasources = Array.isArray(artifacts.datasources) ? artifacts.datasources : [];
 
-  const dashboardName = artifacts.dashboard_name || artifacts.dashboard_title || "Workbook Dashboard";
+  const dashboardName = artifacts.dashboard_name || "Workbook Dashboard";
+  const dashboardFilters = Array.isArray(artifacts.dashboard_filters) ? artifacts.dashboard_filters : [];
+  const dashboardLegends = Array.isArray(artifacts.dashboard_legends) ? artifacts.dashboard_legends : [];
+  const workbookActions = Array.isArray(artifacts.actions) ? artifacts.actions : [];
+  const ontology = (artifacts.workbook_ontology || null) as Record<string, any> | null;
+  const ontologyDashboard = Array.isArray(ontology?.dashboards) ? ontology.dashboards[0] : null;
+  const ontologyWorkbook = ontology?.workbook || null;
+  const ontologyDs = Array.isArray(ontology?.datasources) ? ontology.datasources[0] : null;
 
   // ── Counts ──
   const dashboardCount = metrics.dashboards_parsed ?? (artifacts.dashboards ? artifacts.dashboards.length : 0);
@@ -374,6 +409,22 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                   <div className={styles.wsCardTop}>
                     <Icon size={14} style={{ color, flexShrink: 0 }} />
                     <span className={styles.wsName}>{ws.title || ws.name}</span>
+                    {ws.hidden ? (
+                      <span className={styles.hiddenBadge} title="Worksheet tab is hidden (embedded in dashboard only)">Hidden</span>
+                    ) : null}
+                    {ws.complexity && (
+                      <span
+                        className={styles.chartTypeBadge}
+                        style={{
+                          backgroundColor: ws.complexity.score === "Simple" ? "rgba(39,174,96,0.15)" : ws.complexity.score === "Medium" ? "rgba(242,153,74,0.15)" : "rgba(235,87,87,0.15)",
+                          color: ws.complexity.score === "Simple" ? "#27AE60" : ws.complexity.score === "Medium" ? "#F2994A" : "#EB5757",
+                          border: `1px solid ${ws.complexity.score === "Simple" ? "#27AE6040" : ws.complexity.score === "Medium" ? "#F2994A40" : "#EB575740"}`,
+                          marginRight: "6px",
+                        }}
+                      >
+                        {ws.complexity.score}
+                      </span>
+                    )}
                     <span
                       className={styles.chartTypeBadge}
                       style={{ backgroundColor: `${color}18`, color, border: `1px solid ${color}40` }}
@@ -440,9 +491,32 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                           <div className={styles.wsExpandedPills}>
                             <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Mark: {ws.mark_type || "Automatic"}</span>
                             <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Source: {ws.datasource_name || "Default"}</span>
+                            {ws.map_style ? (
+                              <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Map: {ws.map_style}</span>
+                            ) : null}
+                            {ws.uuid ? (
+                              <span className={`${styles.miniPill} ${styles.miniPillShelf}`} title={ws.uuid}>UUID</span>
+                            ) : null}
                           </div>
                         </div>
                       </div>
+
+                      {/* Mark encodings (color / size / lod / angle …) */}
+                      {ws.encodings && ws.encodings.length > 0 && (
+                        <div className={styles.specBlock}>
+                          <span className={styles.specBlockLabel}>Mark Encodings ({ws.encodings.length})</span>
+                          <div className={styles.wsExpandedPills}>
+                            {ws.encodings.map((enc, i) => (
+                              <span
+                                key={i}
+                                className={`${styles.miniPill} ${enc.channel === "lod" ? styles.miniPillLod : styles.miniPillShelf}`}
+                              >
+                                {enc.channel}: {enc.aggregation ? `${enc.aggregation}(${enc.field_name})` : enc.field_name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Dimensions & Measures */}
                       <div className={styles.specSectionGrid}>
@@ -469,16 +543,96 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                       </div>
 
                       {/* Filters */}
-                      {ws.filters && ws.filters.length > 0 && (
+                      {(ws.filter_details?.length || ws.filters?.length) ? (
                         <div className={styles.specBlock}>
-                          <span className={styles.specBlockLabel}>Worksheet Filters ({ws.filters.length})</span>
+                          <span className={styles.specBlockLabel}>
+                            Worksheet Filters ({ws.filter_details?.length || ws.filters?.length || 0})
+                          </span>
                           <div className={styles.wsExpandedPills}>
-                            {ws.filters.map((f, i) => (
-                              <span key={i} className={`${styles.miniPill} ${styles.miniPillFilter}`}>{f}</span>
+                            {ws.filter_details && ws.filter_details.length > 0
+                              ? ws.filter_details.map((f, i) => (
+                                  <span key={i} className={`${styles.miniPill} ${styles.miniPillFilter}`} title={f.scope}>
+                                    {f.field_name}
+                                    <span className={styles.filterTypeTag}>{f.filter_type}</span>
+                                    {f.filter_type === "quantitative" && (f.min_value != null || f.max_value != null)
+                                      ? ` [${f.min_value ?? "…"} – ${f.max_value ?? "…"}]`
+                                      : ""}
+                                  </span>
+                                ))
+                              : ws.filters.map((f, i) => (
+                                  <span key={i} className={`${styles.miniPill} ${styles.miniPillFilter}`}>{f}</span>
+                                ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {/* Analytics Overlays */}
+                      {ws.analytics && ws.analytics.length > 0 && (
+                        <div className={styles.specBlock}>
+                          <span className={styles.specBlockLabel}>Analytics & Overlays ({ws.analytics.length})</span>
+                          <div className={styles.wsExpandedPills}>
+                            {ws.analytics.map((a, i) => (
+                              <span key={i} className={`${styles.miniPill} ${styles.miniPillShelf}`}>
+                                📈 {a.label || a.overlay_type} {a.field_name ? `(${a.field_name})` : ""}
+                              </span>
                             ))}
                           </div>
                         </div>
                       )}
+
+                      {/* Tooltip Fields */}
+                      {ws.tooltip_fields && ws.tooltip_fields.length > 0 && (
+                        <div className={styles.specBlock}>
+                          <span className={styles.specBlockLabel}>Hover Tooltip Fields ({ws.tooltip_fields.length})</span>
+                          <div className={styles.wsExpandedPills}>
+                            {ws.tooltip_fields.map((tf, i) => (
+                              <span key={i} className={`${styles.miniPill} ${styles.miniPillDim}`}>
+                                💬 {tf.aggregation ? `${tf.aggregation}(${tf.field_name})` : tf.field_name}
+                                {tf.has_viz_in_tooltip ? ` [Viz in Tooltip: ${tf.viz_worksheet}]` : ""}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Semantic Dependencies (Params, Sets, Groups, LODs) */}
+                      {(ws.used_parameters?.length || ws.used_sets?.length || ws.used_groups?.length || ws.used_lod_calcs?.length || ws.used_table_calcs?.length) ? (
+                        <div className={styles.specBlock}>
+                          <span className={styles.specBlockLabel}>Semantic Dependencies</span>
+                          <div className={styles.wsExpandedPills}>
+                            {ws.used_parameters?.map((p, i) => (
+                              <span key={`p-${i}`} className={`${styles.miniPill} ${styles.miniPillCalc}`}>⚙ Param: {p}</span>
+                            ))}
+                            {ws.used_sets?.map((s, i) => (
+                              <span key={`s-${i}`} className={`${styles.miniPill} ${styles.miniPillFilter}`}>⬡ Set: {s}</span>
+                            ))}
+                            {ws.used_groups?.map((g, i) => (
+                              <span key={`g-${i}`} className={`${styles.miniPill} ${styles.miniPillDim}`}>☵ Group: {g}</span>
+                            ))}
+                            {ws.used_lod_calcs?.map((l, i) => (
+                              <span key={`l-${i}`} className={`${styles.miniPill} ${styles.miniPillMeasure}`}>🔒 LOD: {l}</span>
+                            ))}
+                            {ws.used_table_calcs?.map((tc, i) => (
+                              <span key={`tc-${i}`} className={`${styles.miniPill} ${styles.miniPillMeasure}`}>🗠 TableCalc: {tc}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {/* Dashboard Interactions */}
+                      {(ws.dashboard_consumers?.length || ws.related_actions?.length) ? (
+                        <div className={styles.specBlock}>
+                          <span className={styles.specBlockLabel}>Dashboard Interactions & Actions</span>
+                          <div className={styles.wsExpandedPills}>
+                            {ws.dashboard_consumers?.map((db, i) => (
+                              <span key={`db-${i}`} className={`${styles.miniPill} ${styles.miniPillShelf}`}>📊 Dashboard: {db}</span>
+                            ))}
+                            {ws.related_actions?.map((act, i) => (
+                              <span key={`act-${i}`} className={`${styles.miniPill} ${styles.miniPillFilter}`}>⚡ Action: {act}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
 
                       {/* Calculated Fields Used */}
                       {ws.used_calculated_fields && ws.used_calculated_fields.length > 0 && (
@@ -562,6 +716,14 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                 >
                   <div className={styles.calcCardTop}>
                     <span className={styles.calcName}>{cf.caption}</span>
+                    {cf.is_used === false ? (
+                      <span className={styles.unusedBadge}>Unused</span>
+                    ) : cf.is_used === true ? (
+                      <span className={styles.usedBadge}>Used</span>
+                    ) : null}
+                    {cf.return_type ? (
+                      <span className={styles.calcTypeBadge}>{cf.return_type}</span>
+                    ) : null}
                     <span className={styles.calcTypeBadge}>{cf.type}</span>
                   </div>
 
@@ -569,11 +731,11 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                     <div className={styles.calcExpanded} onClick={(e) => e.stopPropagation()}>
                       <span className={styles.specBlockLabel}>Formula</span>
                       <div className={styles.calcFormulaBlock}>{cf.formula || "—"}</div>
-                      {deps.length > 0 && (
+                      {(cf.dependencies?.length || deps.length) > 0 && (
                         <>
                           <span className={styles.specBlockLabel}>Dependencies</span>
                           <div className={styles.calcDeps}>
-                            {deps.map((d, i) => (
+                            {(cf.dependencies && cf.dependencies.length > 0 ? cf.dependencies : deps).map((d, i) => (
                               <span key={i} className={styles.depPill}>{d}</span>
                             ))}
                           </div>
@@ -608,6 +770,148 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
           </div>
         </div>
       </div>
+
+      {/* ═══════════════════════════════════════
+          DASHBOARD CONTROLS + ACTIONS
+          ═══════════════════════════════════════ */}
+      {(dashboardFilters.length > 0 || dashboardLegends.length > 0 || workbookActions.length > 0) && (
+        <div className={styles.sectionBlock}>
+          <div className={styles.sectionHeader}>
+            <h3 className={styles.sectionTitle}>
+              <Filter size={16} style={{ color: "#F2994A" }} /> Dashboard Controls — {dashboardName}
+            </h3>
+            <span className={styles.subtextHint}>
+              Quick filters, legends, and workbook actions from Tableau layout
+            </span>
+          </div>
+          <div className={styles.dashControlsGrid}>
+            {dashboardFilters.length > 0 && (
+              <div className={styles.specBlock}>
+                <span className={styles.specBlockLabel}>Filter Cards ({dashboardFilters.length})</span>
+                <div className={styles.wsExpandedPills}>
+                  {dashboardFilters.map((fc: any, i: number) => (
+                    <span key={i} className={`${styles.miniPill} ${styles.miniPillFilter}`}>
+                      #{fc.id} {fc.field}{fc.mode ? ` · ${fc.mode}` : ""}
+                      {fc.worksheet_owner ? ` ← ${fc.worksheet_owner}` : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {dashboardLegends.length > 0 && (
+              <div className={styles.specBlock}>
+                <span className={styles.specBlockLabel}>Legend Cards ({dashboardLegends.length})</span>
+                <div className={styles.wsExpandedPills}>
+                  {dashboardLegends.map((lg: any, i: number) => (
+                    <span key={i} className={`${styles.miniPill} ${styles.miniPillDim}`}>
+                      #{lg.id} {lg.field} · {lg.legend_type || "color"}
+                      {lg.worksheet_owner ? ` ← ${lg.worksheet_owner}` : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {workbookActions.length > 0 && (
+              <div className={styles.specBlock}>
+                <span className={styles.specBlockLabel}>Actions ({workbookActions.length})</span>
+                <div className={styles.wsExpandedPills}>
+                  {workbookActions.map((act: any, i: number) => (
+                    <span key={i} className={`${styles.miniPill} ${styles.miniPillCalc}`}>
+                      {act.caption || act.name}: {act.action_type || act.type}
+                      {act.field ? ` · ${act.field}` : ""}
+                      {act.activation_type ? ` · ${act.activation_type}` : ""}
+                      {act.target ? ` → ${act.target}` : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════
+          WORKBOOK ONTOLOGY
+          ═══════════════════════════════════════ */}
+      {ontology && (
+        <div className={styles.sectionBlock}>
+          <div className={styles.sectionHeader}>
+            <h3 className={styles.sectionTitle}>
+              <Layers size={16} style={{ color: "#9B51E0" }} /> Workbook Ontology
+            </h3>
+            <button
+              type="button"
+              className={styles.clearFilterBtn}
+              onClick={() => setShowOntology((v) => !v)}
+            >
+              {showOntology ? "Hide details" : "Show details"}
+            </button>
+          </div>
+          <div className={styles.ontologySummary}>
+            {ontologyWorkbook && (
+              <span className={styles.ontologyChip}>
+                v{ontologyWorkbook.tableau_version}
+                {ontologyWorkbook.build_version ? ` · ${String(ontologyWorkbook.build_version).split(" ")[0]}` : ""}
+                {ontologyWorkbook.style_theme ? ` · theme ${ontologyWorkbook.style_theme}` : ""}
+              </span>
+            )}
+            {ontologyWorkbook?.repository_location?.site && (
+              <span className={styles.ontologyChip}>site: {ontologyWorkbook.repository_location.site}</span>
+            )}
+            {ontologyDs?.live_or_extract && (
+              <span className={styles.ontologyChip}>
+                {ontologyDs.live_or_extract}
+                {ontologyDs.extract?.rows_inserted != null ? ` · ${ontologyDs.extract.rows_inserted} rows` : ""}
+              </span>
+            )}
+            {ontologyDashboard?.uuid && (
+              <span className={styles.ontologyChip} title={ontologyDashboard.uuid}>
+                dash UUID · zones {ontologyDashboard.zone_count ?? "—"}
+              </span>
+            )}
+            {ontologyDashboard?.sizing_mode && (
+              <span className={styles.ontologyChip}>sizing: {ontologyDashboard.sizing_mode}</span>
+            )}
+            {ontologyDashboard?.table_background && (
+              <span className={styles.ontologyChip}>bg {ontologyDashboard.table_background}</span>
+            )}
+          </div>
+          {showOntology && (
+            <div className={styles.ontologyDetail}>
+              {Array.isArray(ontologyDashboard?.text_zones) && ontologyDashboard.text_zones.length > 0 && (
+                <div className={styles.specBlock}>
+                  <span className={styles.specBlockLabel}>Text Zones</span>
+                  <div className={styles.wsExpandedPills}>
+                    {ontologyDashboard.text_zones.map((tz: any, i: number) => (
+                      <span key={i} className={`${styles.miniPill} ${styles.miniPillShelf}`}>
+                        #{tz.zone_id} “{tz.content}” · {tz.font} {tz.font_size}pt {tz.color}
+                        {tz.bold ? " Bold" : ""}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {ontologyDashboard?.layout_hierarchy && (
+                <div className={styles.specBlock}>
+                  <span className={styles.specBlockLabel}>Layout Hierarchy</span>
+                  <pre className={styles.ontologyTree}>{ontologyDashboard.layout_hierarchy}</pre>
+                </div>
+              )}
+              {ontologyDs?.extract?.hyper_file && (
+                <div className={styles.specBlock}>
+                  <span className={styles.specBlockLabel}>Extract</span>
+                  <div className={styles.wsExpandedPills}>
+                    <span className={`${styles.miniPill} ${styles.miniPillDim}`}>{ontologyDs.extract.hyper_file}</span>
+                    {ontologyDs.extract.update_time && (
+                      <span className={`${styles.miniPill} ${styles.miniPillDim}`}>{ontologyDs.extract.update_time}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ═══════════════════════════════════════
           PREVIOUS WORKBOOK DATA MODEL VERSION

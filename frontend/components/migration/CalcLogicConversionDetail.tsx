@@ -88,21 +88,22 @@ export default function CalcLogicConversionDetail({
     }
   };
 
-  const totalCalculations = rawConversions.length;
-  const validCount = rawConversions.filter((c: any) => c.validation_status === "VALID").length;
-  const lodCount = rawConversions.filter((c: any) => c.formula_type === "LOD" || (c.original_formula && c.original_formula.includes("FIXED"))).length;
-  const compatScore = metrics.databricks_compatibility || 98;
+  const totalCalculations = metrics.total_expressions ?? rawConversions.length;
+  const validCount = metrics.expressions_compiled ?? rawConversions.filter((c: any) => c.validation_status === "VALID").length;
+  const reviewCount = metrics.expressions_unsupported ?? unsupported.length;
+  const lodCount = rawConversions.filter((c: any) => c.formula_type === "LOD" || (c.original_formula && /FIXED|INCLUDE|EXCLUDE/i.test(c.original_formula))).length;
+  const compatScore = metrics.databricks_compatibility ?? (totalCalculations ? Math.round((validCount / totalCalculations) * 100) : 100);
 
   return (
     <div className={styles.container}>
       {/* ── Metric Header ── */}
       <div className={styles.kpiGrid}>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Total Calculations</span>
+          <span className={styles.kpiLabel}>Calculated Fields</span>
           <span className={styles.kpiValue}>{totalCalculations}</span>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Converted to Databricks SQL</span>
+          <span className={styles.kpiLabel}>Compiled to Databricks SQL</span>
           <span className={styles.kpiValue}>{validCount}</span>
         </div>
         <div className={styles.kpiCard}>
@@ -110,8 +111,8 @@ export default function CalcLogicConversionDetail({
           <span className={styles.kpiValue}>{lodCount}</span>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Manual Review</span>
-          <span className={styles.kpiValue}>{unsupported.length}</span>
+          <span className={styles.kpiLabel}>Manual Review / Failed</span>
+          <span className={styles.kpiValue}>{reviewCount}</span>
         </div>
         <div className={styles.kpiCard}>
           <span className={styles.kpiLabel}>Databricks SQL Compatibility</span>
@@ -177,9 +178,11 @@ export default function CalcLogicConversionDetail({
             <div className={styles.emptyState}>No calculated fields match your search filter.</div>
           ) : (
             filteredConversions.map((item: any, idx: number) => {
-              const origFormula = item.original_formula || item.name;
-              const compiledSql = item.compiled_sql || `/* Transpiled column */ \`${item.caption}\``;
-              const isWarn = item.validation_status === "WARNING";
+              const origFormula = (item.original_formula || "").trim();
+              const compiledSql = item.compiled_sql || "";
+              const status = item.validation_status || "VALID";
+              const isFail = status === "FAIL" || /Unable to transpile/i.test(compiledSql);
+              const isWarn = status === "WARNING" || (!isFail && (item.is_table_calc || status === "WARNING"));
               const formulaType = item.formula_type || "STANDARD";
 
               return (
@@ -194,7 +197,11 @@ export default function CalcLogicConversionDetail({
                       )}
                     </div>
                     <div>
-                      {isWarn ? (
+                      {isFail ? (
+                        <span className={styles.statusBadgeWarn}>
+                          <AlertTriangle size={13} /> Failed to transpile
+                        </span>
+                      ) : isWarn ? (
                         <span className={styles.statusBadgeWarn}>
                           <AlertTriangle size={13} /> Requires Review
                         </span>
@@ -216,7 +223,8 @@ export default function CalcLogicConversionDetail({
                         </span>
                         <button
                           className={styles.copyBtn}
-                          onClick={() => copyToClipboard(origFormula, `orig-${idx}`)}
+                          onClick={() => copyToClipboard(origFormula || item.name || "", `orig-${idx}`)}
+                          disabled={!origFormula}
                         >
                           {copiedIndex === `orig-${idx}` ? (
                             <>
@@ -230,7 +238,7 @@ export default function CalcLogicConversionDetail({
                         </button>
                       </div>
                       <pre className={styles.codeBlock}>
-                        <code>{origFormula}</code>
+                        <code>{origFormula || "/* No Tableau formula on this field */"}</code>
                       </pre>
                     </div>
 
@@ -262,7 +270,7 @@ export default function CalcLogicConversionDetail({
                         </button>
                       </div>
                       <pre className={`${styles.codeBlock} ${styles.codeBlockSql}`}>
-                        <code>{compiledSql}</code>
+                        <code>{compiledSql || "/* No SQL generated */"}</code>
                       </pre>
                     </div>
                   </div>
@@ -272,7 +280,7 @@ export default function CalcLogicConversionDetail({
                     <div className={styles.explanationFooter}>
                       <Sparkles size={14} className={styles.sparkleIcon} />
                       <span>
-                        <strong>SQL Translation Safeguard: </strong>
+                        <strong>SQL Translation Note: </strong>
                         {item.ai_explanation}
                       </span>
                     </div>
@@ -375,6 +383,13 @@ export default function CalcLogicConversionDetail({
             disabled={downloading !== null}
           >
             <Code2 size={14} /> Compatibility Specs (.json)
+          </button>
+          <button
+            className={styles.exportBtn}
+            onClick={() => handleDownload("manual-review-items", "manual_review_queue.csv")}
+            disabled={downloading !== null}
+          >
+            <FileText size={14} /> Manual Review Items (.csv)
           </button>
         </div>
       </div>

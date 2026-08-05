@@ -107,7 +107,19 @@ class CachedLLM:
         if prompt_hash in self.cache:
             return CachedAIMessage(content=self.cache[prompt_hash])
 
-        response = self.base_llm.invoke(input_data)
+        # Hard wall-clock timeout so a stuck Azure/OpenAI socket cannot freeze the pipeline.
+        import concurrent.futures
+        from app.core.llm import LLM_REQUEST_TIMEOUT_SEC
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(self.base_llm.invoke, input_data)
+            try:
+                response = fut.result(timeout=LLM_REQUEST_TIMEOUT_SEC + 5)
+            except concurrent.futures.TimeoutError as e:
+                raise TimeoutError(
+                    f"LLM invoke exceeded {LLM_REQUEST_TIMEOUT_SEC + 5}s"
+                ) from e
+
         if hasattr(response, 'content'):
             self.cache[prompt_hash] = response.content
             self._save_cache()

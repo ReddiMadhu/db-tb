@@ -96,6 +96,7 @@ class IntermediateWidget(BaseModel):
     filters: List[IntermediateFilter] = Field(default_factory=list)
     position: IntermediatePosition = Field(default_factory=IntermediatePosition)
     title: Optional[str] = None
+    show_title: Optional[bool] = None  # Lakeview frame.showTitle; False for blank/zone-hidden
     description: Optional[str] = None
     disaggregated: bool = False  # True for table/pivot, False for aggregated charts
     properties: Dict[str, Any] = Field(default_factory=dict)

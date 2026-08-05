@@ -147,21 +147,20 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
             # Stage 2: Parse (COMPLETED - XML DOM & DAG built during upload)
             parse_def = PIPELINE_STAGE_DEFS[1]
             calc_count = sum(len(ds.calculated_fields) for ds in workbook_meta.datasources)
-            # Extract measures and dimensions from columns and calculated fields
-            all_cols = []
+            # Role-based measures/dimensions — never datatype or name heuristics
+            measures = []
+            dimensions = []
+            seen_m, seen_d = set(), set()
             for ds in workbook_meta.datasources:
                 for c in ds.columns:
-                    all_cols.append(c.caption or c.internal_name or c.name)
-            for ds in workbook_meta.datasources:
-                for cf in ds.calculated_fields:
-                    all_cols.append(cf.caption or cf.name)
-
-            measures = [c for c in all_cols if any(k in c.lower() for k in ["sum", "amt", "amount", "claim", "total", "count", "avg", "cost", "price", "revenue", "sales", "qty", "ratio", "score"])]
-            dimensions = [c for c in all_cols if c not in measures]
-            if not measures:
-                measures = all_cols[:5]
-            if not dimensions:
-                dimensions = all_cols[5:15]
+                    cname = c.caption or c.internal_name
+                    role = (c.role or "").lower().strip()
+                    if role == "measure" and cname not in seen_m:
+                        seen_m.add(cname)
+                        measures.append(cname)
+                    elif role == "dimension" and cname not in seen_d:
+                        seen_d.add(cname)
+                        dimensions.append(cname)
 
             fn_lower = file.filename.lower()
             if any(k in fn_lower for k in ["claim", "insurance", "policy"]):
@@ -177,9 +176,8 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
 
             detailed_visuals = []
             for idx, w in enumerate(workbook_meta.worksheets):
-                ws_fields = getattr(w, 'fields', [])
-                ws_measures = [f for f in ws_fields if f in measures] or measures[:2]
-                ws_dimensions = [f for f in ws_fields if f in dimensions] or dimensions[:2]
+                ws_measures = list(getattr(w, "measures", None) or [])
+                ws_dimensions = list(getattr(w, "dimensions", None) or [])
                 ws_filters = [f.field_name for f in getattr(w, 'filters', [])]
                 ws_params = [p.name for p in workbook_meta.parameters[:2]]
                 chart_type = getattr(w, 'mark_type', None) or ("Bar Chart" if idx % 3 == 0 else "Line Chart" if idx % 3 == 1 else "Table")
@@ -187,11 +185,12 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                     "title": f"{w.name} Chart",
                     "type": chart_type.title(),
                     "worksheet": w.name,
-                    "measures": ws_measures if ws_measures else (measures[:2] if measures else ["Value"]),
-                    "dimensions": ws_dimensions if ws_dimensions else (dimensions[:2] if dimensions else ["Category"]),
+                    "measures": ws_measures,
+                    "dimensions": ws_dimensions,
                     "filters": ws_filters,
                     "parameters": ws_params,
-                    "encoding": f"Worksheet: {w.name} | Mark: {chart_type} | Fields: {len(ws_fields)}",
+                    "encoding": f"Worksheet: {w.name} | Mark: {chart_type}",
+                    "hidden": getattr(w, "hidden", False),
                 })
 
             # Deduplicate datasources and calculated fields

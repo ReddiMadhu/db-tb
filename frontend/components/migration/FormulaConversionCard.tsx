@@ -10,7 +10,13 @@ interface FormulaConversionCardProps {
 }
 
 export default function FormulaConversionCard({ item }: FormulaConversionCardProps) {
-  const isWarning = item.validation_status === "WARNING" || (item.confidence_score && item.confidence_score < 80);
+  const isFail = item.validation_status === "FAIL" || /Unable to transpile/i.test(item.compiled_sql || "");
+  const isWarning =
+    !isFail &&
+    (item.validation_status === "WARNING" ||
+      item.is_table_calc ||
+      (item.confidence_score !== undefined && item.confidence_score < 80));
+  const formula = (item.original_formula || "").trim();
 
   return (
     <div className={styles.card}>
@@ -20,11 +26,19 @@ export default function FormulaConversionCard({ item }: FormulaConversionCardPro
           {item.caption || item.name}
         </div>
         <div className={styles.metaRow}>
-          {item.confidence_score && (
+          {item.formula_type && (
+            <span className={styles.confidenceBadge}>{item.formula_type}</span>
+          )}
+          {item.confidence_score !== undefined && (
             <span className={styles.confidenceBadge}>{item.confidence_score}% Confidence</span>
           )}
-          <span className={isWarning ? styles.statusBadgeWarn : styles.statusBadgeValid}>
-            {isWarning ? (
+          <span className={isFail || isWarning ? styles.statusBadgeWarn : styles.statusBadgeValid}>
+            {isFail ? (
+              <>
+                <AlertTriangle size={11} style={{ display: "inline", marginRight: 4 }} />
+                Failed
+              </>
+            ) : isWarning ? (
               <>
                 <AlertTriangle size={11} style={{ display: "inline", marginRight: 4 }} />
                 Requires Review
@@ -43,7 +57,7 @@ export default function FormulaConversionCard({ item }: FormulaConversionCardPro
         {/* Left: Original Tableau Formula */}
         <div className={styles.box}>
           <div className={styles.boxLabel}>Original Tableau Formula</div>
-          <code>{item.original_formula || item.name}</code>
+          <code>{formula || "/* No Tableau formula */"}</code>
         </div>
 
         {/* Center: Conversion Arrow */}

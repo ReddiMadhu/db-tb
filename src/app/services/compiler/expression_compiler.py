@@ -65,69 +65,65 @@ def _extract_lod_dims(dim_text: str) -> List[str]:
 
 
 def _compile_lod_fixed(dims: List[str], agg_expr: str) -> str:
-    """Compile FIXED LOD to a subquery pattern (semantically correct).
-    
-    Tableau {FIXED [Region] : SUM([Sales])} means:
-      Compute SUM(Sales) grouped by Region independently, then join back.
-    
-    Correct SQL:
-      (SELECT Region, SUM(Sales) as _lod_val FROM _table GROUP BY Region)
-    
-    Since we may not know the exact table at compile time, we emit a 
-    descriptive expression that the SQL generator can resolve, or we emit
-    a window function only when the context grain matches.
-    
-    For Lakeview field expressions, we emit the aggregate with GROUP BY dims.
+    """Compile FIXED LOD to a join-back subquery pattern (executable Spark SQL).
+
+    Tableau {FIXED [Region] : SUM([Sales])} ≈ grouped subquery on FIXED dims,
+    value referenced as _lod_val. Generators substitute `_src` for the real table.
     """
+    dim_refs = [f"`{d}`" for d in dims]
     agg_m = AGG_RE.search(agg_expr)
     if agg_m:
         fn = agg_m.group(1).upper()
         col = agg_m.group(2)
-        fn_sql = "COUNT(DISTINCT" if fn == "COUNTD" else fn
-        closing = ")" if fn == "COUNTD" else ""
-        col_ref = f"`{col}`"
-        dim_refs = ", ".join(f"`{d}`" for d in dims)
-        # Emit as a descriptive LOD marker that the SQL generator understands
-        return f"/* LOD_FIXED({dim_refs}) */ {fn_sql}({col_ref}{closing})"
+        if fn == "COUNTD":
+            agg_sql = f"COUNT(DISTINCT `{col}`)"
+        else:
+            agg_sql = f"{fn}(`{col}`)"
     else:
-        # Complex expression in aggregation
-        dim_refs = ", ".join(f"`{d}`" for d in dims)
-        expr_sql = _bracket_to_backtick(agg_expr)
-        return f"/* LOD_FIXED({dim_refs}) */ {expr_sql}"
+        agg_sql = _bracket_to_backtick(agg_expr.strip())
+
+    if not dims:
+        return f"({agg_sql})"
+
+    select_dims = ", ".join(f"{d} AS _lod_dim_{i}" for i, d in enumerate(dim_refs))
+    join_pred = " AND ".join(
+        f"_lod._lod_dim_{i} = {d}" for i, d in enumerate(dim_refs)
+    )
+    return (
+        f"(SELECT _lod._lod_val FROM ("
+        f"SELECT {select_dims}, {agg_sql} AS _lod_val "
+        f"FROM _src GROUP BY {', '.join(dim_refs)}"
+        f") _lod WHERE {join_pred})"
+    )
 
 
 def _compile_lod_include(dims: List[str], agg_expr: str) -> str:
-    """Compile INCLUDE LOD - adds dimensions to the current grain."""
+    """Compile INCLUDE LOD as window aggregate over include dims."""
+    parts = ", ".join(f"`{d}`" for d in dims) if dims else "1"
     agg_m = AGG_RE.search(agg_expr)
     if agg_m:
         fn = agg_m.group(1).upper()
         col = agg_m.group(2)
-        fn_sql = "COUNT(DISTINCT" if fn == "COUNTD" else fn
-        closing = ")" if fn == "COUNTD" else ""
-        col_ref = f"`{col}`"
-        dim_refs = ", ".join(f"`{d}`" for d in dims)
-        return f"/* LOD_INCLUDE({dim_refs}) */ {fn_sql}({col_ref}{closing})"
-    else:
-        dim_refs = ", ".join(f"`{d}`" for d in dims)
-        expr_sql = _bracket_to_backtick(agg_expr)
-        return f"/* LOD_INCLUDE({dim_refs}) */ {expr_sql}"
+        if fn == "COUNTD":
+            return f"size(collect_set(`{col}`) OVER (PARTITION BY {parts}))"
+        return f"{fn}(`{col}`) OVER (PARTITION BY {parts})"
+    return f"({_bracket_to_backtick(agg_expr)}) OVER (PARTITION BY {parts})"
 
 
 def _compile_lod_exclude(dims: List[str], agg_expr: str) -> str:
-    """Compile EXCLUDE LOD - removes dimensions from the current grain."""
+    """Compile EXCLUDE LOD as window aggregate; excluded dims noted for refinement."""
     agg_m = AGG_RE.search(agg_expr)
     if agg_m:
         fn = agg_m.group(1).upper()
         col = agg_m.group(2)
-        fn_sql = "COUNT(DISTINCT" if fn == "COUNTD" else fn
-        closing = ")" if fn == "COUNTD" else ""
-        col_ref = f"`{col}`"
-        dim_refs = ", ".join(f"`{d}`" for d in dims)
-        return f"/* LOD_EXCLUDE({dim_refs}) */ {fn_sql}({col_ref}{closing})"
+        if fn == "COUNTD":
+            agg_sql = f"size(collect_set(`{col}`) OVER (PARTITION BY 1))"
+        else:
+            agg_sql = f"{fn}(`{col}`) OVER (PARTITION BY 1)"
     else:
-        dim_refs = ", ".join(f"`{d}`" for d in dims)
-        expr_sql = _bracket_to_backtick(agg_expr)
-        return f"/* LOD_EXCLUDE({dim_refs}) */ {expr_sql}"
+        agg_sql = f"({_bracket_to_backtick(agg_expr)}) OVER (PARTITION BY 1)"
+    excluded = ", ".join(f"`{d}`" for d in dims)
+    return f"/* LOD_EXCLUDE_omit({excluded}) */ {agg_sql}"
 
 
 def _compile_if_to_case(formula: str) -> str:
@@ -258,8 +254,30 @@ def _apply_function_mappings(formula: str) -> Tuple[str, bool]:
         result = new
         changed = True
     
-    # DATEDIFF('part', start, end) -> DATEDIFF(end, start) for day, or more complex for other parts
+    # DATEDIFF('day', start, end) -> DATEDIFF(end, start)
     new = re.sub(r"\bDATEDIFF\s*\(\s*'day'\s*,\s*(.+?)\s*,\s*(.+?)\s*\)", r'DATEDIFF(\2, \1)', result, flags=re.IGNORECASE)
+    if new != result:
+        result = new
+        changed = True
+
+    # DATEDIFF('year', start, end) -> YEAR(end) - YEAR(start) (approx Tableau)
+    new = re.sub(
+        r"\bDATEDIFF\s*\(\s*'year'\s*,\s*(.+?)\s*,\s*(.+?)\s*\)",
+        r'(YEAR(\2) - YEAR(\1))',
+        result,
+        flags=re.IGNORECASE,
+    )
+    if new != result:
+        result = new
+        changed = True
+
+    # DATEDIFF('month', start, end)
+    new = re.sub(
+        r"\bDATEDIFF\s*\(\s*'month'\s*,\s*(.+?)\s*,\s*(.+?)\s*\)",
+        r'(MONTHS_BETWEEN(\2, \1))',
+        result,
+        flags=re.IGNORECASE,
+    )
     if new != result:
         result = new
         changed = True
@@ -413,21 +431,45 @@ def compile_expression_to_sql(formula: str, caption_map: dict = None) -> Dict[st
             sql_result = _bracket_to_backtick(sql_result)
             return {"sql": sql_result, "method": "RULE", "confidence": 0.85, "is_lod": False}
 
-    if "INDEX()" in upper:
-        sql_result = "ROW_NUMBER() OVER (ORDER BY 1)"
-        return {"sql": sql_result, "method": "RULE", "confidence": 0.85, "is_lod": False}
-    
-    if "FIRST()" in upper:
-        sql_result = "1 - ROW_NUMBER() OVER (ORDER BY 1)"
-        return {"sql": sql_result, "method": "RULE", "confidence": 0.85, "is_lod": False}
-    
-    if "LAST()" in upper:
-        sql_result = "COUNT(1) OVER () - ROW_NUMBER() OVER (ORDER BY 1)"
-        return {"sql": sql_result, "method": "RULE", "confidence": 0.85, "is_lod": False}
-    
-    if "SIZE()" in upper:
-        sql_result = "COUNT(1) OVER ()"
-        return {"sql": sql_result, "method": "RULE", "confidence": 0.85, "is_lod": False}
+    if "INDEX()" in upper or re.search(r'\bINDEX\s*\(\s*\)', sql_result, re.IGNORECASE):
+        sql_result = re.sub(
+            r'\bINDEX\s*\(\s*\)',
+            'ROW_NUMBER() OVER (ORDER BY 1)',
+            sql_result,
+            flags=re.IGNORECASE,
+        )
+        sql_result = _bracket_to_backtick(sql_result)
+        return {"sql": sql_result.strip(), "method": "RULE", "confidence": 0.85, "is_lod": False}
+
+    if "FIRST()" in upper or re.search(r'\bFIRST\s*\(\s*\)', sql_result, re.IGNORECASE):
+        sql_result = re.sub(
+            r'\bFIRST\s*\(\s*\)',
+            '(1 - ROW_NUMBER() OVER (ORDER BY 1))',
+            sql_result,
+            flags=re.IGNORECASE,
+        )
+        sql_result = _bracket_to_backtick(sql_result)
+        return {"sql": sql_result.strip(), "method": "RULE", "confidence": 0.85, "is_lod": False}
+
+    if "LAST()" in upper or re.search(r'\bLAST\s*\(\s*\)', sql_result, re.IGNORECASE):
+        sql_result = re.sub(
+            r'\bLAST\s*\(\s*\)',
+            '(COUNT(1) OVER () - ROW_NUMBER() OVER (ORDER BY 1))',
+            sql_result,
+            flags=re.IGNORECASE,
+        )
+        sql_result = _bracket_to_backtick(sql_result)
+        return {"sql": sql_result.strip(), "method": "RULE", "confidence": 0.85, "is_lod": False}
+
+    if "SIZE()" in upper or re.search(r'\bSIZE\s*\(\s*\)', sql_result, re.IGNORECASE):
+        sql_result = re.sub(
+            r'\bSIZE\s*\(\s*\)',
+            'COUNT(1) OVER ()',
+            sql_result,
+            flags=re.IGNORECASE,
+        )
+        sql_result = _bracket_to_backtick(sql_result)
+        return {"sql": sql_result.strip(), "method": "RULE", "confidence": 0.85, "is_lod": False}
 
     # ── 5. Apply function mapping table ─────────────────────────────────────
     sql_result, fn_changed = _apply_function_mappings(sql_result)
@@ -435,10 +477,24 @@ def compile_expression_to_sql(formula: str, caption_map: dict = None) -> Dict[st
     # ── 6. Convert bracket references to backtick-quoted identifiers ────────
     sql_result = _bracket_to_backtick(sql_result)
 
-    changed = sql_result.strip() != _bracket_to_backtick(readable).strip()
+    # Bracket-only rewrites of already-valid Spark aggs (AVG([x]) → AVG(`x`))
+    # are RULE, not FALLBACK — common in real workbooks.
+    only_brackets = sql_result.strip() == _bracket_to_backtick(readable).strip()
+    identity_ok = bool(re.match(
+        r"^(TRUE|FALSE|NULL|-?\d+(\.\d+)?)$",
+        sql_result.strip(),
+        re.IGNORECASE,
+    ))
+    if fn_changed or (sql_result.strip() != readable.strip() and not only_brackets):
+        method, confidence = "RULE", 0.90
+    elif only_brackets or identity_ok:
+        method, confidence = "RULE", 0.88
+    else:
+        method, confidence = "FALLBACK", 0.50
+
     return {
         "sql": sql_result.strip(),
-        "method": "RULE" if changed or fn_changed else "FALLBACK",
-        "confidence": 0.90 if changed or fn_changed else 0.50,
-        "is_lod": False
+        "method": method,
+        "confidence": confidence,
+        "is_lod": False,
     }

@@ -303,12 +303,13 @@ def _build_where_clause(filters: List[FilterMetadata]) -> str:
     for f in filters:
         if is_tableau_pseudo_field(f.field_name):
             continue
-        if f.filter_type == "categorical" and f.include_values:
-            vals = ", ".join(f"'{v}'" for v in f.include_values)
-            conditions.append(f"`{f.field_name}` IN ({vals})")
-        elif f.filter_type == "categorical" and f.exclude_values:
+        if f.filter_type == "categorical" and f.exclude_values:
+            # Prefer exclude (exclusive Tableau filters) over include when both set
             vals = ", ".join(f"'{v}'" for v in f.exclude_values)
             conditions.append(f"`{f.field_name}` NOT IN ({vals})")
+        elif f.filter_type == "categorical" and f.include_values:
+            vals = ", ".join(f"'{v}'" for v in f.include_values)
+            conditions.append(f"`{f.field_name}` IN ({vals})")
         elif f.filter_type == "quantitative":
             if f.min_value is not None:
                 conditions.append(f"`{f.field_name}` >= {f.min_value}")
@@ -319,7 +320,11 @@ def _build_where_clause(filters: List[FilterMetadata]) -> str:
 
 
 def _get_real_measure_columns(ds: DatasourceMetadata, resolver: Optional[CanonicalFieldResolver] = None) -> List[str]:
-    """Get actual measure column names from datasource metadata (for Measure Names/Values expansion)."""
+    """Get actual measure column names from datasource metadata.
+
+    Deprecated for Measure Names expansion — use ``_expand_worksheet_measures``.
+    Kept for rare callers that need a capped datasource measure list.
+    """
     measures = []
     for col in ds.columns:
         if col.role == 'measure' and not col.hidden and col.datatype in ('real', 'integer', 'float', 'number', ''):
@@ -330,7 +335,104 @@ def _get_real_measure_columns(ds: DatasourceMetadata, resolver: Optional[Canonic
                 name = resolver.resolve_to_physical(name)
             if not is_tableau_pseudo_field(name):
                 measures.append(name)
-    return measures[:10]  # Cap to avoid huge queries
+    return measures[:10]
+
+
+def _default_agg_for_field(field_name: str, ds: Optional[DatasourceMetadata]) -> AggregationType:
+    col_meta = _get_column_metadata(field_name, ds) if ds else {}
+    semantic = classify_field(
+        field_name=field_name,
+        datatype=col_meta.get('datatype', ''),
+        role=col_meta.get('role', 'measure'),
+        default_aggregation=col_meta.get('default_aggregation', ''),
+    )
+    agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
+    if agg == AggregationType.NONE:
+        agg = AggregationType.SUM
+    return agg
+
+
+def _expand_worksheet_measures(
+    ws: WorksheetMetadata,
+    ds: Optional[DatasourceMetadata],
+    resolver: Optional[CanonicalFieldResolver] = None,
+) -> tuple:
+    """Expand worksheet measures without dumping the full datasource.
+
+    Priority:
+      1. Measure Names filter cleaned include_values
+      2. Real size/text/angle encodings (skip Multiple Values)
+      3. ws.measures / measure_bindings
+      4. Never full datasource measure dump
+
+    Returns (measures: List[(physical_name, AggregationType)], source: str).
+    """
+    seen = set()
+    out: List[tuple] = []
+
+    def _add(name: str, agg: Optional[AggregationType] = None) -> None:
+        if not name or is_tableau_pseudo_field(name):
+            return
+        if resolver and resolver.is_excluded(name):
+            return
+        physical = _resolve_field_for_sql(name, resolver, ds)
+        key = physical.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        if agg is None or agg == AggregationType.NONE:
+            agg = _default_agg_for_field(physical, ds)
+        out.append((physical, agg))
+
+    # 1. Measure Names filter members (already cleaned to captions by parser)
+    for f in ws.filters or []:
+        fname = (f.field_name or "").lower().replace(":", "").strip()
+        if fname not in ("measure names",):
+            continue
+        for v in f.include_values or []:
+            _add(v, AggregationType.SUM)
+        if out:
+            return out, "measure_names_filter"
+
+    # 2. Real mark encodings (size / text / angle / label)
+    for enc in ws.encodings or []:
+        if enc.channel not in ("size", "text", "angle", "label", "tooltip"):
+            continue
+        if is_tableau_pseudo_field(enc.field_name):
+            continue
+        agg = AggregationType.NONE
+        if enc.aggregation:
+            agg = ENC_AGG_TO_TYPE.get(str(enc.aggregation).upper(), AggregationType.SUM)
+        elif enc.derivation:
+            agg = DERIV_TO_AGG.get(str(enc.derivation).lower(), AggregationType.NONE)
+        _add(enc.field_name, agg)
+    if out:
+        return out, "encodings"
+
+    # 3. Worksheet measures / measure_bindings
+    for mb in getattr(ws, "measure_bindings", None) or []:
+        name = mb.get("field_name") or mb.get("name") or ""
+        deriv = (mb.get("derivation") or "").lower()
+        agg = DERIV_TO_AGG.get(deriv, AggregationType.SUM) if deriv else AggregationType.SUM
+        _add(name, agg)
+    if out:
+        return out, "measure_bindings"
+
+    for m in ws.measures or []:
+        _add(m, None)
+    if out:
+        return out, "worksheet_measures"
+
+    return out, ""
+
+
+def _encoding_has_aggregation(enc: EncodingMetadata) -> bool:
+    if enc.aggregation and str(enc.aggregation).upper() not in ("", "NONE", "ATTR"):
+        return True
+    if enc.derivation and str(enc.derivation).lower() in DERIV_TO_AGG:
+        d = str(enc.derivation).lower()
+        return d not in ("none", "attr", "")
+    return False
 
 
 def _filter_pseudo_fields(fields: List[str]) -> List[str]:
@@ -396,7 +498,14 @@ def normalize_tom_to_ubim(
         if not ds:
             continue
 
-        ds_id = uuid.uuid4().hex[:8]
+        ds_id = _make_safe_alias(ws.name)[:48] or uuid.uuid4().hex[:8]
+        # Keep dataset keys unique across worksheets
+        base_id = ds_id
+        n = 2
+        existing = set(ws_dataset_map.values())
+        while ds_id in existing:
+            ds_id = f"{base_id}_{n}"
+            n += 1
         from_clause = _build_dataset_sql(ds, table_mapping=table_mapping, catalog_schema=catalog_schema)
 
         dimensions = []
@@ -478,22 +587,14 @@ def normalize_tom_to_ubim(
                         dimensions.append(physical_name)
                         seen_dim_names.add(physical_name)
 
-        # Handle Measure Names/Values: expand into actual measure columns
-        if has_measure_names and not measures:
-            real_measures = _get_real_measure_columns(ds, resolver)
-            for m in real_measures:
-                if m not in seen_measure_names:
-                    # Classify each real measure with the semantic classifier
-                    col_meta = _get_column_metadata(m, ds)
-                    semantic = classify_field(
-                        field_name=m,
-                        datatype=col_meta.get('datatype', ''),
-                        role=col_meta.get('role', ''),
-                        default_aggregation=col_meta.get('default_aggregation', ''),
-                    )
-                    agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
-                    measures.append((m, agg))
-                    seen_measure_names.add(m)
+        # Expand measures from Measure Names filter / encodings / ws.measures
+        # — never dump the full datasource measure list.
+        if not measures or has_measure_names:
+            expanded, _src = _expand_worksheet_measures(ws, ds, resolver)
+            for mname, magg in expanded:
+                if mname not in seen_measure_names:
+                    measures.append((mname, magg))
+                    seen_measure_names.add(mname)
 
         # Add color/size/detail encoding fields (filtered)
         for enc in ws.encodings:
@@ -503,26 +604,33 @@ def normalize_tom_to_ubim(
                 continue
             # Resolve to physical column name via canonical resolver
             physical_name = _resolve_field_for_sql(enc.field_name, resolver, ds)
-            if enc.channel in ('color', 'shape', 'detail'):
+            # Aggregated color/size/etc. are measures, not dimensions
+            if _encoding_has_aggregation(enc) or enc.channel in (
+                'size', 'tooltip', 'label', 'text', 'angle'
+            ):
+                if physical_name in seen_measure_names or enc.field_name in seen_measure_names:
+                    continue
+                if physical_name in seen_dim_names:
+                    # Prefer aggregated measure form over raw dim duplicate
+                    dimensions[:] = [d for d in dimensions if d != physical_name]
+                    seen_dim_names.discard(physical_name)
+                agg = AggregationType.NONE
+                if enc.aggregation:
+                    agg = ENC_AGG_TO_TYPE.get(str(enc.aggregation).upper(), AggregationType.SUM)
+                elif enc.derivation:
+                    agg = DERIV_TO_AGG.get(str(enc.derivation).lower(), AggregationType.NONE)
+                if agg == AggregationType.NONE:
+                    agg = _default_agg_for_field(physical_name, ds)
+                measures.append((physical_name, agg))
+                seen_measure_names.add(physical_name)
+                seen_measure_names.add(enc.field_name)
+            elif enc.channel in ('color', 'shape', 'detail', 'lod'):
+                if physical_name in seen_measure_names or enc.field_name in seen_measure_names:
+                    continue
                 if physical_name not in seen_dim_names and enc.field_name not in seen_dim_names:
                     dimensions.append(physical_name)
                     seen_dim_names.add(physical_name)
                     seen_dim_names.add(enc.field_name)
-            elif enc.channel in ('size', 'tooltip', 'label', 'text', 'angle'):
-                agg = AggregationType.NONE
-                if enc.aggregation:
-                    agg = ENC_AGG_TO_TYPE.get(enc.aggregation.upper(), AggregationType.SUM)
-                elif enc.derivation:
-                    agg = DERIV_TO_AGG.get(enc.derivation.lower(), AggregationType.NONE)
-                if agg == AggregationType.NONE:
-                    # Size/angle on charts imply a measure — default SUM when role is measure
-                    col_meta = _get_column_metadata(enc.field_name, ds)
-                    if col_meta.get('role') == 'measure' or not col_meta:
-                        agg = AggregationType.SUM
-                if physical_name not in seen_measure_names and enc.field_name not in seen_measure_names:
-                    measures.append((physical_name, agg))
-                    seen_measure_names.add(physical_name)
-                    seen_measure_names.add(enc.field_name)
 
         # Enforce SQL GROUP BY Integrity:
         # Any non-aggregated field (magg == NONE) projected in an aggregated query must be
@@ -608,6 +716,16 @@ def normalize_tom_to_ubim(
                 widget = _build_widget(ws, ds, dataset_id, y_grid_acc, db, resolver=resolver)
                 page.widgets.append(widget)
                 y_grid_acc += widget.position.grid_h
+
+            # Ontology chrome: title text zones + dashboard filter cards
+            chrome = _build_dashboard_chrome_widgets(db, y_offset=0)
+            # Bind filter widgets to the first dataset on the page when possible
+            default_ds = next((w.dataset_name for w in page.widgets if w.dataset_name), "")
+            for cw in chrome:
+                for f in cw.filters:
+                    if not f.dataset_name:
+                        f.dataset_name = default_ds
+                page.widgets.append(cw)
             
             ubim_dash.pages.append(page)
     else:
@@ -737,7 +855,12 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
             if alias not in seen_encoding_fields:  # P1.2: deduplicate
                 seen_encoding_fields.add(alias)
                 # Extra categorical dims on rows → COLOR when X already filled
-                if agg == AggregationType.NONE and assigned_x_dim:
+                # (bar/line). Heatmaps need two categorical axes — keep as Y.
+                if (
+                    agg == AggregationType.NONE
+                    and assigned_x_dim
+                    and chart_type != ChartType.HEATMAP
+                ):
                     channel = EncodingChannel.COLOR
                 else:
                     channel = EncodingChannel.Y
@@ -756,28 +879,19 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 ))
 
         if not rows_shelves and ds:
-            real_measures = _get_real_measure_columns(ds, resolver)
-            for mname in real_measures:
-                alias = _make_safe_alias(mname)  # P0.2: safe alias
-                # P0.1: use semantic classifier instead of blind SUM
-                col_meta = _get_column_metadata(mname, ds)
-                semantic = classify_field(
-                    field_name=mname,
-                    datatype=col_meta.get('datatype', ''),
-                    role=col_meta.get('role', ''),
-                    default_aggregation=col_meta.get('default_aggregation', ''),
-                )
-                agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
-                if agg == AggregationType.NONE:
-                    agg = AggregationType.SUM  # Measures must be aggregated for charts
-                expr = _build_field_expression(mname, agg)
+            expanded, expand_src = _expand_worksheet_measures(ws, ds, resolver)
+            for mname, magg in expanded:
+                alias = _make_safe_alias(mname)
+                if magg == AggregationType.NONE:
+                    magg = AggregationType.SUM
+                expr = _build_field_expression(mname, magg)
                 if alias not in seen_encoding_fields:
                     seen_encoding_fields.add(alias)
                     encodings.append(IntermediateEncoding(
                         channel=EncodingChannel.Y,
                         field_name=alias,
                         dataset_name=dataset_id,
-                        aggregation=agg,
+                        aggregation=magg,
                         expression_sql=expr,
                         data_type="number"
                     ))
@@ -787,6 +901,9 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                             name=alias,
                             data_type="number"
                         ))
+            if expand_src:
+                # Stash for tests / debugging — which expansion path was used
+                pass
     else:
         # Fallback: use flat field names with semantic classification (P0.1)
         cols_clean = _filter_pseudo_fields(ws.columns)
@@ -868,21 +985,32 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         alias = _make_safe_alias(physical_name)
 
         if enc.channel == 'color':
+            agg = AggregationType.NONE
+            if enc.aggregation:
+                agg = ENC_AGG_TO_TYPE.get(enc.aggregation.upper(), AggregationType.SUM)
+            elif enc.derivation:
+                agg = DERIV_TO_AGG.get(enc.derivation.lower(), AggregationType.NONE)
+            if agg == AggregationType.NONE:
+                col_meta = _get_column_metadata(enc.field_name, ds)
+                if col_meta.get("role") == "measure":
+                    agg = AggregationType.SUM
+            expr = _build_field_expression(physical_name, agg)
+            dtype = "string" if agg == AggregationType.NONE else "number"
             if alias not in seen_encoding_fields:
                 seen_encoding_fields.add(alias)
                 encodings.append(IntermediateEncoding(
                     channel=EncodingChannel.COLOR,
                     field_name=alias,
                     dataset_name=dataset_id,
-                    aggregation=AggregationType.NONE,
-                    expression_sql=f"`{physical_name}`",
-                    data_type="string",
+                    aggregation=agg,
+                    expression_sql=expr,
+                    data_type=dtype,
                 ))
                 if not any(qf.name == alias for qf in query_fields):
                     query_fields.append(IntermediateQueryField(
-                        expression=f"`{physical_name}`",
+                        expression=expr,
                         name=alias,
-                        data_type="string",
+                        data_type=dtype,
                     ))
             # Pie/bar category: promote color → X when columns shelf was empty/pseudo
             if not has_x and chart_type in (ChartType.PIE, ChartType.BAR, ChartType.LINE, ChartType.AREA):
@@ -942,7 +1070,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 ))
                 has_y = True
 
-        elif enc.channel == 'detail':
+        elif enc.channel in ('detail', 'lod'):
             if alias not in seen_encoding_fields:
                 seen_encoding_fields.add(alias)
                 if not any(qf.name == alias for qf in query_fields):
@@ -960,25 +1088,30 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         grid_h=4
     )
     
-    # Try to use zone geometry from dashboard
+    # Try to use zone geometry from dashboard.
+    # Tableau automatic dashboards use a ~100000 unit canvas; size_x/size_y may
+    # fall back to 1000×800 — prefer the root zone extents when larger.
+    zone = None
     if dashboard and dashboard.zones:
         zone = _find_zone_for_worksheet(ws.name, dashboard.zones)
-        if zone and dashboard.size_x > 0 and dashboard.size_y > 0:
-            y_scaled = round((zone.y / dashboard.size_y) * 12)
+        canvas_w, canvas_h = _dashboard_canvas_size(dashboard)
+        if zone and canvas_w > 0 and canvas_h > 0:
+            y_scaled = round((zone.y / canvas_h) * 12)
             pos = IntermediatePosition(
-                x_rel=zone.x / dashboard.size_x,
-                y_rel=zone.y / dashboard.size_y,
-                w_rel=zone.w / dashboard.size_x,
-                h_rel=zone.h / dashboard.size_y,
-                grid_x=min(5, max(0, round((zone.x / dashboard.size_x) * 6))),
+                x_rel=zone.x / canvas_w,
+                y_rel=zone.y / canvas_h,
+                w_rel=zone.w / canvas_w,
+                h_rel=zone.h / canvas_h,
+                grid_x=min(5, max(0, round((zone.x / canvas_w) * 6))),
                 grid_y=y_scaled if (y_scaled >= 0 and y_scaled < 100) else y_offset,
-                grid_w=max(1, min(6, round((zone.w / dashboard.size_x) * 6))),
-                grid_h=max(2, min(12, round((zone.h / dashboard.size_y) * 12)))
+                grid_w=max(1, min(6, round((zone.w / canvas_w) * 6))),
+                grid_h=max(2, min(12, round((zone.h / canvas_h) * 12)))
             )
     
     # Surplus categorical dims on X/Y → COLOR for Lakeview cartesian charts
+    # (not HEATMAP — those need two categorical axes + measure color)
     if chart_type in (
-        ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER, ChartType.HEATMAP
+        ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER
     ):
         encodings = _promote_extra_categorical_dims_to_color(encodings)
 
@@ -989,6 +1122,36 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         # Counters only need the value encoding
         pass
     
+    # Carry ontology presentation hints for later layout/review stages
+    display_title = (getattr(ws, "title", None) or "").strip()
+    show_title = bool(display_title)
+    if zone is not None and getattr(zone, "show_title", None) is False:
+        show_title = False
+    if not display_title:
+        show_title = False
+    expanded_measures, expand_src = _expand_worksheet_measures(ws, ds, resolver)
+
+    # Multi-measure Measure Names → table (Lakeview has no faithful combo)
+    has_mn = any(
+        sf.field_name.lower().replace(":", "").strip() in ("measure names", "measure values")
+        for sf in (ws.columns_shelves or []) + (ws.rows_shelves or [])
+    )
+    y_count = sum(1 for e in encodings if e.channel == EncodingChannel.Y)
+    if has_mn and (y_count > 1 or (expand_src == "measure_names_filter" and len(expanded_measures) > 1)):
+        chart_type = ChartType.TABLE
+        is_disaggregated = True
+
+    presentation = {
+        k: v for k, v in {
+            "map_style": getattr(ws, "map_style", None),
+            "pane_background": getattr(ws, "pane_background", None),
+            "table_background": getattr(ws, "table_background", None),
+            "hidden": getattr(ws, "hidden", False),
+            "worksheet_uuid": getattr(ws, "uuid", None),
+            "measure_expand_source": expand_src or None,
+        }.items() if v not in (None, False, "")
+    }
+
     return IntermediateWidget(
         widget_id=uuid.uuid4().hex[:8],
         name=ws.name,
@@ -997,18 +1160,168 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         encodings=encodings,
         query_fields=query_fields,
         position=pos,
-        title=ws.name,
-        disaggregated=is_disaggregated
+        title=display_title if display_title else None,
+        show_title=show_title,
+        disaggregated=is_disaggregated,
+        properties=presentation,
     )
 
 
 def _find_zone_for_worksheet(ws_name: str, zones) -> Any:
-    """Recursively find a zone matching a worksheet name."""
-    for zone in zones:
-        if zone.name == ws_name:
-            return zone
-        if zone.children:
-            found = _find_zone_for_worksheet(ws_name, zone.children)
+    """Recursively find a worksheet content zone (not filter/legend chrome)."""
+    CHROME = {"filter", "legend", "text", "empty", "layout-basic", "layout-flow", "param"}
+
+    def _walk(zone_list):
+        for zone in zone_list or []:
+            ztype = getattr(zone, "zone_type", None) or ""
+            if zone.name == ws_name and ztype not in CHROME:
+                return zone
+            found = _walk(getattr(zone, "children", None) or [])
             if found:
                 return found
+        return None
+
+    return _walk(zones)
+
+
+def _dashboard_canvas_size(dashboard) -> tuple:
+    """Return (width, height) for relative layout.
+
+    Tableau automatic dashboards typically use a 100000×100000 design canvas
+    on zones even when <size sizing-mode='automatic'> has no maxwidth/maxheight.
+    Prefer the largest zone extents over the 1000×800 parser fallback.
+    """
+    size_x = getattr(dashboard, "size_x", 0) or 0
+    size_y = getattr(dashboard, "size_y", 0) or 0
+
+    def _extents(zones, max_w=0, max_h=0):
+        for z in zones or []:
+            max_w = max(max_w, (z.x or 0) + (z.w or 0), z.w or 0)
+            max_h = max(max_h, (z.y or 0) + (z.h or 0), z.h or 0)
+            max_w, max_h = _extents(z.children, max_w, max_h)
+        return max_w, max_h
+
+    zw, zh = _extents(getattr(dashboard, "zones", None) or [])
+    # If parser fallback (1000×800) but zones are on the 1e5 canvas, use zone extents
+    if zw >= 10000:
+        size_x = max(size_x, zw, 100000)
+    elif zw > size_x:
+        size_x = zw
+    if zh >= 10000:
+        size_y = max(size_y, zh, 100000)
+    elif zh > size_y:
+        size_y = zh
+    return max(size_x, 1), max(size_y, 1)
+
+
+def _zone_to_position(zone, canvas_w: int, canvas_h: int, y_offset: int = 0) -> IntermediatePosition:
+    return IntermediatePosition(
+        x_rel=zone.x / canvas_w,
+        y_rel=zone.y / canvas_h,
+        w_rel=zone.w / canvas_w,
+        h_rel=zone.h / canvas_h,
+        grid_x=min(5, max(0, round((zone.x / canvas_w) * 6))),
+        grid_y=max(0, round((zone.y / canvas_h) * 12)) if canvas_h else y_offset,
+        grid_w=max(1, min(6, round((zone.w / canvas_w) * 6))),
+        grid_h=max(1, min(12, round((zone.h / canvas_h) * 12))),
+    )
+
+
+def _build_dashboard_chrome_widgets(db, y_offset: int = 0) -> List[IntermediateWidget]:
+    """Create text / filter chrome widgets from ontology-enriched dashboard metadata."""
+    widgets: List[IntermediateWidget] = []
+    canvas_w, canvas_h = _dashboard_canvas_size(db)
+
+    for tz in getattr(db, "text_zones", None) or []:
+        content = tz.get("content") or ""
+        if not content:
+            continue
+        # Approximate zone from text_zones dict
+        class _Z:
+            pass
+        z = _Z()
+        z.x, z.y, z.w, z.h = tz.get("x", 0), tz.get("y", 0), tz.get("w", 1) or 1, tz.get("h", 1) or 1
+        pos = _zone_to_position(z, canvas_w, canvas_h, y_offset)
+        widgets.append(IntermediateWidget(
+            widget_id=uuid.uuid4().hex[:8],
+            name=f"text-zone-{tz.get('zone_id', 'x')}",
+            chart_type=ChartType.TEXT_BOX,
+            position=pos,
+            title=content[:80],
+            properties={
+                "text": content,
+                "font": tz.get("font"),
+                "font_size": tz.get("font_size"),
+                "color": tz.get("color"),
+                "bold": tz.get("bold"),
+                "source": "dashboard_text_zone",
+            },
+        ))
+
+    # Filter cards → filter widgets bound to field
+    for fc in getattr(db, "filter_controls", None) or []:
+        field = fc.get("field") or ""
+        if not field:
+            continue
+        # Safe SQL identifier for Lakeview query fields
+        safe = re.sub(r"[^\w]+", "_", field).strip("_") or "filter_field"
+        mode = (fc.get("mode") or "").lower()
+        raw = (fc.get("raw_param") or "").lower()
+        if "date" in field.lower() or "date" in raw:
+            ftype = "date"
+            ctype = ChartType.FILTER_DATE
+        elif "check" in mode or mode == "checkdropdown":
+            ftype = "multi-select"
+            ctype = ChartType.FILTER_MULTI
+        else:
+            ftype = "single-select"
+            ctype = ChartType.FILTER_SINGLE
+        # Position from matching zone id if present
+        zone = _find_zone_by_id(db.zones, fc.get("id"))
+        if zone:
+            pos = _zone_to_position(zone, canvas_w, canvas_h, y_offset)
+        else:
+            pos = IntermediatePosition(grid_x=4, grid_y=y_offset, grid_w=2, grid_h=2)
+        widgets.append(IntermediateWidget(
+            widget_id=uuid.uuid4().hex[:8],
+            name=f"filter-{fc.get('id', field)}",
+            chart_type=ctype,
+            position=pos,
+            title=field,
+            encodings=[IntermediateEncoding(
+                channel=EncodingChannel.X,
+                field_name=safe,
+                dataset_name="",
+                expression_sql=f"`{field}`",
+                data_type="string",
+            )],
+            query_fields=[IntermediateQueryField(
+                expression=f"`{field}`",
+                name=safe,
+                data_type="string",
+            )],
+            filters=[IntermediateFilter(field_name=safe, dataset_name="", filter_type=ftype)],
+            properties={
+                "mode": fc.get("mode"),
+                "worksheet_owner": fc.get("worksheet_owner"),
+                "raw_param": fc.get("raw_param"),
+                "source": "dashboard_filter_card",
+                "display_field": field,
+            },
+        ))
+
+    return widgets
+
+
+def _find_zone_by_id(zones, zone_id) -> Any:
+    if zone_id is None:
+        return None
+    sid = str(zone_id)
+    for zone in zones or []:
+        if str(getattr(zone, "zone_id", "")) == sid:
+            return zone
+        found = _find_zone_by_id(getattr(zone, "children", None) or [], zone_id)
+        if found:
+            return found
     return None
+

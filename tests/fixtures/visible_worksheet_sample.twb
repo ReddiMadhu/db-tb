@@ -1,0 +1,61 @@
+<?xml version='1.0' encoding='utf-8' ?>
+<!-- Minimal workbook: one hidden worksheet + one visible standalone tab -->
+<workbook version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <datasources>
+    <datasource name='ds1' caption='Sample'>
+      <connection class='textscan' />
+      <column name='[Region]' caption='Region' datatype='string' role='dimension' type='nominal' />
+      <column name='[Sales]' caption='Sales' datatype='real' role='measure' type='quantitative' />
+      <column name='[PostalCode]' caption='Postal Code' datatype='real' role='dimension' type='ordinal' />
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Hidden Sheet'>
+      <table>
+        <view>
+          <datasource-dependencies datasource='ds1'>
+            <column name='[Region]' datatype='string' role='dimension' type='nominal' />
+            <column name='[Sales]' datatype='real' role='measure' type='quantitative' />
+          </datasource-dependencies>
+          <rows>[ds1].[sum:Sales:qk]</rows>
+          <cols>[ds1].[none:Region:nk]</cols>
+        </view>
+        <panes>
+          <pane>
+            <mark class='Bar' />
+            <encodings />
+          </pane>
+        </panes>
+      </table>
+    </worksheet>
+    <worksheet name='Visible Sheet'>
+      <table>
+        <view>
+          <datasource-dependencies datasource='ds1'>
+            <column name='[PostalCode]' datatype='real' role='dimension' type='ordinal' />
+            <column name='[Sales]' datatype='real' role='measure' type='quantitative' />
+          </datasource-dependencies>
+          <rows>[ds1].[sum:Sales:qk]</rows>
+          <cols>[ds1].[none:PostalCode:ok]</cols>
+        </view>
+        <panes>
+          <pane>
+            <mark class='Bar' />
+            <encodings />
+          </pane>
+        </panes>
+      </table>
+    </worksheet>
+  </worksheets>
+  <dashboards>
+    <dashboard name='Main Dash'>
+      <zones>
+        <zone id='1' name='Hidden Sheet' type-v2='layout-basic' />
+      </zones>
+    </dashboard>
+  </dashboards>
+  <windows>
+    <window class='worksheet' hidden='true' name='Hidden Sheet' />
+    <window class='worksheet' name='Visible Sheet' />
+  </windows>
+</workbook>

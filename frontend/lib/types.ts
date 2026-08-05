@@ -341,12 +341,14 @@ export interface BusinessOverview {
 export interface FormulaConversionItem {
   name: string;
   caption?: string;
+  formula_type?: string;
   original_formula: string;
   compiled_sql: string;
   ai_explanation?: string;
   confidence_score?: number;
   validation_status?: "VALID" | "WARNING" | "FAIL";
   datasource?: string;
+  is_table_calc?: boolean;
 }
 
 export interface VisualCompatibilityItem {

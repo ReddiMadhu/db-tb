@@ -14,11 +14,20 @@ def resolve_mark_type(
     mark_lower = (raw_mark_type or 'automatic').lower()
     
     # Direct mappings
-    if mark_lower in ['pie', 'shape', 'map', 'polygon', 'circle', 'line', 'bar', 'text', 'ganttbar']:
+    if mark_lower in [
+        'pie', 'shape', 'map', 'polygon', 'circle', 'line', 'bar', 'text',
+        'ganttbar', 'square', 'heatmap', 'area',
+    ]:
         if mark_lower == 'ganttbar':
             return 'Gantt Bar'
         if mark_lower == 'circle':
             return 'Scatter Plot'
+        if mark_lower == 'square':
+            return 'Square'
+        if mark_lower == 'heatmap':
+            return 'Square'
+        if mark_lower == 'area':
+            return 'Area'
         return mark_lower.capitalize()
 
     # Heuristic Automatic Resolution

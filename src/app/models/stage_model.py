@@ -1,7 +1,7 @@
 """
 Tableau to Databricks Migration — Stage Result & Connection Models
 
-Per-stage result tracking for the 8-stage migration pipeline,
+Per-stage result tracking for the 7-stage migration pipeline,
 and persistent Databricks connection storage.
 """
 
@@ -10,16 +10,15 @@ from datetime import datetime
 from app.db.session import Base
 
 
-# ── 8 Frontend-Facing Pipeline Stages ──
+# ── 7 Frontend-Facing Pipeline Stages (Calc Deep Dive folded into Conversion) ──
 PIPELINE_STAGE_DEFS = [
     {"id": "UPLOAD",               "number": 1, "name": "Upload",                       "backend_stages": ["UPLOAD"]},
     {"id": "PARSE",                "number": 2, "name": "Dashboard Intelligence",        "backend_stages": ["PARSE", "DAG"]},
     {"id": "SOURCE_MAPPING",       "number": 3, "name": "Source Mapping Validation",     "backend_stages": ["MAPPING"]},
-    {"id": "CALC_DEEP_DIVE",       "number": 4, "name": "Calculation Deep Dive",         "backend_stages": ["EXPRESSIONS"]},
-    {"id": "CALC_LOGIC_CONVERSION","number": 5, "name": "Calculation Logic Conversion",  "backend_stages": ["SQL"]},
-    {"id": "LAYOUT_GENERATION",    "number": 6, "name": "Dashboard Layout Generation",   "backend_stages": ["UBIM", "GENERATE"]},
-    {"id": "SCHEMA_VALIDATION",    "number": 7, "name": "Lakeview Schema Validation",    "backend_stages": ["VALIDATE"]},
-    {"id": "PUBLISH",              "number": 8, "name": "Publish to Databricks",         "backend_stages": ["DEPLOY"]},
+    {"id": "CALC_LOGIC_CONVERSION","number": 4, "name": "Calculation Logic Conversion",  "backend_stages": ["EXPRESSIONS", "SQL"]},
+    {"id": "LAYOUT_GENERATION",    "number": 5, "name": "Dashboard Layout Generation",   "backend_stages": ["UBIM", "GENERATE"]},
+    {"id": "SCHEMA_VALIDATION",    "number": 6, "name": "Lakeview Schema Validation",    "backend_stages": ["VALIDATE"]},
+    {"id": "PUBLISH",              "number": 7, "name": "Publish to Databricks",         "backend_stages": ["DEPLOY"]},
 ]
 
 # Quick lookup: backend stage key → frontend stage id
@@ -42,7 +41,7 @@ class StageResult(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     job_uuid = Column(String, index=True, nullable=False)
-    stage_id = Column(String, nullable=False)         # e.g., "UPLOAD", "PARSE", "CALC_DEEP_DIVE"
+    stage_id = Column(String, nullable=False)         # e.g., "UPLOAD", "PARSE", "CALC_LOGIC_CONVERSION"
     stage_number = Column(Integer, nullable=False)     # 1–9
     stage_name = Column(String, nullable=False)        # Human-readable label
 

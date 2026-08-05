@@ -53,6 +53,16 @@ def _clean_title(name: str) -> str:
     return name.replace("_", " ").strip().title()
 
 
+def _frame(title: str, show_title: bool = True, fallback: str = "", **extra) -> Dict[str, Any]:
+    """Build Lakeview frame dict. Blank/hidden titles must not invent fallback text."""
+    if not show_title:
+        frame: Dict[str, Any] = {"title": "", "showTitle": False}
+    else:
+        frame = {"title": (title or fallback or ""), "showTitle": True}
+    frame.update(extra)
+    return frame
+
+
 def infer_scale_type(
     field_name: str,
     *,
@@ -252,6 +262,8 @@ class WidgetFactory:
         query_fields: Optional[List[Dict[str, str]]] = None,
         x_scale_type: str = "categorical",
         y_scale_type: str = "quantitative",
+        properties: Optional[Dict[str, Any]] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 3 Bar Chart widget."""
         if x_field == y_field:
@@ -269,20 +281,47 @@ class WidgetFactory:
         if color_field:
             cls._ensure_field(qfields, color_field)
 
+        props = properties or {}
+        axes_list = props.get("axes", [])
+        x_axis_meta = next((a for a in axes_list if a.get("shelf") == "columns" or a.get("field_name") == x_field), {})
+        y_axis_meta = next((a for a in axes_list if a.get("shelf") == "rows" or a.get("field_name") == y_field), {})
+
+        x_title = x_axis_meta.get("title") or _clean_title(x_field)
+        y_title = y_axis_meta.get("title") or _clean_title(y_field)
+
         encodings: Dict[str, Any] = {
-            "x": _axis_encoding(x_field, infer_scale_type(x_field, explicit=x_scale_type)),
-            "y": _axis_encoding(y_field, infer_scale_type(y_field, role="measure", explicit=y_scale_type)),
+            "x": _axis_encoding(x_field, infer_scale_type(x_field, explicit=x_scale_type), display_name=x_title),
+            "y": _axis_encoding(y_field, infer_scale_type(y_field, role="measure", explicit=y_scale_type), display_name=y_title),
             "label": {"show": False},
         }
+        if x_axis_meta.get("logarithmic"):
+            encodings["x"]["scale"]["type"] = "logarithmic"
+        if y_axis_meta.get("logarithmic"):
+            encodings["y"]["scale"]["type"] = "logarithmic"
+
         if color_field:
             encodings["color"] = _channel_encoding(color_field, "categorical")
+
+        # Color palette override from mark_properties
+        mark_props = props.get("mark_properties", [])
+        color_prop = next((mp for mp in mark_props if mp.get("channel") == "color"), {})
+        palette = color_prop.get("palette_colors") or DEFAULT_COLORS
+
+        legend_list = props.get("legends", [])
+        legend_meta = legend_list[0] if legend_list else {}
+        legend_pos = legend_meta.get("position", "right")
 
         spec = {
             "version": 3,
             "widgetType": "bar",
             "encodings": encodings,
-            "frame": {"title": title or _clean_title(y_field), "showTitle": True},
-            "mark": {"colors": DEFAULT_COLORS},
+            "frame": _frame(
+                title,
+                show_title,
+                fallback=_clean_title(y_field),
+                legend={"position": legend_pos, "visible": not legend_meta.get("hidden", False)},
+            ),
+            "mark": {"colors": palette},
         }
         ok, errs = validate_widget_spec(spec)
         if not ok:
@@ -298,6 +337,7 @@ class WidgetFactory:
         value_field: str,
         title: str = "",
         query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 3 Pie Chart widget (angle & color — NOT x & y)."""
         qfields = list(query_fields) if query_fields else [
@@ -314,10 +354,11 @@ class WidgetFactory:
                 "color": _channel_encoding(category_field, "categorical"),
                 "angle": _channel_encoding(value_field, "quantitative"),
             },
-            "frame": {
-                "title": title or f"{_clean_title(category_field)} Distribution",
-                "showTitle": True,
-            },
+            "frame": _frame(
+                title,
+                show_title,
+                fallback=f"{_clean_title(category_field)} Distribution",
+            ),
             "mark": {"colors": DEFAULT_COLORS},
         }
         ok, errs = validate_widget_spec(spec)
@@ -337,6 +378,7 @@ class WidgetFactory:
         is_area: bool = False,
         query_fields: Optional[List[Dict[str, str]]] = None,
         x_scale_type: Optional[str] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 3 Line or Area Chart widget."""
         if x_field == y_field:
@@ -366,7 +408,7 @@ class WidgetFactory:
             "version": 3,
             "widgetType": widget_type,
             "encodings": encodings,
-            "frame": {"title": title or _clean_title(y_field), "showTitle": True},
+            "frame": _frame(title, show_title, fallback=_clean_title(y_field)),
             "mark": {"colors": DEFAULT_COLORS},
         }
         ok, errs = validate_widget_spec(spec)
@@ -384,6 +426,7 @@ class WidgetFactory:
         title: str = "",
         color_field: Optional[str] = None,
         query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 3 Scatter Plot widget."""
         if x_field == y_field:
@@ -410,10 +453,11 @@ class WidgetFactory:
             "version": 3,
             "widgetType": "scatter",
             "encodings": encodings,
-            "frame": {
-                "title": title or f"{_clean_title(x_field)} vs {_clean_title(y_field)}",
-                "showTitle": True,
-            },
+            "frame": _frame(
+                title,
+                show_title,
+                fallback=f"{_clean_title(x_field)} vs {_clean_title(y_field)}",
+            ),
             "mark": {"colors": DEFAULT_COLORS},
         }
         ok, errs = validate_widget_spec(spec)
@@ -431,6 +475,7 @@ class WidgetFactory:
         color_field: str,
         title: str = "",
         query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 3 Heatmap widget (x, y, color)."""
         qfields = list(query_fields) if query_fields else [
@@ -450,7 +495,7 @@ class WidgetFactory:
                 "y": _axis_encoding(y_field, infer_scale_type(y_field)),
                 "color": _channel_encoding(color_field, "quantitative"),
             },
-            "frame": {"title": title or _clean_title(color_field), "showTitle": True},
+            "frame": _frame(title, show_title, fallback=_clean_title(color_field)),
             "mark": {"colors": DEFAULT_COLORS},
         }
         ok, errs = validate_widget_spec(spec)
@@ -467,6 +512,7 @@ class WidgetFactory:
         y_field: str,
         title: str = "",
         query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 3 Histogram widget."""
         qfields = list(query_fields) if query_fields else [
@@ -484,7 +530,11 @@ class WidgetFactory:
                 "y": _axis_encoding(y_field, "quantitative"),
                 "label": {"show": False},
             },
-            "frame": {"title": title or f"{_clean_title(x_field)} Distribution", "showTitle": True},
+            "frame": _frame(
+                title,
+                show_title,
+                fallback=f"{_clean_title(x_field)} Distribution",
+            ),
             "mark": {"colors": DEFAULT_COLORS},
         }
         ok, errs = validate_widget_spec(spec)
@@ -500,6 +550,7 @@ class WidgetFactory:
         column_fields: List[str],
         title: str = "",
         query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 1 Table widget (Lakeview table schema is v1)."""
         qfields = list(query_fields) if query_fields else [
@@ -525,7 +576,7 @@ class WidgetFactory:
             "version": 1,
             "widgetType": "table",
             "encodings": {"columns": columns_enc},
-            "frame": {"title": title or "Table View", "showTitle": True},
+            "frame": _frame(title, show_title, fallback="Table View"),
             "condensed": True,
             "itemsPerPage": 25,
         }
@@ -542,6 +593,7 @@ class WidgetFactory:
         value_field: str,
         title: str = "",
         query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 2 Counter / KPI widget."""
         qfields = list(query_fields) if query_fields else [
@@ -558,7 +610,7 @@ class WidgetFactory:
                     "displayName": title or _clean_title(value_field),
                 }
             },
-            "frame": {"title": title or _clean_title(value_field), "showTitle": True},
+            "frame": _frame(title, show_title, fallback=_clean_title(value_field)),
         }
         ok, errs = validate_widget_spec(spec)
         if not ok:
@@ -574,6 +626,7 @@ class WidgetFactory:
         title: str = "",
         filter_type: str = "filter-multi-select",
         query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
     ) -> Widget:
         """Create a Version 2 Filter widget."""
         allowed = {
@@ -605,7 +658,7 @@ class WidgetFactory:
                     }
                 ]
             },
-            "frame": {"title": title or _clean_title(field_name), "showTitle": True},
+            "frame": _frame(title, show_title, fallback=_clean_title(field_name)),
         }
         ok, errs = validate_widget_spec(spec)
         if not ok:

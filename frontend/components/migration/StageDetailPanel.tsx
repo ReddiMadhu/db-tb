@@ -31,7 +31,6 @@ import DashboardVisualPreview from "./DashboardVisualPreview";
 import FormulaConversionCard from "./FormulaConversionCard";
 import VisualCompatibilityMatrix from "./VisualCompatibilityMatrix";
 import ParseStageDetail from "./ParseStageDetail";
-import CalcDeepDiveDetail from "./CalcDeepDiveDetail";
 import CalcLogicConversionDetail from "./CalcLogicConversionDetail";
 import VisualConversionDetail from "./VisualConversionDetail";
 import DeploymentReviewDetail from "./DeploymentReviewDetail";
@@ -121,14 +120,6 @@ export default function StageDetailPanel({
     return (
       <div className={styles.panel}>
         <InlineMappingPanel jobUuid={jobUuid} onExecute={onExecute} />
-      </div>
-    );
-  }
-
-  if (stage.stage_id === "CALC_DEEP_DIVE") {
-    return (
-      <div className={styles.panel}>
-        <CalcDeepDiveDetail jobUuid={jobUuid} stage={stage} />
       </div>
     );
   }
@@ -365,28 +356,7 @@ export default function StageDetailPanel({
                 </div>
               )}
 
-              {/* 4. CALC DEEP DIVE STAGE */}
-              {stage.stage_id === "CALC_DEEP_DIVE" && (
-                <div>
-                  <h4 style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: "0.75rem" }}>
-                    Calculated Fields & Lineage Analysis ({Array.isArray(artifacts.calculated_fields) ? artifacts.calculated_fields.length : 0})
-                  </h4>
-                  {Array.isArray(artifacts.calculated_fields) && artifacts.calculated_fields.slice(0, 15).map((cf: any, idx: number) => (
-                    <FormulaConversionCard
-                      key={idx}
-                      item={{
-                        name: cf.name,
-                        caption: cf.caption || cf.name,
-                        original_formula: cf.formula,
-                        compiled_sql: `SUM(${cf.caption || cf.name})`,
-                        ai_explanation: `Calculated formula verified. Dependencies: ${Array.isArray(cf.dependencies) && cf.dependencies.length > 0 ? cf.dependencies.join(", ") : "None"}.`,
-                        confidence_score: 96,
-                        validation_status: "VALID",
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
+              {/* 4. CALC LOGIC CONVERSION — handled by early return above */}
 
               {/* 5. CALC LOGIC CONVERSION STAGE */}
               {stage.stage_id === "CALC_LOGIC_CONVERSION" && (

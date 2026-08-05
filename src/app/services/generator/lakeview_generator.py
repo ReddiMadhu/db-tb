@@ -118,11 +118,16 @@ def _resolve_xy_fields(
     """Resolve dimension / measure / color field names from UBIM encodings."""
     x_encs = _encodings_by_channel(w_ubim.encodings, EncodingChannel.X)
     y_encs = _encodings_by_channel(w_ubim.encodings, EncodingChannel.Y)
-    color_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.COLOR)
     size_enc = _enc_by_channel(w_ubim.encodings, EncodingChannel.SIZE)
 
     x_field = x_encs[0].field_name if x_encs else None
     y_field = y_encs[0].field_name if y_encs else None
+    # Prefer aggregated COLOR (measure intensity) over categorical COLOR
+    color_encs = _encodings_by_channel(w_ubim.encodings, EncodingChannel.COLOR)
+    color_enc = next(
+        (e for e in color_encs if e.aggregation != AggregationType.NONE),
+        color_encs[0] if color_encs else None,
+    )
     color_field = color_enc.field_name if color_enc else None
 
     # Extra X dims (legacy UBIM) → color when COLOR channel absent
@@ -187,6 +192,15 @@ def _build_query_fields(w_ubim) -> List[Dict[str, str]]:
     return query_fields_list
 
 
+def _field_is_measure(name: Optional[str], query_fields_list: List[Dict[str, str]]) -> bool:
+    if not name:
+        return False
+    for qf in query_fields_list:
+        if qf.get("name") == name and _is_aggregated_expression(qf.get("expression") or ""):
+            return True
+    return False
+
+
 def _create_widget_via_factory(
     chart_type: ChartType,
     dataset_ref: str,
@@ -195,6 +209,7 @@ def _create_widget_via_factory(
     y_field: Optional[str],
     color_field: Optional[str],
     query_fields_list: List[Dict[str, str]],
+    show_title: bool = True,
 ):
     """Dispatch to WidgetFactory. Returns Widget or None if incomplete."""
     # Attempt recovery again at dispatch boundary (belt + suspenders)
@@ -240,6 +255,7 @@ def _create_widget_via_factory(
                     value_field=value_field,
                     title=title,
                     query_fields=query_fields_list or None,
+                    show_title=show_title,
                 )
 
         if has_placeholder_x or has_placeholder_y or identical_axes:
@@ -258,6 +274,7 @@ def _create_widget_via_factory(
             color_field=color_field,
             query_fields=query_fields_list or None,
             x_scale_type=infer_scale_type(x_field or ""),
+            show_title=show_title,
         )
 
     if chart_type == ChartType.LINE:
@@ -270,6 +287,7 @@ def _create_widget_via_factory(
             is_area=False,
             query_fields=query_fields_list or None,
             x_scale_type=infer_scale_type(x_field or ""),
+            show_title=show_title,
         )
 
     if chart_type == ChartType.AREA:
@@ -282,6 +300,7 @@ def _create_widget_via_factory(
             is_area=True,
             query_fields=query_fields_list or None,
             x_scale_type=infer_scale_type(x_field or ""),
+            show_title=show_title,
         )
 
     if chart_type == ChartType.SCATTER:
@@ -292,6 +311,7 @@ def _create_widget_via_factory(
             title=title,
             color_field=color_field,
             query_fields=query_fields_list or None,
+            show_title=show_title,
         )
 
     if chart_type == ChartType.PIE:
@@ -307,16 +327,59 @@ def _create_widget_via_factory(
             value_field=y_field,  # type: ignore[arg-type]
             title=title,
             query_fields=query_fields_list or None,
+            show_title=show_title,
         )
 
     if chart_type == ChartType.HEATMAP:
-        # Prefer color measure; fall back to y as color intensity
+        # Prefer measure on color; categoricals on x/y (fix swapped Age/Total_Claim)
+        if color_field and not _field_is_measure(color_field, query_fields_list):
+            measure_candidate = None
+            for qf in query_fields_list:
+                n = qf.get("name")
+                if (
+                    n
+                    and n not in PLACEHOLDER_FIELDS
+                    and n != x_field
+                    and _is_aggregated_expression(qf.get("expression") or "")
+                ):
+                    measure_candidate = n
+                    break
+            if measure_candidate:
+                if _field_is_measure(y_field, query_fields_list):
+                    color_field, y_field = y_field, color_field
+                else:
+                    color_field = measure_candidate
+        elif not color_field:
+            for qf in query_fields_list:
+                n = qf.get("name")
+                if (
+                    n
+                    and n not in PLACEHOLDER_FIELDS
+                    and n != x_field
+                    and n != y_field
+                    and _is_aggregated_expression(qf.get("expression") or "")
+                ):
+                    color_field = n
+                    break
+
         color_measure = color_field or y_field
         row_field = y_field if color_field else (
             query_fields_list[1]["name"] if len(query_fields_list) > 1 else y_field
         )
+        if row_field and _field_is_measure(row_field, query_fields_list):
+            for qf in query_fields_list:
+                n = qf.get("name")
+                if (
+                    n
+                    and n not in PLACEHOLDER_FIELDS
+                    and n != x_field
+                    and n != color_measure
+                    and not _is_aggregated_expression(qf.get("expression") or "")
+                ):
+                    row_field = n
+                    break
+
         if has_placeholder_x or not color_measure or color_measure in PLACEHOLDER_FIELDS:
-            # Degrade to bar when heatmap bindings incomplete
             if not has_placeholder_x and y_field and x_field != y_field:
                 return WidgetFactory.create_bar_widget(
                     dataset_name=dataset_ref,
@@ -324,11 +387,11 @@ def _create_widget_via_factory(
                     y_field=y_field,
                     title=title,
                     query_fields=query_fields_list or None,
+                    show_title=show_title,
                 )
             logger.warning("Skipping heatmap widget '%s' — incomplete bindings", title)
             return None
         y_dim = row_field if row_field and row_field != x_field else (color_field or y_field)
-        # If we only have x + measure, use bar; need 2 dims + measure for heatmap
         if not y_dim or y_dim == x_field or y_dim == color_measure:
             return WidgetFactory.create_bar_widget(
                 dataset_name=dataset_ref,
@@ -336,6 +399,7 @@ def _create_widget_via_factory(
                 y_field=color_measure,
                 title=title,
                 query_fields=query_fields_list or None,
+                show_title=show_title,
             )
         return WidgetFactory.create_heatmap_widget(
             dataset_name=dataset_ref,
@@ -344,6 +408,7 @@ def _create_widget_via_factory(
             color_field=color_measure,
             title=title,
             query_fields=query_fields_list or None,
+            show_title=show_title,
         )
 
     if chart_type == ChartType.HISTOGRAM:
@@ -360,6 +425,7 @@ def _create_widget_via_factory(
             y_field=hist_y,  # type: ignore[arg-type]
             title=title,
             query_fields=qfields or None,
+            show_title=show_title,
         )
 
     if chart_type == ChartType.COUNTER:
@@ -376,6 +442,7 @@ def _create_widget_via_factory(
             value_field=val_field,
             title=title,
             query_fields=query_fields_list or None,
+            show_title=show_title,
         )
 
     if chart_type in (ChartType.FILTER_MULTI, ChartType.FILTER_SINGLE, ChartType.FILTER_DATE):
@@ -398,6 +465,7 @@ def _create_widget_via_factory(
             title=title,
             filter_type=filt_type,
             query_fields=query_fields_list or None,
+            show_title=show_title,
         )
 
     # MAP / BOXPLOT / COMBO / TABLE / fallback → table
@@ -421,6 +489,7 @@ def _create_widget_via_factory(
         column_fields=col_names,
         title=table_title,
         query_fields=query_fields_list or None,
+        show_title=show_title,
     )
 
 
@@ -454,9 +523,38 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                 height=w_ubim.position.grid_h,
             )
 
+            # Do not invent sheet-name titles for blank worksheet titles
+            title = (w_ubim.title or "").strip()
+            if w_ubim.show_title is not None:
+                show_title = bool(w_ubim.show_title)
+            else:
+                show_title = bool(title)
+            log_label = title or w_ubim.name
+
+            # Ontology chrome: dashboard text zones → Lakeview textbox widgets
+            if w_ubim.chart_type == ChartType.TEXT_BOX:
+                text = (w_ubim.properties or {}).get("text") or title or ""
+                if not text:
+                    continue
+                from app.models.lakeview_model import Widget
+                page.layout.append(LayoutItem(
+                    widget=Widget(textbox_spec=text),
+                    position=pos,
+                ))
+                continue
+
             query_fields_list = _build_query_fields(w_ubim)
             x_field, y_field, color_field = _resolve_xy_fields(w_ubim, query_fields_list)
-            title = w_ubim.title or w_ubim.name
+
+            # Ontology chrome: filter cards may only have filter metadata
+            if w_ubim.chart_type in (
+                ChartType.FILTER_MULTI, ChartType.FILTER_SINGLE, ChartType.FILTER_DATE
+            ):
+                if not query_fields_list and w_ubim.filters:
+                    f0 = w_ubim.filters[0]
+                    fname = f0.field_name
+                    query_fields_list = [{"expression": f"`{fname}`", "name": fname}]
+                    x_field = fname
 
             incomplete_sql = False
             if lakeview.datasets:
@@ -467,7 +565,7 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
             if incomplete_sql or not query_fields_list:
                 logger.warning(
                     "Skipping widget '%s' — %s. chart_type=%s",
-                    title,
+                    log_label,
                     "incomplete SQL projection" if incomplete_sql else "no query fields resolved",
                     w_ubim.chart_type.value,
                 )
@@ -482,9 +580,10 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     y_field=y_field,
                     color_field=color_field,
                     query_fields_list=query_fields_list,
+                    show_title=show_title,
                 )
             except ValueError as exc:
-                logger.warning("Skipping widget '%s' — factory rejected spec: %s", title, exc)
+                logger.warning("Skipping widget '%s' — factory rejected spec: %s", log_label, exc)
                 continue
 
             if widget is None:
@@ -495,7 +594,7 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                 ok, errs = validate_widget_spec(widget.spec)
                 if not ok:
                     logger.warning(
-                        "Skipping widget '%s' — invalid renderSpec: %s", title, errs
+                        "Skipping widget '%s' — invalid renderSpec: %s", log_label, errs
                     )
                     continue
 

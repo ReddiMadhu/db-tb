@@ -85,8 +85,9 @@ class TestEncodingParser(unittest.TestCase):
         channels = {(e.channel, e.field_name) for e in encodings}
         self.assertIn(("color", "Demographics Gender"), channels)
         self.assertIn(("size", "Total Incidents"), channels)
-        self.assertIn(("size", "Total Claim"), channels)  # wedge-size → size
-        self.assertIn(("detail", "State Name"), channels)  # lod → detail
+        self.assertIn(("angle", "Total Claim"), channels)  # wedge-size → angle
+        self.assertIn(("lod", "State Name"), channels)  # <lod> stays as lod (not detail)
+        self.assertNotIn(("detail", "State Name"), channels)
         self.assertTrue(all(e.field_name for e in encodings))
 
     def test_ctd_shelf_derivation_not_pseudo(self):

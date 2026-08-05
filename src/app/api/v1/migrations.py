@@ -161,7 +161,7 @@ async def execute_migration_pipeline(
 
     Pre-flight: validates source mappings (Stage 3) before launching the
     pipeline.  Parse (Stage 2) is NOT re-run — it was already completed
-    during upload.  The pipeline starts from Calculation Deep Dive (Stage 4).
+    during upload.  The pipeline starts from Calculation Logic Conversion (Stage 4).
 
     If sync=False (used by Web UI), runs asynchronously in BackgroundTasks so
     the frontend can poll real-time stage progress. If sync=True (default for
@@ -273,7 +273,7 @@ async def execute_migration_pipeline(
     is_sync = sync or (req and req.sync)
 
     job.status = "EXECUTING"
-    job.current_stage = 4  # Start from CALC_DEEP_DIVE (stage 4)
+    job.current_stage = 4  # Start from CALC_LOGIC_CONVERSION (stage 4)
     db.commit()
 
     if is_sync:
@@ -597,6 +597,15 @@ async def export_migration_asset(
     if not job:
         raise HTTPException(status_code=404, detail="Migration job not found.")
 
+    # Layout conversion-card review queue (MANUAL_REVIEW affordances)
+    if export_type == "layout-review-cards":
+        from app.services.generator.layout_review_actions import export_conversion_cards_csv
+        try:
+            payload = export_conversion_cards_csv(db, job_uuid)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        return JSONResponse(content=payload)
+
     from app.models.stage_model import StageResult
     calc_stage = db.query(StageResult).filter(
         StageResult.job_uuid == job_uuid,
@@ -674,4 +683,93 @@ async def export_migration_asset(
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown export type: {export_type}")
+
+
+# ── MANUAL_REVIEW interactive affordances (layout stage) ─────────────────────
+
+class AcceptCardRequest(PydanticBaseModel):
+    pass
+
+
+class OverrideWidgetRequest(PydanticBaseModel):
+    widget_type: str
+    x_field: Optional[str] = None
+    y_field: Optional[str] = None
+    color_field: Optional[str] = None
+
+
+class PatchEncodingsRequest(PydanticBaseModel):
+    encodings: Dict[str, object]
+
+
+@router.post("/{job_uuid}/layout-review/cards/{card_id}/accept")
+async def accept_layout_review_card(
+    job_uuid: str,
+    card_id: str,
+    db: Session = Depends(get_db),
+):
+    """Acknowledge a MANUAL_REVIEW / UNSUPPORTED conversion card (status → ACCEPTED)."""
+    from app.services.generator.layout_review_actions import accept_conversion_card
+    try:
+        return accept_conversion_card(db, job_uuid, card_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{job_uuid}/layout-review/cards/{card_id}/override")
+async def override_layout_review_widget(
+    job_uuid: str,
+    card_id: str,
+    body: OverrideWidgetRequest,
+    db: Session = Depends(get_db),
+):
+    """Override widgetType (+ optional axis fields) and rewrite Lakeview JSON on disk."""
+    from app.services.generator.layout_review_actions import override_widget_type
+    try:
+        return override_widget_type(
+            db,
+            job_uuid,
+            card_id,
+            body.widget_type,
+            x_field=body.x_field,
+            y_field=body.y_field,
+            color_field=body.color_field,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{job_uuid}/layout-review/cards/{card_id}/encodings")
+async def patch_layout_review_encodings(
+    job_uuid: str,
+    card_id: str,
+    body: PatchEncodingsRequest,
+    db: Session = Depends(get_db),
+):
+    """Patch encoding field bindings on a conversion card's Lakeview widget."""
+    from app.services.generator.layout_review_actions import patch_encodings
+    try:
+        return patch_encodings(db, job_uuid, card_id, body.encodings or {})
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/{job_uuid}/layout-review/cards/{card_id}/fields")
+async def get_layout_review_card_fields(
+    job_uuid: str,
+    card_id: str,
+    db: Session = Depends(get_db),
+):
+    """List dataset field options + allowed override types for a conversion card."""
+    from app.services.generator.layout_review_actions import list_card_field_options
+    try:
+        return list_card_field_options(db, job_uuid, card_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 

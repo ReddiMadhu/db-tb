@@ -29,10 +29,10 @@ def optimize_ubim(dashboard: IntermediateDashboard) -> IntermediateDashboard:
                 if enc.dataset_name in ds_remap:
                     enc.dataset_name = ds_remap[enc.dataset_name]
 
-            # Signature for duplicate widget detection
-            clean_title = (widget.title or "").replace(" (2)", "").replace(" 2", "").strip().lower()
+            # Signature for duplicate widget detection — use full worksheet name.
+            # Do NOT strip " (2)" suffixes; Tableau sibling sheets are intentional.
             enc_sig = tuple(sorted((e.channel.value, e.field_name) for e in widget.encodings))
-            sig = (clean_title, widget.chart_type.value, widget.dataset_name, enc_sig)
+            sig = (widget.name, widget.chart_type.value, widget.dataset_name, enc_sig)
 
             if sig not in seen_widget_signatures:
                 seen_widget_signatures.add(sig)

@@ -190,6 +190,7 @@ def classify_field(
     default_aggregation: Optional[str] = None,
     field_type: str = "",
     formula: Optional[str] = None,
+    semantic_role: Optional[str] = None,
 ) -> FieldSemantic:
     """Classify a field into its semantic type based on metadata and name patterns.
 
@@ -222,6 +223,10 @@ def classify_field(
     agg = (default_aggregation or "").upper().strip()
 
     if not name:
+        return FieldSemantic.DIMENSION
+
+    # Explicit Geographic / Semantic role -> DIMENSION (never aggregate)
+    if semantic_role and any(geo in semantic_role for geo in ['ZipCode', 'State', 'City', 'Country', 'County', 'Geo']):
         return FieldSemantic.DIMENSION
 
     # ── 1. Explicit date datatype ────────────────────────────────────────

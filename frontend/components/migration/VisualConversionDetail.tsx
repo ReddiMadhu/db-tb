@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -28,6 +28,8 @@ import {
   Zap,
 } from "lucide-react";
 import type { StageDetail } from "@/lib/types";
+import { exportMigrationAsset } from "@/lib/api";
+import ReviewCardActions from "./ReviewCardActions";
 import styles from "./VisualConversionDetail.module.css";
 
 interface VisualConversionDetailProps {
@@ -45,12 +47,14 @@ export interface TableauVisualDef {
   label?: string;
   tooltip?: string[];
   detail?: string;
+  lod?: string[];
   filters?: string[];
   pages?: string;
   measure_names?: string;
   measure_values?: string;
   calculated_fields?: string[];
   parameters?: string[];
+  hidden?: boolean;
 }
 
 export interface DatabricksVisualDef {
@@ -93,18 +97,20 @@ export interface ManualReviewDetails {
   suggested_fix?: string;
   recommendation?: string;
   impact: "Low" | "Medium" | "High";
+  generated_as?: string;
 }
 
 export interface ConversionCardItem {
   id: string;
   worksheet_name: string;
-  status: "SUCCESS" | "MANUAL_REVIEW" | "UNSUPPORTED";
+  status: "SUCCESS" | "MANUAL_REVIEW" | "UNSUPPORTED" | "ACCEPTED";
   status_reason?: string;
   tableau: TableauVisualDef;
   databricks: DatabricksVisualDef;
   lakeview_json: Record<string, any>;
   validation: BusinessValidationChecks;
   manual_review?: ManualReviewDetails;
+  accepted_at?: string;
 }
 
 // Fallback sample cards representing complete realistic Tableau conversion report
@@ -378,11 +384,15 @@ export default function VisualConversionDetail({
 }: VisualConversionDetailProps) {
   const [activeTab, setActiveTab] = useState<"CARDS" | "JSON" | "MANUAL_REVIEW">("CARDS");
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "SUCCESS" | "REVIEW">("ALL");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "SUCCESS" | "REVIEW" | "UNSUPPORTED">("ALL");
   const [expandedJsonCards, setExpandedJsonCards] = useState<Record<string, boolean>>({});
   const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
   const [copiedFullJson, setCopiedFullJson] = useState(false);
+  const [cardsState, setCardsState] = useState<ConversionCardItem[]>([]);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionOk, setActionOk] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const toggleCardExpand = (cardId: string) => {
     setExpandedCardIds((prev) => ({ ...prev, [cardId]: !prev[cardId] }));
@@ -390,74 +400,105 @@ export default function VisualConversionDetail({
 
   const artifacts = (stage.artifacts || {}) as Record<string, any>;
   const metrics = (stage.metrics || {}) as Record<string, any>;
+  const visualTypesDetected: string[] = Array.isArray(metrics.visual_types_detected)
+    ? metrics.visual_types_detected
+    : Array.isArray(artifacts.visual_types)
+    ? artifacts.visual_types
+    : [];
+  const chromeWidgets = Array.isArray(artifacts.chrome_widgets) ? artifacts.chrome_widgets : [];
 
   // Build conversion cards from backend artifacts or fall back cleanly
   const rawCards: ConversionCardItem[] = Array.isArray(artifacts.conversion_cards) && artifacts.conversion_cards.length > 0
     ? artifacts.conversion_cards
     : Array.isArray(artifacts.widgets) && artifacts.widgets.length > 0
-    ? artifacts.widgets.map((w: any, idx: number) => ({
-        id: `widget-${idx}`,
-        worksheet_name: w.name || `Worksheet ${idx + 1}`,
-        status: w.manualReviewRequired ? "MANUAL_REVIEW" : "SUCCESS",
-        tableau: {
-          type: w.tableau_type || w.type || "Bar Chart",
-          rows: w.tableau_rows || ["Dimension"],
-          columns: w.tableau_cols || ["Measure"],
-          color: w.tableau_color || "Category",
-          filters: w.tableau_filters || ["Default Filter"],
-        },
-        databricks: {
-          widget_type: w.visual_type ? String(w.visual_type).toUpperCase() : w.type || "Bar Chart",
-          dataset: w.dataset || "default_dataset",
-          category: w.category || "Dimension_Col",
-          value: w.value || "Measure_Col",
-          filters: w.filters || ["Default Filter"],
-          sort: "ASC",
-          aggregation: "SUM",
-        },
-        lakeview_json: {
-          widgetType: w.visual_type || "bar",
-          datasetName: w.dataset || "default_dataset",
-          encodings: {
-            x: w.category || "Dimension_Col",
-            y: w.value || "Measure_Col",
+    ? artifacts.widgets
+        .filter((w: any) => w.type === "chart")
+        .map((w: any, idx: number) => ({
+          id: `widget-${idx}`,
+          worksheet_name: w.title || w.name || `Worksheet ${idx + 1}`,
+          status: "SUCCESS" as const,
+          tableau: {
+            type: w.visual_type_label || w.visual_type || "Chart",
+            rows: [],
+            columns: [],
           },
-        },
-        validation: {
-          visual_type_preserved: true,
-          fields_correctly_mapped: true,
-          filters_preserved: true,
-          aggregations_preserved: true,
-          formatting_preserved: true,
-          sort_order_preserved: true,
-          tooltip_preserved: true,
-          calculations_preserved: true,
-        },
-      }))
+          databricks: {
+            widget_type: w.visual_type_label || w.visual_type || w.type || "Chart",
+            dataset: w.dataset || "",
+            category: w.encodings?.x || w.encodings?.color || undefined,
+            value: w.encodings?.y || w.encodings?.angle || undefined,
+            aggregation: "SUM",
+          },
+          lakeview_json: {
+            widgetType: w.visual_type || "bar",
+            datasetName: w.dataset || "",
+            encodings: w.encodings || {},
+            frame: { title: w.title || w.name },
+          },
+          validation: {
+            visual_type_preserved: true,
+            fields_correctly_mapped: true,
+            filters_preserved: true,
+            aggregations_preserved: true,
+            formatting_preserved: true,
+            sort_order_preserved: true,
+            tooltip_preserved: true,
+            calculations_preserved: true,
+          },
+        }))
     : DEFAULT_CONVERSION_CARDS;
 
+  useEffect(() => {
+    setCardsState(rawCards);
+  }, [stage.artifacts, stage.generated_code]);
+
   // Filtered Cards
-  const cards = rawCards.filter((card) => {
+  const cards = cardsState.filter((card) => {
     const matchesSearch =
       card.worksheet_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       card.tableau.type.toLowerCase().includes(searchQuery.toLowerCase()) ||
       card.databricks.widget_type.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      card.databricks.dataset.toLowerCase().includes(searchQuery.toLowerCase());
+      (card.databricks.dataset || "").toLowerCase().includes(searchQuery.toLowerCase());
 
     const matchesStatus =
       statusFilter === "ALL" ||
-      (statusFilter === "SUCCESS" && card.status === "SUCCESS") ||
-      (statusFilter === "REVIEW" && card.status === "MANUAL_REVIEW");
+      (statusFilter === "SUCCESS" && (card.status === "SUCCESS" || card.status === "ACCEPTED")) ||
+      (statusFilter === "REVIEW" && card.status === "MANUAL_REVIEW") ||
+      (statusFilter === "UNSUPPORTED" && card.status === "UNSUPPORTED");
 
     return matchesSearch && matchesStatus;
   });
 
   // Calculate Conversion Summary Metrics
-  const totalCards = metrics.worksheets_total || rawCards.length || 20;
-  const successfulCards = metrics.successful_conversions || rawCards.filter((c) => c.status === "SUCCESS").length;
-  const reviewCards = metrics.manual_review_count || rawCards.filter((c) => c.status === "MANUAL_REVIEW").length;
-  const unsupportedCards = metrics.unsupported_count || rawCards.filter((c) => c.status === "UNSUPPORTED").length;
+  const totalCards = metrics.worksheets_total || cardsState.length || 0;
+  const successfulCards =
+    metrics.successful_conversions ??
+    cardsState.filter((c) => c.status === "SUCCESS" || c.status === "ACCEPTED").length;
+  const reviewCards =
+    cardsState.filter((c) => c.status === "MANUAL_REVIEW").length;
+  const unsupportedCards =
+    cardsState.filter((c) => c.status === "UNSUPPORTED").length;
   const conversionAccuracy = totalCards > 0 ? Math.round((successfulCards / totalCards) * 100) : 98;
+
+  const handleExportReviewQueue = async () => {
+    setExporting(true);
+    setActionError(null);
+    try {
+      const res = await exportMigrationAsset(jobUuid, "layout-review-cards");
+      const blob = new Blob([res.content], { type: res.mime_type || "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.filename || "layout_review_queue.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+      setActionOk("Downloaded layout review queue CSV");
+    } catch (err: any) {
+      setActionError(err?.message || "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Full Published Databricks Lakeview JSON
   const fullPublishedJson = artifacts.lakeview_json_str
@@ -469,7 +510,7 @@ export default function VisualConversionDetail({
             {
               name: "overview",
               displayName: artifacts.dashboard_title || "Executive Visual Report",
-              layout: rawCards.map((c, i) => ({
+              layout: cardsState.map((c, i) => ({
                 widget: {
                   name: c.worksheet_name,
                   spec: c.lakeview_json,
@@ -514,7 +555,11 @@ export default function VisualConversionDetail({
           <span className={styles.summaryValue}>
             {successfulCards + reviewCards} / {totalCards}
           </span>
-          <span className={styles.summarySubtext}>Total Tableau Worksheets</span>
+          <span className={styles.summarySubtext}>
+            {metrics.chart_widgets != null
+              ? `${metrics.chart_widgets} charts · ${metrics.chrome_widgets ?? 0} chrome`
+              : "Total Tableau Worksheets"}
+          </span>
         </div>
 
         <div className={styles.summaryCard}>
@@ -524,7 +569,7 @@ export default function VisualConversionDetail({
           <span className={`${styles.summaryValue} ${styles.summaryValueSuccess}`}>
             {successfulCards}
           </span>
-          <span className={styles.summarySubtext}>100% Automatic Conversion</span>
+          <span className={styles.summarySubtext}>Mapped to Lakeview widgets</span>
         </div>
 
         <div className={styles.summaryCard}>
@@ -534,7 +579,7 @@ export default function VisualConversionDetail({
           <span className={`${styles.summaryValue} ${styles.summaryValueReview}`}>
             {reviewCards}
           </span>
-          <span className={styles.summarySubtext}>Requires SME Alignment</span>
+          <span className={styles.summarySubtext}>Partial mapping / fallback</span>
         </div>
 
         <div className={styles.summaryCard}>
@@ -544,9 +589,68 @@ export default function VisualConversionDetail({
           <span className={`${styles.summaryValue} ${styles.summaryValueUnsupported}`}>
             {unsupportedCards}
           </span>
-          <span className={styles.summarySubtext}>Fallback Provided</span>
+          <span className={styles.summarySubtext}>No widget generated</span>
         </div>
       </div>
+
+      {(visualTypesDetected.length > 0 || chromeWidgets.length > 0) && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.4rem",
+            marginBottom: "1rem",
+            alignItems: "center",
+          }}
+        >
+          <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-secondary)", marginRight: 4 }}>
+            Lakeview types:
+          </span>
+          {visualTypesDetected.map((vt) => (
+            <span
+              key={vt}
+              style={{
+                fontSize: "0.7rem",
+                padding: "0.15rem 0.5rem",
+                borderRadius: 999,
+                background: "var(--bg-secondary, #f3f4f6)",
+                border: "1px solid var(--border-primary, #e5e7eb)",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {vt}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Ontology layout chrome used for Lakeview placement */}
+      {artifacts.ontology_layout && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.5rem 1.25rem",
+            marginBottom: "1rem",
+            padding: "0.65rem 0.9rem",
+            borderRadius: 8,
+            background: "var(--bg-secondary, #f6f7f9)",
+            border: "1px solid var(--border-primary, #e5e7eb)",
+            fontSize: "0.8rem",
+            color: "var(--text-secondary)",
+          }}
+        >
+          <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>Ontology layout</span>
+          <span>Zones: {artifacts.ontology_layout.zone_count ?? 0}</span>
+          <span>Filter cards: {(artifacts.ontology_layout.filter_cards || []).length}</span>
+          <span>Legend cards: {(artifacts.ontology_layout.legend_cards || []).length}</span>
+          <span>Text zones: {(artifacts.ontology_layout.text_zones || []).length}</span>
+          <span>Actions: {(artifacts.ontology_layout.actions || []).length}</span>
+          {artifacts.ontology_layout.sizing_mode && (
+            <span>Sizing: {artifacts.ontology_layout.sizing_mode}</span>
+          )}
+        </div>
+      )}
 
       {/* ── Navigation Toolbar ── */}
       <div className={styles.toolbar}>
@@ -556,7 +660,7 @@ export default function VisualConversionDetail({
             onClick={() => setActiveTab("CARDS")}
           >
             <BarChart3 size={15} /> Visual Conversion Cards
-            <span className={styles.badgeCount}>{rawCards.length}</span>
+            <span className={styles.badgeCount}>{cardsState.length}</span>
           </button>
           <button
             className={`${styles.tabBtn} ${activeTab === "JSON" ? styles.tabBtnActive : ""}`}
@@ -592,6 +696,7 @@ export default function VisualConversionDetail({
               <option value="ALL">All Conversion Statuses</option>
               <option value="SUCCESS">✓ Successfully Converted</option>
               <option value="REVIEW">⚠ Manual Review Required</option>
+              <option value="UNSUPPORTED">✗ Unsupported / Missing</option>
             </select>
           </div>
         )}
@@ -640,6 +745,11 @@ export default function VisualConversionDetail({
                           <AlertTriangle size={13} /> Manual Review
                         </span>
                       )}
+                      {card.status === "ACCEPTED" && (
+                        <span className={styles.statusBadgeSuccess}>
+                          <CheckCircle2 size={13} /> Accepted
+                        </span>
+                      )}
                       {card.status === "UNSUPPORTED" && (
                         <span className={styles.statusBadgeUnsupported}>
                           <XCircle size={13} /> Unsupported
@@ -672,11 +782,11 @@ export default function VisualConversionDetail({
                             </div>
                             <div className={styles.fieldRow}>
                               <span className={styles.fieldLabel}>Rows:</span>
-                              <span className={styles.fieldValue}>{card.tableau.rows.join(", ") || "None"}</span>
+                              <span className={styles.fieldValue}>{(card.tableau.rows || []).join(", ") || "None"}</span>
                             </div>
                             <div className={styles.fieldRow}>
                               <span className={styles.fieldLabel}>Columns:</span>
-                              <span className={styles.fieldValue}>{card.tableau.columns.join(", ") || "None"}</span>
+                              <span className={styles.fieldValue}>{(card.tableau.columns || []).join(", ") || "None"}</span>
                             </div>
                           </div>
 
@@ -703,6 +813,12 @@ export default function VisualConversionDetail({
                               <div className={styles.fieldRow}>
                                 <span className={styles.fieldLabel}>Angle:</span>
                                 <span className={styles.fieldValue}>{card.tableau.angle}</span>
+                              </div>
+                            )}
+                            {card.tableau.lod && card.tableau.lod.length > 0 && (
+                              <div className={styles.fieldRow}>
+                                <span className={styles.fieldLabel}>LOD:</span>
+                                <span className={styles.fieldValue}>{card.tableau.lod.join(", ")}</span>
                               </div>
                             )}
                             {card.tableau.label && (
@@ -903,6 +1019,12 @@ export default function VisualConversionDetail({
                                 </div>
                               </div>
                             )}
+                            {card.manual_review.generated_as && (
+                              <div>
+                                <div className={styles.reviewItemLabel}>Generated As</div>
+                                <div className={styles.reviewItemVal}>{card.manual_review.generated_as}</div>
+                              </div>
+                            )}
                             {card.manual_review.impact && (
                               <div>
                                 <div className={styles.reviewItemLabel}>Impact</div>
@@ -910,8 +1032,34 @@ export default function VisualConversionDetail({
                               </div>
                             )}
                           </div>
+                          <ReviewCardActions
+                            jobUuid={jobUuid}
+                            card={card}
+                            onUpdated={(updated) => {
+                              setCardsState((prev) =>
+                                prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c))
+                              );
+                            }}
+                            onError={setActionError}
+                            onOk={setActionOk}
+                          />
                         </div>
                       )}
+
+                      {!card.manual_review &&
+                        (card.status === "MANUAL_REVIEW" || card.status === "UNSUPPORTED") && (
+                          <ReviewCardActions
+                            jobUuid={jobUuid}
+                            card={card}
+                            onUpdated={(updated) => {
+                              setCardsState((prev) =>
+                                prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c))
+                              );
+                            }}
+                            onError={setActionError}
+                            onOk={setActionOk}
+                          />
+                        )}
 
                       {/* Code Editor JSON Viewer Box */}
                       <div className={styles.jsonViewerContainer}>
@@ -989,6 +1137,40 @@ export default function VisualConversionDetail({
       {/* ── TAB 3: MANUAL REVIEW QUEUE ── */}
       {activeTab === "MANUAL_REVIEW" && (
         <div className={styles.manualReviewTableContainer}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: "1rem",
+              marginBottom: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", maxWidth: 640 }}>
+              <strong>MANUAL_REVIEW</strong> is advisory: Accept as-is, override widget type, or patch
+              encodings. Changes write to the job Lakeview JSON (deploy uses the updated file). See{" "}
+              <code>docs/manual_review_workflow.md</code>.
+            </div>
+            <button
+              className={styles.exportBtn}
+              onClick={handleExportReviewQueue}
+              disabled={exporting}
+            >
+              <Download size={14} /> {exporting ? "Exporting…" : "Export Review Queue (.csv)"}
+            </button>
+          </div>
+          {(actionError || actionOk) && (
+            <div
+              style={{
+                marginBottom: "0.75rem",
+                fontSize: "0.8rem",
+                color: actionError ? "var(--accent-red, #b91c1c)" : "var(--accent-green, #15803d)",
+              }}
+            >
+              {actionError || actionOk}
+            </div>
+          )}
           <table className={styles.reviewTable}>
             <thead>
               <tr>
@@ -1001,7 +1183,7 @@ export default function VisualConversionDetail({
               </tr>
             </thead>
             <tbody>
-              {rawCards
+              {cardsState
                 .filter((c) => c.status === "MANUAL_REVIEW" || c.status === "UNSUPPORTED")
                 .map((card) => (
                   <tr key={card.id}>

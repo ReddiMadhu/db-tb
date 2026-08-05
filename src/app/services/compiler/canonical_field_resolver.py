@@ -508,7 +508,19 @@ class CanonicalFieldResolver:
                 "datatype": f.datatype,
                 "role": f.role,
                 "is_calculated": f.is_calculated,
+                "formula": f.formula or "",
+                "original_formula": f.formula or "",
+                "compiled_sql": f.compiled_sql or "",
+                "is_table_calc": f.is_table_calc,
                 "is_excluded": f.is_excluded,
                 "exclude_reason": f.exclude_reason,
+                "expression_type": (
+                    "TABLE_CALC" if f.is_table_calc
+                    else "LOD" if f.formula and re.search(
+                        r'\{\s*(FIXED|INCLUDE|EXCLUDE)\b', f.formula, re.IGNORECASE
+                    )
+                    else "STANDARD" if f.is_calculated
+                    else "COLUMN"
+                ),
             })
         return result

@@ -14,6 +14,7 @@ from datetime import datetime
 from app.models.metadata import WorkbookMetadata
 from app.services.parser.tableau_extractor import parse_workbook
 from app.services.parser.dependency_graph import DependencyGraphEngine
+from app.services.parser.workbook_ontology import build_workbook_ontology
 from app.services.normalizer.tom_to_ubim import normalize_tom_to_ubim
 from app.services.normalizer.optimizer import optimize_ubim
 from app.services.generator.lakeview_generator import generate_lakeview_dashboard
@@ -292,16 +293,19 @@ class MigrationPipeline:
             for d in workbook_meta.dashboards:
                 dashboards_list.append({
                     "name": d.name,
-                    "title": d.title or d.name,
+                    "title": d.title,  # may be null — do not silently substitute name
                     "worksheets": d.worksheets,
                     "zone_count": d.total_zone_count,
                     "filter_controls": d.filter_controls,
+                    "legend_controls": d.legend_controls,
                 })
 
             main_db = workbook_meta.dashboards[0] if workbook_meta.dashboards else None
             dashboard_name = main_db.name if main_db else "Workbook Dashboard"
-            dashboard_title = (main_db.title if main_db and main_db.title else main_db.name) if main_db else "Dashboard"
+            # title is authoritative metadata only; do not fall back to name here
+            dashboard_title = main_db.title if main_db else None
             dashboard_filters = main_db.filter_controls if main_db else []
+            dashboard_legends = main_db.legend_controls if main_db else []
 
             datasources_list = []
             seen_ds_names = set()
@@ -327,9 +331,11 @@ class MigrationPipeline:
                     })
                 for col in ds.columns:
                     cname = col.caption or col.internal_name
-                    if col.datatype in ('real', 'integer') or col.formula:
+                    role = (col.role or "").lower().strip()
+                    # Role attribute is sole source of truth — never datatype
+                    if role == "measure":
                         measures_set.add(cname)
-                    else:
+                    elif role == "dimension":
                         dimensions_set.add(cname)
 
             measures_list = sorted(list(measures_set))
@@ -338,24 +344,30 @@ class MigrationPipeline:
             # Build detailed visuals for frontend rendering (enriched for Visual Intelligence Explorer)
             detailed_visuals = []
             for w in workbook_meta.worksheets:
-                ws_measures = [sf.field_name for sf in w.columns_shelves + w.rows_shelves if sf.derivation]
-                ws_dims = [sf.field_name for sf in w.columns_shelves + w.rows_shelves if not sf.derivation]
                 detailed_visuals.append({
                     "name": w.name,
                     "title": w.title or w.name,
+                    "caption": w.caption or "",
+                    "description": w.description or "",
+                    "hidden": w.hidden,
                     "type": w.visual_type or "Visual Chart",
                     "mark_type": w.mark_type or "Automatic",
                     "worksheet": w.name,
                     "columns": w.columns,
                     "rows": w.rows,
-                    "measures": ws_measures if ws_measures else measures_list[:2],
-                    "dimensions": ws_dims if ws_dims else dimensions_list[:2],
+                    "measures": list(w.measures) if w.measures else [],
+                    "dimensions": list(w.dimensions) if w.dimensions else [],
                     "filters": [f.field_name for f in w.filters],
                     "encoding": f"Mark Type: {w.mark_type or 'Automatic'}, Visual: {w.visual_type or 'Chart'}",
                     "tooltip": w.tooltip_text or "",
-                    # ── Enriched fields for Visual Intelligence Explorer ──
                     "datasource_name": w.datasource_name or "",
                     "used_calculated_fields": list(w.used_calculated_fields) if w.used_calculated_fields else [],
+                    "used_parameters": list(w.used_parameters) if w.used_parameters else [],
+                    "used_sets": list(w.used_sets) if w.used_sets else [],
+                    "used_groups": list(w.used_groups) if w.used_groups else [],
+                    "used_hierarchies": list(w.used_hierarchies) if w.used_hierarchies else [],
+                    "used_table_calcs": list(w.used_table_calcs) if w.used_table_calcs else [],
+                    "used_lod_calcs": list(w.used_lod_calcs) if w.used_lod_calcs else [],
                     "rows_shelves": [
                         {"field_name": sf.field_name, "derivation": sf.derivation, "raw": sf.raw}
                         for sf in w.rows_shelves
@@ -364,20 +376,35 @@ class MigrationPipeline:
                         {"field_name": sf.field_name, "derivation": sf.derivation, "raw": sf.raw}
                         for sf in w.columns_shelves
                     ],
+                    "pages_shelf": [
+                        {"field_name": sf.field_name, "derivation": sf.derivation, "raw": sf.raw}
+                        for sf in w.pages_shelf
+                    ],
+                    "measure_values_used": w.measure_values_used,
                     "encodings": [
                         {"channel": enc.channel, "field_name": enc.field_name, "field_type": enc.field_type,
                          "aggregation": enc.aggregation, "derivation": enc.derivation}
                         for enc in w.encodings
                     ],
+                    "mark_properties": [mp.model_dump() for mp in w.mark_properties],
+                    "axes": [a.model_dump() for a in w.axes],
+                    "legends": [l.model_dump() for l in w.legends],
+                    "tooltip_fields": [tf.model_dump() for tf in w.tooltip_fields],
+                    "analytics": [a.model_dump() for a in w.analytics],
                     "sorts": [
                         {"field_name": s.field_name, "direction": s.direction, "sort_type": s.sort_type}
                         for s in w.sorts
                     ],
                     "filter_details": [
                         {"field_name": f.field_name, "filter_type": f.filter_type,
-                         "is_context_filter": f.is_context_filter, "is_global": f.is_global, "scope": f.scope}
+                         "min_value": f.min_value, "max_value": f.max_value,
+                         "is_context_filter": f.is_context_filter, "is_global": f.is_global, "scope": f.scope,
+                         "ui_mode": f.ui_mode, "is_datasource_filter": f.is_datasource_filter, "is_table_calc_filter": f.is_table_calc_filter}
                         for f in w.filters
                     ],
+                    "related_actions": w.related_actions,
+                    "dashboard_consumers": w.dashboard_consumers,
+                    "complexity": w.complexity.model_dump() if w.complexity else None,
                 })
 
             calc_fields_list = []
@@ -393,6 +420,9 @@ class MigrationPipeline:
                             "formula": cf.formula,
                             "type": cf.formula_type,
                             "datasource": ds.name,
+                            "return_type": cf.return_type or cf.datatype,
+                            "dependencies": list(cf.depends_on_fields),
+                            "is_used": cf.is_used,
                         })
             parameters_list = [
                 {"name": p.name, "datatype": p.datatype, "current_value": p.current_value, "domain_type": p.domain_type}
@@ -402,9 +432,29 @@ class MigrationPipeline:
             for w in workbook_meta.worksheets:
                 for f in w.filters:
                     filters_list.append({"worksheet": w.name, "field": f.field_name, "type": f.filter_type, "scope": f.scope})
-            groups_list = [{"name": g.name, "field": g.field, "members": g.members[:20]} for g in workbook_meta.groups]
+            groups_list = [
+                {"name": g.name, "field": g.field, "members": g.members[:20], "auto_column": g.auto_column, "hidden": g.hidden}
+                for g in workbook_meta.groups
+            ]
             sets_list = [{"name": s.name, "field": s.field, "condition": s.condition} for s in workbook_meta.sets]
             hierarchies_list = [{"name": h.name, "levels": h.levels} for h in workbook_meta.hierarchies]
+            actions_list = [
+                {
+                    "name": a.name,
+                    "caption": a.caption,
+                    "action_type": a.type,
+                    "activation_type": a.trigger,
+                    "source": a.source,
+                    "source_type": a.source_type,
+                    "target": a.target[0] if a.target else None,
+                    "targets": list(a.target),
+                    "field": a.fields[0] if a.fields else None,
+                    "fields": list(a.fields),
+                    "dashboard": a.dashboard,
+                    "command": a.command,
+                }
+                for a in workbook_meta.actions
+            ]
 
             # Joins / Relationships from datasources
             joins_list = []
@@ -515,6 +565,7 @@ class MigrationPipeline:
                     "dashboard_name": dashboard_name,
                     "dashboard_title": dashboard_title,
                     "dashboard_filters": dashboard_filters,
+                    "dashboard_legends": dashboard_legends,
                     "detailed_visuals": detailed_visuals,
                     "measures": measures_list,
                     "dimensions": dimensions_list,
@@ -527,9 +578,11 @@ class MigrationPipeline:
                     "groups": groups_list,
                     "sets": sets_list,
                     "hierarchies": hierarchies_list,
+                    "actions": actions_list,
                     "joins": joins_list,
                     "relationships": relationships_list,
                     "databricks_discovery": databricks_discovery,
+                    "workbook_ontology": build_workbook_ontology(workbook_meta).get("workbook_ontology"),
                 },
                 "logs": [
                     f"[INFO] Unpacking {filename}",
@@ -538,7 +591,10 @@ class MigrationPipeline:
                     f"[INFO] DAG topological order resolved ({len(cycles)} cycles detected)",
                     f"[SUCCESS] Parse completed: {calc_count} calculated fields indexed",
                 ],
-                "warnings": [f"Circular reference: {c}" for c in cycles] if cycles else [],
+                "warnings": (
+                    [f"Circular reference: {c}" for c in cycles]
+                    + list(getattr(workbook_meta, "parse_warnings", []) or [])
+                ),
                 "errors": [],
                 "data": workbook_meta,
             }
@@ -550,350 +606,75 @@ class MigrationPipeline:
         )
 
         # ═══════════════════════════════════════════
-        # Stage 3: Calculation Deep Dive (backend: Expressions)
-        # ═══════════════════════════════════════════
-        self.log("INFO", "Stage 4: Calculating field dependencies and expression analysis")
-
-        def _do_calc_deep_dive():
-            from app.services.compiler.canonical_field_resolver import CanonicalFieldResolver
-            field_resolver = CanonicalFieldResolver(workbook_meta, semantic_model=self.semantic_model)
-
-            registry = field_resolver.dump_registry()
-            excluded = [f for f in registry if f.get('is_excluded')]
-            # Validate fields against UC schema if semantic model is available
-            mismatches = []
-            if self.semantic_model is not None:
-                mismatches = field_resolver.validate_against_schema()
-                for mm in mismatches[:20]:
-                    self.log("WARNING", f"Field '{mm['field']}' (physical: '{mm['physical_name']}') not found in Unity Catalog schema")
-
-            # Build DAG metadata using DependencyGraphEngine
-            from app.services.parser.dependency_graph import DependencyGraphEngine
-            dag_engine = DependencyGraphEngine(workbook_meta)
-            cycles = dag_engine.detect_cycles()
-            topo_order = dag_engine.get_topological_order()
-            orphans = dag_engine.get_orphans()
-            total_dag_nodes = len(dag_engine.graph.nodes())
-
-            total_fields = len(registry)
-            calc_fields = [f for f in registry if f.get('is_calculated')]
-            lod_fields = [f for f in registry if f.get('expression_type') == 'LOD']
-            window_fields = [f for f in registry if f.get('expression_type') == 'TABLE_CALC']
-            nested = [f for f in registry if f.get('has_dependencies')]
-
-            # Build detailed calculated fields with lineage & DAG node info
-            calc_fields_detail = []
-            for f in calc_fields[:200]:
-                deps = f.get('dependencies', []) or []
-                ref_fields = f.get('referenced_fields', []) or []
-                name = f.get('internal_name', '')
-                caption = f.get('caption', '') or name
-                formula = f.get('original_formula', f.get('formula', ''))
-                ds_name = f.get('datasource', 'Default')
-
-                # Construct lineage path
-                tables_ref = list(set([rf for rf in ref_fields if "Table" in rf or "tbl" in rf.lower()] or ["Claims", "Policy"]))
-                lineage_path = [
-                    {"step": "Source Tables", "name": ", ".join(tables_ref[:2]) if tables_ref else "Claims Table", "type": "table"},
-                    {"step": "Base Columns", "name": deps[0] if deps else "Approved Claims", "type": "column"},
-                    {"step": "Calculated Logic", "name": caption, "type": "calc"},
-                    {"step": "Databricks View", "name": f"vw_{caption.lower().replace(' ', '_')}", "type": "databricks"},
-                    {"step": "Published Metric", "name": f"Metric: {caption}", "type": "metric"}
-                ]
-
-                is_unsupported = f.get('is_unsupported', False)
-                status = "Needs Review" if is_unsupported or f.get('expression_type') == 'TABLE_CALC' else "Compatible"
-                purpose = f"Measures and calculates {caption.lower()} for business analysis."
-                if "ratio" in caption.lower() or "rate" in caption.lower() or "/" in formula:
-                    purpose = f"Measures percentage / ratio performance for {caption}."
-                elif "avg" in formula.lower() or "average" in caption.lower():
-                    purpose = f"Calculates average distribution of {caption}."
-                elif "sum" in formula.lower() or "total" in caption.lower():
-                    purpose = f"Aggregates total volume of {caption}."
-
-                calc_fields_detail.append({
-                    "name": name,
-                    "caption": caption,
-                    "formula": formula,
-                    "compiled_sql": f.get('compiled_sql', f"SUM({name})"),
-                    "type": f.get('expression_type', 'STANDARD'),
-                    "status": status,
-                    "purpose": purpose,
-                    "dependencies": deps[:10],
-                    "referenced_fields": ref_fields[:10],
-                    "referenced_tables": tables_ref,
-                    "datasource": ds_name,
-                    "confidence_score": 98 if status == "Compatible" else 75,
-                    "ai_interpretation": f"Formula logic for '{caption}' correctly understood. Aggregation and column references verified.",
-                    "lineage_path": lineage_path,
-                })
-
-            lod_detail = [
-                {
-                    "name": f.get('internal_name', ''),
-                    "formula": f.get('original_formula', f.get('formula', '')),
-                    "compiled_sql": f.get('compiled_sql', ''),
-                    "datasource": f.get('datasource', ''),
-                }
-                for f in lod_fields[:100]
-            ]
-            window_detail = [
-                {
-                    "name": f.get('internal_name', ''),
-                    "formula": f.get('original_formula', f.get('formula', '')),
-                    "compiled_sql": f.get('compiled_sql', ''),
-                    "datasource": f.get('datasource', ''),
-                }
-                for f in window_fields[:100]
-            ]
-            excluded_detail = [
-                {
-                    "name": f.get('internal_name', ''),
-                    "reason": f.get('exclude_reason', ''),
-                }
-                for f in excluded[:50]
-            ]
-            mismatch_detail = [
-                {
-                    "field": mm.get('field', ''),
-                    "physical_name": mm.get('physical_name', ''),
-                    "expected_type": mm.get('expected_type', ''),
-                }
-                for mm in mismatches[:50]
-            ]
-
-            # Topo Layers
-            topological_layers = [
-                {"level": 1, "name": "Source Tables & Raw Columns", "description": "Base physical schema from Databricks Unity Catalog", "count": sum(len(ds.columns) for ds in workbook_meta.datasources)},
-                {"level": 2, "name": "Base Measures & Aggregations", "description": "Direct aggregate calculations (SUM, COUNT, MIN, MAX)", "count": len([c for c in calc_fields if not c.get('has_dependencies')])},
-                {"level": 3, "name": "Nested & LOD Calculations", "description": "Inter-dependent calculations, FIXED/INCLUDE LODs & Window functions", "count": len(nested) + len(lod_fields)},
-                {"level": 4, "name": "Published Metrics & Dashboard Views", "description": "Metrics published to Lakeview visuals and interactive filters", "count": len(workbook_meta.worksheets)},
-            ]
-
-            return {
-                "status": "COMPLETED",
-                "output_summary": f"DAG Analyzed: {total_dag_nodes} nodes, {len(calc_fields)} calculated fields, {len(cycles)} cycles detected",
-                "metrics": {
-                    "dag_total_nodes": total_dag_nodes,
-                    "total_fields": total_fields,
-                    "calculated_fields": len(calc_fields),
-                    "nested_calculations": len(nested),
-                    "lod_expressions": len(lod_fields),
-                    "window_functions": len(window_fields),
-                    "table_calculations": len(window_fields),
-                    "dependency_cycles": len(cycles),
-                    "orphan_fields": len(orphans),
-                    "max_dependency_depth": 4 if len(nested) > 0 else 2,
-                    "topological_levels": 4,
-                    "excluded_fields": len(excluded),
-                    "schema_mismatches": len(mismatches),
-                    "complexity_analysis": "HIGH" if len(lod_fields) > 5 else "MEDIUM" if len(calc_fields) > 10 else "LOW",
-                    "migration_confidence": max(0, 100 - len(mismatches) * 5 - len(excluded) * 2),
-                },
-                "artifacts": {
-                    "dag_summary": {
-                        "total_nodes": total_dag_nodes,
-                        "calc_count": len(calc_fields),
-                        "understood_count": len(calc_fields) - len(excluded),
-                        "review_count": len(excluded) + len(mismatches),
-                        "confidence": max(0, 100 - len(mismatches) * 5 - len(excluded) * 2),
-                        "business_rules_count": max(len(calc_fields), 18),
-                        "dependencies_count": sum(len(f.get("dependencies", [])) for f in calc_fields) or 42,
-                        "has_cycles": len(cycles) > 0,
-                        "orphan_count": len(orphans),
-                    },
-                    "topological_layers": topological_layers,
-                    "calculated_fields": calc_fields_detail,
-                    "lod_expressions": lod_detail,
-                    "window_functions": window_detail,
-                    "excluded_fields": excluded_detail,
-                    "schema_mismatches": mismatch_detail,
-                    "dag_integrity": [
-                        {"check": "Zero circular dependencies in DAG", "passed": len(cycles) == 0, "status": "Valid"},
-                        {"check": "Topological execution ordering resolved", "passed": len(topo_order) > 0, "status": "Valid"},
-                        {"check": "All formula field references mapped to Unity Catalog", "passed": len(mismatches) == 0, "status": "Valid" if len(mismatches) == 0 else "Warning"},
-                        {"check": "Aggregation logic & data types verified", "passed": True, "status": "Valid"},
-                    ]
-                },
-                "logs": [
-                    f"[INFO] Building DAG network from {len(workbook_meta.datasources)} datasources",
-                    f"[INFO] Indexed {total_dag_nodes} nodes in DAG graph",
-                    f"[INFO] Resolved topological execution sequence ({len(topo_order)} items)",
-                    f"[{'SUCCESS' if len(cycles) == 0 else 'WARNING'}] DAG cycle validation: {len(cycles)} cycles detected",
-                ],
-                "warnings": [f"Schema mismatch: {mm['field']}" for mm in mismatches[:10]],
-                "errors": [],
-                "data": field_resolver,
-            }
-
-        field_resolver = self._run_stage(
-            "CALC_DEEP_DIVE",
-            input_summary=f"{sum(len(ds.calculated_fields) for ds in workbook_meta.datasources)} raw Tableau formulas",
-            fn=_do_calc_deep_dive,
-        )
-
-        # ═══════════════════════════════════════════
         # NOTE: Source Mapping Validation (Stage 3) is now handled as a
         # pre-flight check in the /execute endpoint before the pipeline runs.
         # The SOURCE_MAPPING stage result is already persisted as COMPLETED.
         # ═══════════════════════════════════════════
 
         # ═══════════════════════════════════════════
-        # Stage 5: Calculation Logic Conversion (backend: SQL)
+        # Stage 4: Calculation Logic Conversion
+        # (field resolve + expression analysis + SQL transpile)
         # ═══════════════════════════════════════════
-        self.log("INFO", "Stage 6: Compiling expressions & building canonical field resolver")
+        self.log("INFO", "Stage 4: Resolving fields and compiling expressions to Databricks SQL")
 
-        # The field_resolver was already built in CALC_DEEP_DIVE; this stage is about
-        # the SQL transpilation that happens during UBIM normalization.
-        # We mark it as COMPLETED with relevant SQL-specific metrics.
         def _do_calc_logic_conversion():
-            from app.services.compiler.expression_compiler import compile_expression_to_sql
+            from app.services.compiler.canonical_field_resolver import CanonicalFieldResolver
+            from app.services.compiler.calc_logic_conversion import (
+                build_calc_logic_conversion_artifacts,
+            )
 
-            registry = field_resolver.dump_registry() if hasattr(field_resolver, 'dump_registry') else []
-            conversions = []
+            # Same resolver path formerly run as CALC_DEEP_DIVE — kept here so
+            # layout / UBIM still receive a fully built CanonicalFieldResolver.
+            resolver = CanonicalFieldResolver(
+                workbook_meta, semantic_model=self.semantic_model
+            )
+            mismatches = []
+            if self.semantic_model is not None:
+                mismatches = resolver.validate_against_schema()
+                for mm in mismatches[:20]:
+                    self.log(
+                        "WARNING",
+                        f"Field '{mm['field']}' (physical: '{mm['physical_name']}') "
+                        f"not found in Unity Catalog schema",
+                    )
 
-            # 1. First add expressions from canonical field_resolver registry
-            for f in registry:
-                orig_f = f.get('original_formula', f.get('formula', ''))
-                comp_sql = f.get('compiled_sql', '')
-                if not comp_sql and orig_f:
-                    comp_sql = compile_expression_to_sql(orig_f).get('sql', '')
-                
-                caption = f.get('caption', '') or f.get('internal_name', '')
-                is_unsupported = f.get('is_unsupported', False)
+            result = build_calc_logic_conversion_artifacts(
+                workbook_meta,
+                resolver,
+                use_llm=True,
+                semantic_model=self.semantic_model,
+            )
+            calc_count = sum(
+                1 for f in resolver.dump_registry() if f.get("is_calculated")
+            )
+            metrics = result.setdefault("metrics", {})
+            metrics["calculated_fields"] = calc_count
+            if mismatches:
+                result.setdefault("warnings", []).extend(
+                    [f"Schema mismatch: {mm['field']}" for mm in mismatches[:10]]
+                )
+            result["data"] = resolver
+            return result
 
-                ai_note = "Original business logic transpiled to Spark SQL."
-                if "/" in orig_f and "NULLIF" in comp_sql:
-                    ai_note = "Added NULLIF safeguard to prevent divide-by-zero errors in Databricks."
-                elif "FIXED" in orig_f or "INCLUDE" in orig_f:
-                    ai_note = "Transpiled Tableau LOD expression into Databricks SQL subquery / window aggregation."
-                elif "IF" in orig_f or "CASE" in orig_f:
-                    ai_note = "Mapped conditional IF/THEN branching logic to standard Spark CASE WHEN statement."
-
-                formula_type = "STANDARD"
-                if "FIXED" in orig_f or "INCLUDE" in orig_f or "EXCLUDE" in orig_f:
-                    formula_type = "LOD"
-                elif "IF" in orig_f or "CASE" in orig_f or "IIF" in orig_f:
-                    formula_type = "CONDITIONAL"
-                elif any(tc in orig_f.upper() for tc in ["RUNNING_", "RANK", "INDEX()", "FIRST()", "LAST()", "SIZE()"]):
-                    formula_type = "TABLE_CALC"
-
-                conversions.append({
-                    "name": f.get('internal_name', ''),
-                    "caption": caption,
-                    "formula_type": formula_type,
-                    "purpose": f"Transpiled SQL expression for {caption}",
-                    "original_formula": orig_f,
-                    "compiled_sql": comp_sql or f"/* Unable to transpile */ `{caption}`",
-                    "ai_explanation": ai_note,
-                    "confidence_score": 98 if not is_unsupported else 65,
-                    "validation_status": "VALID" if not is_unsupported else "WARNING",
-                    "datasource": f.get('datasource', ''),
-                })
-
-            # 2. Also harvest calculated fields directly from workbook metadata datasources if not in registry
-            existing_names = {c["caption"] for c in conversions} | {c["name"] for c in conversions}
-            if hasattr(workbook_meta, 'datasources'):
-                for ds in workbook_meta.datasources:
-                    if hasattr(ds, 'calculated_fields') and ds.calculated_fields:
-                        for cf in ds.calculated_fields:
-                            caption = cf.caption or cf.name
-                            if caption in existing_names or cf.name in existing_names:
-                                continue
-                            existing_names.add(caption)
-                            orig_f = cf.formula or cf.name
-                            comp_res = compile_expression_to_sql(orig_f)
-                            comp_sql = comp_res.get('sql', '')
-
-                            ai_note = "Transpiled Tableau formula directly to Databricks Spark SQL."
-                            if "/" in orig_f and "NULLIF" in comp_sql:
-                                ai_note = "Added NULLIF safeguard for zero-division protection."
-                            elif "FIXED" in orig_f or "INCLUDE" in orig_f:
-                                ai_note = "Transpiled Tableau LOD expression."
-                            elif "IF" in orig_f or "CASE" in orig_f:
-                                ai_note = "Mapped IF/THEN logic to Spark CASE WHEN."
-
-                            conversions.append({
-                                "name": cf.name,
-                                "caption": caption,
-                                "formula_type": getattr(cf, 'formula_type', 'STANDARD'),
-                                "purpose": f"Transpiled SQL expression for {caption}",
-                                "original_formula": orig_f,
-                                "compiled_sql": comp_sql or f"/* Standalone column */ `{caption}`",
-                                "ai_explanation": ai_note,
-                                "confidence_score": 98,
-                                "validation_status": "VALID",
-                                "datasource": ds.name or '',
-                            })
-
-            unsupported_detail = [c for c in conversions if c["validation_status"] == "WARNING"]
-            compiled_items = [c for c in conversions if c["compiled_sql"]]
-
-            # All compiled SQL concatenated for generated_code display
-            all_sql_lines = []
-            for c in conversions:
-                if c.get('compiled_sql'):
-                    all_sql_lines.append(f"-- ==========================================\n-- Field: {c.get('caption')} ({c.get('formula_type')})\n-- Tableau: {c.get('original_formula')}\n-- ==========================================\n{c.get('compiled_sql')};\n")
-
-            all_sql = "\n\n".join(all_sql_lines)
-
-            total_comp = len(compiled_items)
-            total_unsupp = len(unsupported_detail)
-            total_expr = len(conversions)
-
-            return {
-                "status": "COMPLETED",
-                "output_summary": f"SQL conversion ready: {total_comp} expressions compiled, {total_unsupp} unsupported",
-                "metrics": {
-                    "expressions_compiled": total_comp,
-                    "expressions_unsupported": total_unsupp,
-                    "total_expressions": total_expr,
-                    "compilation_rate": f"{(total_comp / max(total_expr, 1)) * 100:.1f}%",
-                    "databricks_compatibility": 98 if total_unsupp == 0 else 88,
-                },
-                "artifacts": {
-                    "conversions": conversions,
-                    "unsupported": unsupported_detail,
-                    "quality_breakdown": {
-                        "aggregation_rules": 100,
-                        "conditional_logic": 100,
-                        "date_functions": 100,
-                        "window_functions": 95,
-                        "lod_expressions": 92,
-                    },
-                    "conversion_summary_bullets": [
-                        f"{total_expr} business calculations analyzed",
-                        f"{total_comp} converted automatically to Databricks SQL",
-                        f"{total_unsupp} requires manual SME review or adjustment",
-                        "All aggregation logic and business meaning preserved",
-                        "Added zero-division NULLIF protections where needed",
-                        "Full compatibility with Databricks Lakeview Dashboards",
-                    ],
-                    "manual_review_queue": unsupported_detail,
-                },
-                "logs": [
-                    f"[INFO] Compiling {total_expr} expressions to Databricks SQL",
-                    f"[INFO] {total_comp} expressions compiled successfully",
-                    f"[{'SUCCESS' if not unsupported_detail else 'WARNING'}] Conversion complete",
-                ],
-                "warnings": [f"Unsupported: {c['caption']}" for c in unsupported_detail[:10]],
-                "errors": [],
-                "generated_code": all_sql or "-- No calculated fields found",
-                "data": None,
-            }
-
-        self._run_stage(
+        field_resolver = self._run_stage(
             "CALC_LOGIC_CONVERSION",
-            input_summary="Tableau formula syntax tree + field resolver",
+            input_summary=(
+                f"{sum(len(ds.calculated_fields) for ds in workbook_meta.datasources)} "
+                "Tableau calculated-field formulas"
+            ),
             fn=_do_calc_logic_conversion,
         )
 
         # ═══════════════════════════════════════════
-        # Stage 6: Dashboard Layout Generation (backend: UBIM + Generate)
+        # Stage 5: Dashboard Layout Generation (backend: UBIM + Generate)
         # ═══════════════════════════════════════════
-        self.log("INFO", "Stage 7: Normalizing TOM to Universal BI Model (UBIM)")
+        self.log("INFO", "Stage 5: Normalizing TOM to Universal BI Model (UBIM)")
 
         def _do_layout_generation():
+            from app.services.generator.layout_stage_artifacts import (
+                build_layout_generation_artifacts,
+            )
+
             ubim = normalize_tom_to_ubim(
                 workbook_meta,
                 table_mapping=self.table_mapping,
@@ -904,179 +685,9 @@ class MigrationPipeline:
             )
             ubim_opt = optimize_ubim(ubim)
 
-            self.log("INFO", "Stage 8: Generating Lakeview JSON & projecting 6-column layout grid")
+            self.log("INFO", "Stage 5: Generating Lakeview JSON & projecting 6-column layout grid")
             lakeview_dash = generate_lakeview_dashboard(ubim_opt)
-
-            widget_count = sum(len(p.layout) for p in lakeview_dash.pages) if hasattr(lakeview_dash, 'pages') else 0
-            page_count = len(lakeview_dash.pages) if hasattr(lakeview_dash, 'pages') else 0
-            dataset_count = len(lakeview_dash.datasets) if hasattr(lakeview_dash, 'datasets') else 0
-
-            # Build actual artifact data
-            pages_detail = []
-            visual_types = set()
-            widgets_detail = []
-            if hasattr(lakeview_dash, 'pages'):
-                for p in lakeview_dash.pages:
-                    page_widgets = []
-                    for item in p.layout:
-                        w = item.widget
-                        w_info = {
-                            "name": w.name,
-                            "type": "textbox" if w.textbox_spec else "chart",
-                            "position": {"x": item.position.x, "y": item.position.y, "w": item.position.width, "h": item.position.height},
-                        }
-                        if w.spec:
-                            spec_version = w.spec.get("version", 0)
-                            w_info["spec_version"] = spec_version
-                            # Try to extract visual type from spec
-                            for enc_key in ["mark", "encoding"]:
-                                if enc_key in w.spec:
-                                    w_info["visual_type"] = str(w.spec.get("mark", {}).get("type", "unknown")) if isinstance(w.spec.get("mark"), dict) else str(w.spec.get("mark", "unknown"))
-                                    visual_types.add(w_info.get("visual_type", "unknown"))
-                                    break
-                        if w.queries:
-                            w_info["dataset"] = w.queries[0].query.get("datasetName", "") if isinstance(w.queries[0].query, dict) else getattr(w.queries[0].query, 'datasetName', '')
-                        page_widgets.append(w_info)
-                        widgets_detail.append(w_info)
-                    pages_detail.append({
-                        "name": p.name,
-                        "display_name": p.displayName,
-                        "widget_count": len(page_widgets),
-                        "widgets": page_widgets,
-                    })
-
-            datasets_detail = []
-            if hasattr(lakeview_dash, 'datasets'):
-                for ds in lakeview_dash.datasets:
-                    datasets_detail.append({
-                        "name": ds.name,
-                        "display_name": ds.displayName,
-                        "query": ds.query,
-                    })
-
-            # Build detailed visual conversion cards per Tableau worksheet
-            conversion_cards = []
-            successful_count = 0
-            manual_review_count = 0
-            unsupported_count = 0
-
-            if hasattr(workbook_meta, 'worksheets') and workbook_meta.worksheets:
-                for idx, ws in enumerate(workbook_meta.worksheets):
-                    ws_name = ws.name or f"Worksheet {idx + 1}"
-                    t_type = ws.visual_type or ws.mark_type or "Bar Chart"
-                    
-                    enc_color = next((e.field_name for e in ws.encodings if e.channel == 'color'), None)
-                    enc_size = next((e.field_name for e in ws.encodings if e.channel == 'size'), None)
-                    enc_angle = next((e.field_name for e in ws.encodings if e.channel == 'angle'), None)
-                    enc_label = next((e.field_name for e in ws.encodings if e.channel in ('label', 'text')), None)
-                    enc_tooltip = [e.field_name for e in ws.encodings if e.channel == 'tooltip']
-                    
-                    has_measure_names = any('Measure Names' in str(r) for r in ws.rows + ws.columns) or any('Measure Names' in str(e.field_name) for e in ws.encodings)
-                    is_review = has_measure_names or 'unsupported' in t_type.lower()
-                    
-                    if is_review:
-                        manual_review_count += 1
-                        card_status = "MANUAL_REVIEW"
-                    else:
-                        successful_count += 1
-                        card_status = "SUCCESS"
-
-                    db_widget_type = t_type if t_type not in ('automatic', 'text') else 'Bar Chart'
-                    
-                    card_item = {
-                        "id": f"card-{idx + 1}",
-                        "worksheet_name": ws_name,
-                        "status": card_status,
-                        "tableau": {
-                            "type": t_type,
-                            "rows": ws.rows or ["Latitude (generated)"],
-                            "columns": ws.columns or ["Longitude (generated)"],
-                            "color": enc_color,
-                            "size": enc_size,
-                            "angle": enc_angle,
-                            "label": enc_label,
-                            "tooltip": enc_tooltip or ["Value"],
-                            "filters": [f"{f.field_name} filter" for f in ws.filters] or ["Year = 2025"],
-                            "calculated_fields": ws.used_calculated_fields or [],
-                        },
-                        "databricks": {
-                            "widget_type": db_widget_type,
-                            "dataset": ws.datasource_name or "insurance_claims",
-                            "category": enc_color or (ws.columns[0] if ws.columns else "Category_Col"),
-                            "value": enc_label or (ws.rows[0] if ws.rows else "Value_Col"),
-                            "tooltip": enc_tooltip or ["Value_Col"],
-                            "filters": [f"{f.field_name} filter" for f in ws.filters] or ["Year = 2025"],
-                            "aggregation": "SUM",
-                        },
-                        "lakeview_json": {
-                            "widgetType": db_widget_type.lower().replace(" ", ""),
-                            "datasetName": ws.datasource_name or "insurance_claims",
-                            "encodings": {
-                                "category": enc_color or "Category_Col",
-                                "value": enc_label or "Value_Col",
-                            }
-                        },
-                        "validation": {
-                            "visual_type_preserved": True,
-                            "fields_correctly_mapped": not has_measure_names,
-                            "filters_preserved": True,
-                            "aggregations_preserved": True,
-                            "formatting_preserved": True,
-                            "sort_order_preserved": True,
-                            "tooltip_preserved": True,
-                            "calculations_preserved": True,
-                        }
-                    }
-                    if is_review:
-                        card_item["manual_review"] = {
-                            "issue": "Tableau uses Measure Names pivot.",
-                            "reason": "Tableau uses Measure Names. Equivalent Databricks visualization could not be generated automatically.",
-                            "missing_binding": "Category",
-                            "suggested_fix": "Choose one measure manually.",
-                            "recommendation": "Split Measure Names into explicit fields.",
-                            "impact": "Low"
-                        }
-                    conversion_cards.append(card_item)
-
-            import json as _json
-            lakeview_json_str = ""
-            try:
-                lakeview_json_str = _json.dumps(lakeview_dash.to_dict(), indent=2, ensure_ascii=False)
-            except Exception:
-                lakeview_json_str = "{}"
-
-            return {
-                "status": "COMPLETED",
-                "output_summary": f"Generated {page_count} pages, {widget_count} widgets, {dataset_count} datasets",
-                "metrics": {
-                    "pages_generated": page_count,
-                    "widgets_generated": widget_count,
-                    "datasets_generated": dataset_count,
-                    "worksheets_total": len(workbook_meta.worksheets) if hasattr(workbook_meta, 'worksheets') else 20,
-                    "successful_conversions": successful_count or widget_count,
-                    "manual_review_count": manual_review_count,
-                    "unsupported_count": unsupported_count,
-                    "layout_grid": "6-column",
-                    "visual_types_detected": list(visual_types),
-                },
-                "artifacts": {
-                    "pages": pages_detail,
-                    "datasets": datasets_detail,
-                    "widgets": widgets_detail[:200],
-                    "visual_types": list(visual_types),
-                    "conversion_cards": conversion_cards,
-                    "lakeview_json_str": lakeview_json_str,
-                },
-                "logs": [
-                    f"[INFO] UBIM normalization: mapping Tableau marks to Lakeview visual types",
-                    f"[INFO] UBIM optimization pass complete",
-                    f"[INFO] Generating 6-column grid layout coordinates",
-                    f"[SUCCESS] Lakeview dashboard generated: {page_count} pages, {widget_count} widgets",
-                ],
-                "warnings": [],
-                "errors": [],
-                "data": lakeview_dash,
-            }
+            return build_layout_generation_artifacts(workbook_meta, lakeview_dash)
 
         lakeview_dash = self._run_stage(
             "LAYOUT_GENERATION",
@@ -1085,9 +696,9 @@ class MigrationPipeline:
         )
 
         # ═══════════════════════════════════════════
-        # Stage 7: Lakeview Schema Validation (backend: Validate)
+        # Stage 6: Lakeview Schema Validation (backend: Validate)
         # ═══════════════════════════════════════════
-        self.log("INFO", "Stage 9: Executing validation suite & pruning incomplete widgets")
+        self.log("INFO", "Stage 6: Executing validation suite & pruning incomplete widgets")
 
         def _do_schema_validation():
             val_res = validate_lakeview_dashboard(lakeview_dash)
@@ -1115,6 +726,66 @@ class MigrationPipeline:
             error_count = len(val_res.get("errors", []))
             warning_count = len(val_res.get("warnings", []))
 
+            # Ontology fidelity checks (layout chrome preserved into Lakeview)
+            ontology = build_workbook_ontology(workbook_meta).get("workbook_ontology") or {}
+            main_db = workbook_meta.dashboards[0] if workbook_meta.dashboards else None
+            expected_text = len(getattr(main_db, "text_zones", None) or []) if main_db else 0
+            expected_filters = len(getattr(main_db, "filter_controls", None) or []) if main_db else 0
+            lakeview_text = 0
+            lakeview_filters = 0
+            if hasattr(lakeview_dash, "pages"):
+                for p in lakeview_dash.pages:
+                    for item in p.layout:
+                        w = item.widget
+                        if getattr(w, "textbox_spec", None):
+                            lakeview_text += 1
+                        wt = (w.spec or {}).get("widgetType", "") if w.spec else ""
+                        if isinstance(wt, str) and wt.startswith("filter-"):
+                            lakeview_filters += 1
+
+            ontology_fidelity = [
+                {
+                    "check": "Dashboard text zones mapped to Lakeview textboxes",
+                    "expected": expected_text,
+                    "actual": lakeview_text,
+                    "passed": lakeview_text >= min(expected_text, 1) if expected_text else True,
+                },
+                {
+                    "check": "Dashboard filter cards mapped to Lakeview filter widgets",
+                    "expected": expected_filters,
+                    "actual": lakeview_filters,
+                    "passed": lakeview_filters >= min(expected_filters, 1) if expected_filters else True,
+                },
+                {
+                    "check": "Workbook ontology attached for review",
+                    "expected": 1,
+                    "actual": 1 if ontology else 0,
+                    "passed": bool(ontology),
+                },
+                {
+                    "check": "Tableau dashboard actions mapped to Lakeview interactions",
+                    "expected": 0,
+                    "actual": 0,
+                    "passed": len(workbook_meta.actions or []) == 0,
+                    "note": (
+                        f"{len(workbook_meta.actions or [])} action(s) unsupported in Lakeview "
+                        f"(filter/highlight/URL/parameter) — configure cross-filters manually"
+                        if workbook_meta.actions else None
+                    ),
+                },
+            ]
+            for check in ontology_fidelity:
+                if not check["passed"]:
+                    msg = (
+                        f"Ontology fidelity: {check['check']} "
+                        f"(expected {check['expected']}, got {check['actual']})"
+                    )
+                    if check.get("note"):
+                        msg = f"Ontology fidelity: {check['note']}"
+                    val_res.setdefault("warnings", []).append(msg)
+                    self.log("WARNING", msg)
+            warning_count = len(val_res.get("warnings", []))
+
             # Build generated JSON summary (truncated for storage)
             import json as _json
             generated_json_str = None
@@ -1134,6 +805,7 @@ class MigrationPipeline:
                 {"visual": "Maps", "status": "UNSUPPORTED", "notes": "Converted to Table Grid"},
                 {"visual": "KPI Cards", "status": "COMPATIBLE", "notes": "Mapped to Single-Value Counter Card"},
                 {"visual": "Filters", "status": "COMPATIBLE", "notes": "Mapped to Lakeview Filter Widgets"},
+                {"visual": "Text Zones", "status": "COMPATIBLE", "notes": "Mapped to Lakeview Textbox Spec"},
                 {"visual": "Parameters", "status": "CONVERTED", "notes": "Converted to Dashboard Parameters"},
             ]
 
@@ -1146,8 +818,12 @@ class MigrationPipeline:
                     "warning_count": warning_count,
                     "pruned_widgets": len(removed),
                     "tier_status": val_res.get("tier_status", {}),
-                    "visuals_supported_count": 8,
+                    "visuals_supported_count": 9,
                     "visuals_unsupported_count": 1,
+                    "ontology_text_zones_expected": expected_text,
+                    "ontology_text_zones_mapped": lakeview_text,
+                    "ontology_filter_cards_expected": expected_filters,
+                    "ontology_filter_cards_mapped": lakeview_filters,
                 },
                 "artifacts": {
                     "validation_errors": val_res.get("errors", []),
@@ -1156,12 +832,16 @@ class MigrationPipeline:
                     "pruned_widgets": list(removed),
                     "visual_compatibility_matrix": compatibility_matrix,
                     "generated_json_preview": generated_json_str,
+                    "workbook_ontology": ontology,
+                    "ontology_fidelity": ontology_fidelity,
                 },
                 "generated_code": generated_json_str,
                 "logs": [
                     f"[INFO] Running JSON schema validation",
                     f"[INFO] Checking layout bounds (x + width <= 6)",
                     f"[INFO] Checking widget encoding completeness",
+                    f"[INFO] Ontology fidelity: {lakeview_text}/{expected_text} text, "
+                    f"{lakeview_filters}/{expected_filters} filters",
                     f"[{'SUCCESS' if val_res.get('valid') else 'WARNING'}] Validation {'passed' if val_res.get('valid') else 'completed with issues'}",
                 ],
                 "warnings": val_res.get("warnings", []),

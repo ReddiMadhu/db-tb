@@ -20,7 +20,7 @@ router = APIRouter()
 
 @router.get("/{job_uuid}/stages")
 async def get_all_stages(job_uuid: str, db: Session = Depends(get_db)):
-    """Returns all 8 stage statuses for a migration job.
+    """Returns all pipeline stage statuses for a migration job.
 
     Used by the PipelineStepper component to render the horizontal
     pipeline with correct status icons and colors.
