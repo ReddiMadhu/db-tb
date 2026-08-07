@@ -223,7 +223,12 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
         _require_channels(("x", "y"))
 
     elif wt == "combo":
-        _require_channels(("x", "y"))
+        x_enc = encodings.get("x")
+        if not isinstance(x_enc, dict) or not x_enc.get("fieldName"):
+            errors.append("Combo widget missing required 'x' encoding fieldName.")
+        y_enc = encodings.get("y")
+        if not isinstance(y_enc, dict) or not y_enc.get("primary"):
+            errors.append("Combo widget missing required 'y.primary' encoding object.")
 
     elif wt == "table":
         cols = encodings.get("columns")
@@ -836,24 +841,45 @@ class WidgetFactory:
                 fallback_expr = f"SUM(`{fname}`)" if not query_fields else f"`{fname}`"
                 cls._ensure_field(qfields, fname, fallback_expr)
 
-        primary_y = y_fields[0].get("field") or y_fields[0].get("fieldName") if y_fields else ""
+        primary_fname = ""
+        secondary_fname = ""
+        if y_fields:
+            primary_fname = y_fields[0].get("field") or y_fields[0].get("fieldName") or ""
+            if primary_fname:
+                fallback_expr = f"SUM(`{primary_fname}`)" if not query_fields else f"`{primary_fname}`"
+                cls._ensure_field(qfields, primary_fname, fallback_expr)
+            if len(y_fields) > 1:
+                secondary_fname = y_fields[1].get("field") or y_fields[1].get("fieldName") or ""
+                if secondary_fname:
+                    fallback_expr = f"SUM(`{secondary_fname}`)" if not query_fields else f"`{secondary_fname}`"
+                    cls._ensure_field(qfields, secondary_fname, fallback_expr)
+
+        y_encoding: Dict[str, Any] = {
+            "primary": {
+                "fields": [{"fieldName": primary_fname}],
+                "scale": {"type": "quantitative"},
+            }
+        }
+        if secondary_fname:
+            y_encoding["secondary"] = {
+                "fields": [{"fieldName": secondary_fname}],
+                "scale": {"type": "quantitative"},
+            }
 
         encodings: Dict[str, Any] = {
             "x": _axis_encoding(x_field, infer_scale_type(x_field)),
-            "y": _axis_encoding(primary_y, "quantitative"),
+            "y": y_encoding,
+            "color": {"legend": {}},
+            "label": {"show": True},
         }
-        if color_field:
-            encodings["color"] = _channel_encoding(color_field, "categorical")
 
         spec: Dict[str, Any] = {
             "version": 1,
             "widgetType": "combo",
-            "encodings": encodings,
             "frame": _frame(title, show_title, fallback=_clean_title(x_field)),
-            "mark": {"colors": DEFAULT_COLORS},
+            "encodings": encodings,
+            "data": {"queryName": "main_query"},
         }
-        if enable_dual_axis:
-            spec["dualAxis"] = True
 
         ok, errs = validate_widget_spec(spec)
         if not ok:
