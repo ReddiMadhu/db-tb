@@ -269,6 +269,16 @@ def _create_widget_via_factory(
             return None
 
     if chart_type == ChartType.BAR:
+        x_is_meas = _field_is_measure(x_field, query_fields_list or [])
+        y_is_meas = _field_is_measure(y_field, query_fields_list or [])
+        if x_is_meas and not y_is_meas:
+            x_st = "quantitative"
+            y_st = infer_scale_type(y_field or "")
+            if y_st == "quantitative":
+                y_st = "categorical"
+        else:
+            x_st = infer_scale_type(x_field or "")
+            y_st = "quantitative"
         return WidgetFactory.create_bar_widget(
             dataset_name=dataset_ref,
             x_field=x_field,  # type: ignore[arg-type]
@@ -276,7 +286,8 @@ def _create_widget_via_factory(
             title=title,
             color_field=color_field,
             query_fields=query_fields_list or None,
-            x_scale_type=infer_scale_type(x_field or ""),
+            x_scale_type=x_st,
+            y_scale_type=y_st,
             show_title=show_title,
         )
 

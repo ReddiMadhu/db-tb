@@ -223,12 +223,7 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
         _require_channels(("x", "y"))
 
     elif wt == "combo":
-        y_enc = encodings.get("y")
-        if not isinstance(y_enc, list) or not y_enc:
-            errors.append("Combo widget missing required 'y' encodings list.")
-        x_enc = encodings.get("x")
-        if not isinstance(x_enc, dict) or not x_enc.get("fieldName"):
-            errors.append("Combo widget missing required 'x' encoding fieldName.")
+        _require_channels(("x", "y"))
 
     elif wt == "table":
         cols = encodings.get("columns")
@@ -841,19 +836,11 @@ class WidgetFactory:
                 fallback_expr = f"SUM(`{fname}`)" if not query_fields else f"`{fname}`"
                 cls._ensure_field(qfields, fname, fallback_expr)
 
-        y_encodings = []
-        for yf in y_fields:
-            fname = yf.get("field") or yf.get("fieldName") or ""
-            y_encodings.append({
-                "fieldName": fname,
-                "displayName": _clean_title(fname),
-                "type": yf.get("mark", "bar"),
-                "scale": {"type": "quantitative"},
-            })
+        primary_y = y_fields[0].get("field") or y_fields[0].get("fieldName") if y_fields else ""
 
         encodings: Dict[str, Any] = {
             "x": _axis_encoding(x_field, infer_scale_type(x_field)),
-            "y": y_encodings,
+            "y": _axis_encoding(primary_y, "quantitative"),
         }
         if color_field:
             encodings["color"] = _channel_encoding(color_field, "categorical")
