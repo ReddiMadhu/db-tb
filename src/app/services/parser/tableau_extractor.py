@@ -499,11 +499,31 @@ def _extract_filter_include_exclude(filt, ds_prefixes: list, caption_map: dict =
 def _build_caption_map(root: etree._Element) -> dict:
     """Build map from internal Calculation_ID or name to friendly caption."""
     caption_map = {}
-    for col in root.xpath("//column"):
-        name = col.get("name", "").strip("[]")
+    for col in root.xpath("//column | //column-instance"):
+        name = (col.get("name") or "").strip("[]")
         caption = col.get("caption")
-        if name and caption:
+        if not caption:
+            calc_el = col.find("calculation")
+            if calc_el is not None:
+                caption = calc_el.get("caption") or calc_el.get("name")
+        if name and caption and caption.strip() and caption.strip() != "Calculation":
+            caption = caption.strip()
             caption_map[name] = caption
+
+            # Clean name without prefixes/suffixes
+            clean_name = re.sub(
+                r'^(usr|none|sum|avg|cnt|cntd|ctd|min|max|attr|med|yr|qr|mn|dy|wk):',
+                '',
+                name,
+                flags=re.IGNORECASE,
+            )
+            clean_name = re.sub(r':(nk|qk|ok|tk)$', '', clean_name, flags=re.IGNORECASE)
+            caption_map[clean_name] = caption
+
+            # Extract embedded Calculation_\d+ ID
+            calc_match = re.search(r'Calculation_\d+', name, re.IGNORECASE)
+            if calc_match:
+                caption_map[calc_match.group(0)] = caption
     return caption_map
 
 

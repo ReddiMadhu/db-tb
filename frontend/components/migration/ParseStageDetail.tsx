@@ -166,16 +166,26 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
 
   const calcFields: CalcField[] = useMemo(() => {
     if (!Array.isArray(artifacts.calculated_fields)) return [];
-    return artifacts.calculated_fields.map((cf: any) => ({
-      name: cf.name || "",
-      caption: cf.caption || cf.name || "Calculation",
-      formula: cf.formula || "",
-      type: cf.type || cf.formula_type || "STANDARD",
-      datasource: cf.datasource || "Default",
-      return_type: cf.return_type || undefined,
-      dependencies: Array.isArray(cf.dependencies) ? cf.dependencies : undefined,
-      is_used: typeof cf.is_used === "boolean" ? cf.is_used : undefined,
-    }));
+    return artifacts.calculated_fields.map((cf: any) => {
+      const rawName = (cf.name || cf.internal_name || "").replace(/^\[|\]$/g, "");
+      let cap = cf.caption;
+      if (!cap || cap === "Calculation") {
+        cap = rawName.replace(/_\d{8,}$/, "").trim();
+      }
+      if (!cap || cap.toLowerCase().startsWith("calculation_")) {
+        cap = cf.formula ? (cf.caption || rawName) : rawName;
+      }
+      return {
+        name: rawName || cap || "Calculated Field",
+        caption: cap || rawName || "Calculated Field",
+        formula: cf.formula || "",
+        type: cf.type || cf.formula_type || "STANDARD",
+        datasource: cf.datasource || "Default",
+        return_type: cf.return_type || undefined,
+        dependencies: Array.isArray(cf.dependencies) ? cf.dependencies : undefined,
+        is_used: typeof cf.is_used === "boolean" ? cf.is_used : undefined,
+      };
+    });
   }, [artifacts]);
 
   const measuresList: string[] = Array.isArray(artifacts.measures) ? artifacts.measures : [];
@@ -209,15 +219,21 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     const map = new Map<string, string>();
     calcFields.forEach((cf) => {
       const cap = cf.caption || cf.name;
-      if (cf.name) map.set(cf.name, cap);
-      if (cf.caption) map.set(cf.caption, cap);
+      if (cap && cap !== "Calculation") {
+        if (cf.name) map.set(cf.name, cap);
+        if (cf.caption) map.set(cf.caption, cap);
 
-      const cleanName = cf.name.replace(/^\[|\]$/g, "").trim();
-      if (cleanName) map.set(cleanName, cap);
+        const cleanName = cf.name.replace(/^\[|\]$/g, "").trim();
+        if (cleanName) map.set(cleanName, cap);
 
-      // Strip trailing ID numbers e.g. Exposure Change (copy)_0500583912902664 -> Exposure Change (copy)
-      const stripped = cleanName.replace(/_\d{8,}$/, "").trim();
-      if (stripped) map.set(stripped, cap);
+        // Strip trailing ID numbers e.g. Exposure Change (copy)_0500583912902664 -> Exposure Change (copy)
+        const stripped = cleanName.replace(/_\d{8,}$/, "").trim();
+        if (stripped) map.set(stripped, cap);
+
+        // Extract Calculation_\d+ ID
+        const match = cleanName.match(/Calculation_\d+/i);
+        if (match) map.set(match[0], cap);
+      }
     });
     return map;
   }, [calcFields]);
@@ -227,13 +243,36 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       if (!field) return "";
       const clean = field.replace(/^\[|\]$/g, "").trim();
 
-      if (calcNameMap.has(clean)) return calcNameMap.get(clean)!;
-      if (calcNameMap.has(field)) return calcNameMap.get(field)!;
+      if (calcNameMap.has(clean) && calcNameMap.get(clean) !== "Calculation") {
+        return calcNameMap.get(clean)!;
+      }
+      if (calcNameMap.has(field) && calcNameMap.get(field) !== "Calculation") {
+        return calcNameMap.get(field)!;
+      }
 
-      // Strip trailing _0500... digits
-      const stripped = clean.replace(/_\d{8,}$/, "").trim();
-      if (calcNameMap.has(stripped)) return calcNameMap.get(stripped)!;
-      if (stripped && !stripped.startsWith("Calculation_")) return stripped;
+      const unquoted = clean
+        .replace(/^(usr|none|sum|avg|cnt|cntd|ctd|min|max|attr|med|yr|qr|mn|dy|wk):/i, "")
+        .replace(/:(nk|qk|ok|tk)$/i, "")
+        .trim();
+
+      if (calcNameMap.has(unquoted) && calcNameMap.get(unquoted) !== "Calculation") {
+        return calcNameMap.get(unquoted)!;
+      }
+
+      const calcMatch = unquoted.match(/Calculation_\d+/i);
+      if (calcMatch && calcNameMap.has(calcMatch[0])) {
+        const mapped = calcNameMap.get(calcMatch[0]);
+        if (mapped && mapped !== "Calculation") return mapped;
+      }
+
+      const stripped = unquoted.replace(/_\d{8,}$/, "").trim();
+      if (calcNameMap.has(stripped) && calcNameMap.get(stripped) !== "Calculation") {
+        return calcNameMap.get(stripped)!;
+      }
+
+      if (stripped && !stripped.toLowerCase().startsWith("calculation_")) {
+        return stripped;
+      }
 
       return clean;
     },
