@@ -417,6 +417,7 @@ class MigrationPipeline:
                         calc_fields_list.append({
                             "name": cf.name,
                             "caption": cname,
+                            "internal_name": cf.internal_name,
                             "formula": cf.formula,
                             "type": cf.formula_type,
                             "datasource": ds.name,

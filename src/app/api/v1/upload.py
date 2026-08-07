@@ -259,6 +259,7 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                         unique_calcs.append({
                             "name": cf.name,
                             "caption": cname,
+                            "internal_name": cf.internal_name,
                             "formula": cf.formula,
                             "type": cf.formula_type,
                             "datasource": ds.name,

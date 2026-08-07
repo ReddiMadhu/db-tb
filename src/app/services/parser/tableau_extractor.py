@@ -1091,11 +1091,13 @@ def _extract_worksheet_field_roles(
 
     Uses only <column role='...'> inside this worksheet's own
     <datasource-dependencies> blocks. Role attribute is sole classifier —
-    never datatype. Returns (measures, dimensions) as lists of internal names.
+    never datatype. Returns (measures, dimensions) as caption-resolved
+    display names when caption_map / column caption is available.
     """
     measures = []
     dimensions = []
     seen = set()
+    caption_map = caption_map or {}
     for dep in ws_el.xpath(".//datasource-dependencies"):
         for col in dep.xpath("./column"):
             role = (col.get("role") or "").lower().strip()
@@ -1110,13 +1112,24 @@ def _extract_worksheet_field_roles(
                 flags=re.IGNORECASE,
             )
             base = re.sub(r':(nk|qk|ok|tk)$', '', base, flags=re.IGNORECASE)
-            if not base or base in seen:
+            if not base:
                 continue
-            seen.add(base)
+
+            col_caption = (col.get("caption") or "").strip()
+            if col_caption and col_caption != "Calculation":
+                display = col_caption
+            else:
+                display = caption_map.get(base, base)
+                if display == "Calculation":
+                    display = base
+
+            if display in seen:
+                continue
+            seen.add(display)
             if role == "measure":
-                measures.append(base)
+                measures.append(display)
             elif role == "dimension":
-                dimensions.append(base)
+                dimensions.append(display)
     return measures, dimensions
 
 

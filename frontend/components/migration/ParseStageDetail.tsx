@@ -74,6 +74,7 @@ interface CalcField {
   return_type?: string;
   dependencies?: string[];
   is_used?: boolean;
+  internal_name?: string;
 }
 
 interface ParseStageDetailProps {
@@ -168,12 +169,24 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     if (!Array.isArray(artifacts.calculated_fields)) return [];
     return artifacts.calculated_fields.map((cf: any) => {
       const rawName = (cf.name || cf.internal_name || "").replace(/^\[|\]$/g, "");
+      const internalName = (cf.internal_name || "").replace(/^\[|\]$/g, "").trim() || undefined;
       let cap = cf.caption;
       if (!cap || cap === "Calculation") {
-        cap = rawName.replace(/_\d{8,}$/, "").trim();
+        // Never strip Calculation_<digits> down to bare "Calculation"
+        if (/^calculation_\d+/i.test(rawName)) {
+          cap = undefined;
+        } else {
+          const stripped = rawName.replace(/_\d{8,}$/, "").trim();
+          if (stripped && !/^calculation$/i.test(stripped)) {
+            cap = stripped;
+          }
+        }
       }
       if (!cap || cap.toLowerCase().startsWith("calculation_")) {
-        cap = cf.formula ? (cf.caption || rawName) : rawName;
+        cap = (cf.caption && cf.caption !== "Calculation" ? cf.caption : null) || rawName;
+      }
+      if (/^calculation$/i.test(cap || "")) {
+        cap = rawName;
       }
       return {
         name: rawName || cap || "Calculated Field",
@@ -184,6 +197,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
         return_type: cf.return_type || undefined,
         dependencies: Array.isArray(cf.dependencies) ? cf.dependencies : undefined,
         is_used: typeof cf.is_used === "boolean" ? cf.is_used : undefined,
+        internal_name: internalName,
       };
     });
   }, [artifacts]);
@@ -217,21 +231,33 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   // ── Name to caption lookup map for resolving Calculation_* IDs ──
   const calcNameMap = useMemo(() => {
     const map = new Map<string, string>();
+    const addKey = (key: string | undefined, cap: string) => {
+      if (!key || !cap || cap === "Calculation") return;
+      const clean = key.replace(/^\[|\]$/g, "").trim();
+      if (clean) map.set(clean, cap);
+      map.set(key, cap);
+    };
+
     calcFields.forEach((cf) => {
-      const cap = cf.caption || cf.name;
-      if (cap && cap !== "Calculation") {
-        if (cf.name) map.set(cf.name, cap);
-        if (cf.caption) map.set(cf.caption, cap);
+      const cap = cf.caption && cf.caption !== "Calculation" ? cf.caption : cf.name;
+      if (!cap || cap === "Calculation" || /^calculation_\d+/i.test(cap)) return;
 
-        const cleanName = cf.name.replace(/^\[|\]$/g, "").trim();
-        if (cleanName) map.set(cleanName, cap);
+      addKey(cf.name, cap);
+      addKey(cf.caption, cap);
+      addKey(cf.internal_name, cap);
 
-        // Strip trailing ID numbers e.g. Exposure Change (copy)_0500583912902664 -> Exposure Change (copy)
+      const cleanName = (cf.name || "").replace(/^\[|\]$/g, "").trim();
+      if (cleanName) {
         const stripped = cleanName.replace(/_\d{8,}$/, "").trim();
-        if (stripped) map.set(stripped, cap);
-
-        // Extract Calculation_\d+ ID
+        if (stripped && !/^calculation$/i.test(stripped)) {
+          map.set(stripped, cap);
+        }
         const match = cleanName.match(/Calculation_\d+/i);
+        if (match) map.set(match[0], cap);
+      }
+
+      if (cf.internal_name) {
+        const match = cf.internal_name.match(/Calculation_\d+/i);
         if (match) map.set(match[0], cap);
       }
     });
@@ -266,11 +292,17 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       }
 
       const stripped = unquoted.replace(/_\d{8,}$/, "").trim();
-      if (calcNameMap.has(stripped) && calcNameMap.get(stripped) !== "Calculation") {
+      if (
+        stripped &&
+        !/^calculation$/i.test(stripped) &&
+        calcNameMap.has(stripped) &&
+        calcNameMap.get(stripped) !== "Calculation"
+      ) {
         return calcNameMap.get(stripped)!;
       }
 
-      if (stripped && !stripped.toLowerCase().startsWith("calculation_")) {
+      // Never return bare "Calculation" from digit-stripping; keep full ID
+      if (stripped && !/^calculation(_\d+)?$/i.test(stripped) && !stripped.toLowerCase().startsWith("calculation_")) {
         return stripped;
       }
 
@@ -307,9 +339,14 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       });
 
       calcFields.forEach((cf) => {
-        if (matchedKeys.has(cf.name) || matchedKeys.has(cf.caption)) {
+        if (
+          matchedKeys.has(cf.name) ||
+          matchedKeys.has(cf.caption) ||
+          (cf.internal_name && matchedKeys.has(cf.internal_name))
+        ) {
           addLink(cf.name, ws.name);
           addLink(cf.caption, ws.name);
+          if (cf.internal_name) addLink(cf.internal_name, ws.name);
         }
       });
     });
@@ -329,52 +366,20 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const filteredCalcs = useMemo(() => {
     let list = calcFields;
     if (selectedWs && selectedVisual) {
-      // Gather fields explicitly referenced on shelves/encodings/filters/used_calcs
-      const activeWsFields = [
-        ...(selectedVisual.used_calculated_fields || []),
-        ...(selectedVisual.columns || []),
-        ...(selectedVisual.rows || []),
-        ...(selectedVisual.filters || []),
-        ...(selectedVisual.encodings || []).map((e) => e.field_name),
-        ...(selectedVisual.rows_shelves || []).map((s) => s.field_name),
-        ...(selectedVisual.columns_shelves || []).map((s) => s.field_name),
-      ];
-
-      const matchedCalcKeys = new Set<string>();
-      activeWsFields.forEach((f) => {
-        matchedCalcKeys.add(f);
+      // Strict filter: only calcs listed in this worksheet's used_calculated_fields
+      const usedKeys = new Set<string>();
+      (selectedVisual.used_calculated_fields || []).forEach((f) => {
+        usedKeys.add(f);
         const resolved = resolveFieldName(f);
-        if (resolved) matchedCalcKeys.add(resolved);
+        if (resolved) usedKeys.add(resolved);
       });
 
-      const linkedCalcs = new Set<string>();
-      calcFields.forEach((cf) => {
-        if (matchedCalcKeys.has(cf.name) || matchedCalcKeys.has(cf.caption)) {
-          linkedCalcs.add(cf.name);
-          linkedCalcs.add(cf.caption);
-        }
-      });
-
-      // Expand to include indirect dependencies (e.g. RPC Color -> RPC % -> RPC)
-      let added = true;
-      while (added) {
-        added = false;
-        calcFields.forEach((cf) => {
-          if (!linkedCalcs.has(cf.name) && !linkedCalcs.has(cf.caption)) {
-            const dependsOnLinked = cf.dependencies?.some((dep) => {
-              const resDep = resolveFieldName(dep);
-              return linkedCalcs.has(dep) || linkedCalcs.has(resDep);
-            });
-            if (dependsOnLinked) {
-              linkedCalcs.add(cf.name);
-              linkedCalcs.add(cf.caption);
-              added = true;
-            }
-          }
-        });
-      }
-
-      list = list.filter((cf) => linkedCalcs.has(cf.name) || linkedCalcs.has(cf.caption));
+      list = list.filter(
+        (cf) =>
+          usedKeys.has(cf.name) ||
+          usedKeys.has(cf.caption) ||
+          (cf.internal_name != null && usedKeys.has(cf.internal_name))
+      );
     }
 
     if (calcSearch.trim()) {
@@ -457,8 +462,14 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
 
   const highlightedCalcsByWs = useMemo(() => {
     if (!selectedVisual) return new Set<string>();
-    return new Set(selectedVisual.used_calculated_fields || []);
-  }, [selectedVisual]);
+    const keys = new Set<string>();
+    (selectedVisual.used_calculated_fields || []).forEach((f) => {
+      keys.add(f);
+      const resolved = resolveFieldName(f);
+      if (resolved) keys.add(resolved);
+    });
+    return keys;
+  }, [selectedVisual, resolveFieldName]);
 
   // ═══════════════════════════════════════
   // RENDER
@@ -538,6 +549,10 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
               const color = getChartColor(ws.type);
               const wsCalcCount = (ws.used_calculated_fields || []).length;
               const wsFilterCount = (ws.filters || []).length;
+              const wsMeasCount = (ws.measures || []).filter((m) => {
+                const resolved = resolveFieldName(m);
+                return resolved && !/^calculation(_\d+)?$/i.test(resolved);
+              }).length;
 
               return (
                 <div
@@ -569,7 +584,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                     {wsCalcCount > 0 && <span className={styles.wsStat}>𝑓 {wsCalcCount} Calcs</span>}
                     {wsFilterCount > 0 && <span className={styles.wsStat}>⊞ {wsFilterCount} Filters</span>}
                     <span className={styles.wsStat}>◫ {ws.dimensions?.length || 0} Dims</span>
-                    <span className={styles.wsStat}>∑ {ws.measures?.length || 0} Meas</span>
+                    <span className={styles.wsStat}>∑ {wsMeasCount} Meas</span>
                     <ChevronRight
                       size={13}
                       style={{
@@ -665,30 +680,49 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                         )}
                         {ws.measures && ws.measures.length > 0 && (
                           <div className={styles.specBlock}>
-                            <span className={styles.specBlockLabel}>Measures (Numerical Metrics) ({ws.measures.length})</span>
-                            <div className={styles.wsExpandedPills}>
-                              {ws.measures
+                            {(() => {
+                              const visibleMeasures = ws.measures
                                 .map((m) => ({ raw: m, resolved: resolveFieldName(m) }))
-                                .filter(({ resolved }) => !resolved.startsWith("Calculation_"))
-                                .map(({ raw, resolved }, i) => {
-                                  const isCalc = calcNameMap.has(raw) || calcNameMap.has(resolved);
-                                  return (
-                                    <span
-                                      key={i}
-                                      className={`${styles.miniPill} ${isCalc ? styles.miniPillCalc : styles.miniPillMeasure}`}
-                                      onClick={(e) => {
-                                        if (isCalc) {
-                                          e.stopPropagation();
-                                          setSelectedCalc(resolved);
-                                        }
-                                      }}
-                                      style={isCalc ? { cursor: "pointer" } : undefined}
-                                    >
-                                      {resolved}
-                                    </span>
-                                  );
-                                })}
-                            </div>
+                                .filter(
+                                  ({ resolved }) =>
+                                    resolved && !/^calculation(_\d+)?$/i.test(resolved)
+                                );
+                              return (
+                                <>
+                                  <span className={styles.specBlockLabel}>
+                                    Measures (Numerical Metrics) ({visibleMeasures.length})
+                                  </span>
+                                  <div className={styles.wsExpandedPills}>
+                                    {visibleMeasures.map(({ raw, resolved }, i) => {
+                                      const isCalc =
+                                        calcNameMap.has(raw) ||
+                                        calcNameMap.has(resolved) ||
+                                        (ws.used_calculated_fields || []).some(
+                                          (u) =>
+                                            resolveFieldName(u) === resolved ||
+                                            u === resolved ||
+                                            u === raw
+                                        );
+                                      return (
+                                        <span
+                                          key={i}
+                                          className={`${styles.miniPill} ${isCalc ? styles.miniPillCalc : styles.miniPillMeasure}`}
+                                          onClick={(e) => {
+                                            if (isCalc) {
+                                              e.stopPropagation();
+                                              setSelectedCalc(resolved);
+                                            }
+                                          }}
+                                          style={isCalc ? { cursor: "pointer" } : undefined}
+                                        >
+                                          {resolved}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </div>
                         )}
                       </div>
@@ -851,10 +885,20 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
           <div className={styles.cardList}>
             {filteredCalcs.map((cf) => {
               const isExpanded = expandedCalcs.has(cf.name);
-              const isSelected = selectedCalc === cf.name;
-              const isHighlighted = highlightedCalcsByWs.has(cf.name);
+              const isSelected =
+                selectedCalc === cf.name ||
+                selectedCalc === cf.caption ||
+                (cf.internal_name != null && selectedCalc === cf.internal_name);
+              const isHighlighted =
+                highlightedCalcsByWs.has(cf.name) ||
+                highlightedCalcsByWs.has(cf.caption) ||
+                (cf.internal_name != null && highlightedCalcsByWs.has(cf.internal_name));
               const complexity = calcComplexity(cf.formula);
-              const referencedBy = calcToWorksheets.get(cf.name) || calcToWorksheets.get(cf.caption) || [];
+              const referencedBy =
+                calcToWorksheets.get(cf.name) ||
+                calcToWorksheets.get(cf.caption) ||
+                (cf.internal_name ? calcToWorksheets.get(cf.internal_name) : undefined) ||
+                [];
 
               const deps: string[] = [];
               const depMatches = cf.formula.match(/\[([^\]]+)\]/g);
