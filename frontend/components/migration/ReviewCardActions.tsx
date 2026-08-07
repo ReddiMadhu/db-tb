@@ -108,6 +108,7 @@ export default function ReviewCardActions({ jobUuid, card, onUpdated, onError, o
           <div style={{ fontSize: "0.75rem", fontWeight: 600 }}>Override widget type</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
             <select
+              className={styles.filterSelect}
               value={widgetType}
               onChange={(e) => setWidgetType(e.target.value)}
               disabled={busy}
@@ -118,7 +119,7 @@ export default function ReviewCardActions({ jobUuid, card, onUpdated, onError, o
                 </option>
               ))}
             </select>
-            <select value={xField} onChange={(e) => setXField(e.target.value)} disabled={busy}>
+            <select className={styles.filterSelect} value={xField} onChange={(e) => setXField(e.target.value)} disabled={busy}>
               <option value="">x / category</option>
               {fields.map((f) => (
                 <option key={`x-${f.name}`} value={f.name}>
@@ -126,7 +127,7 @@ export default function ReviewCardActions({ jobUuid, card, onUpdated, onError, o
                 </option>
               ))}
             </select>
-            <select value={yField} onChange={(e) => setYField(e.target.value)} disabled={busy}>
+            <select className={styles.filterSelect} value={yField} onChange={(e) => setYField(e.target.value)} disabled={busy}>
               <option value="">y / measure</option>
               {fields.map((f) => (
                 <option key={`y-${f.name}`} value={f.name}>
@@ -134,7 +135,7 @@ export default function ReviewCardActions({ jobUuid, card, onUpdated, onError, o
                 </option>
               ))}
             </select>
-            <select value={colorField} onChange={(e) => setColorField(e.target.value)} disabled={busy}>
+            <select className={styles.filterSelect} value={colorField} onChange={(e) => setColorField(e.target.value)} disabled={busy}>
               <option value="">color (optional)</option>
               {fields.map((f) => (
                 <option key={`c-${f.name}`} value={f.name}>
@@ -164,7 +165,7 @@ export default function ReviewCardActions({ jobUuid, card, onUpdated, onError, o
 
           <div style={{ fontSize: "0.75rem", fontWeight: 600 }}>Patch encodings (keep type)</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-            <select value={xField} onChange={(e) => setXField(e.target.value)} disabled={busy}>
+            <select className={styles.filterSelect} value={xField} onChange={(e) => setXField(e.target.value)} disabled={busy}>
               <option value="">x</option>
               {fields.map((f) => (
                 <option key={`px-${f.name}`} value={f.name}>
@@ -172,7 +173,7 @@ export default function ReviewCardActions({ jobUuid, card, onUpdated, onError, o
                 </option>
               ))}
             </select>
-            <select value={yField} onChange={(e) => setYField(e.target.value)} disabled={busy}>
+            <select className={styles.filterSelect} value={yField} onChange={(e) => setYField(e.target.value)} disabled={busy}>
               <option value="">y / angle</option>
               {fields.map((f) => (
                 <option key={`py-${f.name}`} value={f.name}>
@@ -180,7 +181,7 @@ export default function ReviewCardActions({ jobUuid, card, onUpdated, onError, o
                 </option>
               ))}
             </select>
-            <select value={colorField} onChange={(e) => setColorField(e.target.value)} disabled={busy}>
+            <select className={styles.filterSelect} value={colorField} onChange={(e) => setColorField(e.target.value)} disabled={busy}>
               <option value="">color</option>
               {fields.map((f) => (
                 <option key={`pc-${f.name}`} value={f.name}>

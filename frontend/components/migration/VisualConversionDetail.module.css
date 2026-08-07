@@ -153,9 +153,197 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  padding: 0.4rem 0.75rem;
+  padding: 0.45rem 0.85rem;
   font-size: var(--font-size-xs);
   outline: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filterSelect:hover {
+  border-color: rgba(0, 168, 204, 0.4);
+}
+
+.filterSelect:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 3px rgba(0, 168, 204, 0.2);
+}
+
+/* ── Modern Custom Filter Dropdown Component ── */
+.dropdownWrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.customDropdownTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  background: var(--bg-tertiary, #161b22);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  padding: 0.45rem 0.85rem;
+  min-width: 230px;
+  cursor: pointer;
+  color: var(--text-primary, #f0f6fc);
+  font-family: inherit;
+  font-size: var(--font-size-xs, 0.8rem);
+  font-weight: 500;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.customDropdownTrigger:hover {
+  border-color: rgba(0, 168, 204, 0.4);
+  background: rgba(22, 27, 34, 0.95);
+  box-shadow: 0 4px 12px rgba(0, 168, 204, 0.12);
+}
+
+.customDropdownTriggerOpen {
+  border-color: var(--accent-cyan, #00a8cc);
+  box-shadow: 0 0 0 3px rgba(0, 168, 204, 0.2), 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.dropdownTriggerContent {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.dropdownSelectedLabel {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary, #f0f6fc);
+}
+
+.dropdownCountBadge {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #8b949e);
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  margin-left: auto;
+}
+
+.dropdownChevron {
+  color: var(--text-tertiary, #8b949e);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  flex-shrink: 0;
+}
+
+.dropdownChevronRotate {
+  transform: rotate(180deg);
+  color: var(--accent-cyan, #00a8cc);
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.customDropdownMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 200;
+  width: 275px;
+  background: rgba(22, 27, 34, 0.96);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 0.4rem;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 168, 204, 0.1);
+  animation: dropdownFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dropdownMenuHeader {
+  padding: 0.45rem 0.65rem 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-tertiary, #8b949e);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  margin-bottom: 0.35rem;
+}
+
+.dropdownOption {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  font-family: inherit;
+}
+
+.dropdownOption:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dropdownOptionSelected {
+  background: rgba(0, 168, 204, 0.1);
+}
+
+.optionIconBox {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.optionTextGroup {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.optionTitle {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary, #f0f6fc);
+  line-height: 1.2;
+}
+
+.optionDesc {
+  font-size: 0.67rem;
+  color: var(--text-tertiary, #8b949e);
+  line-height: 1.2;
+  margin-top: 2px;
+}
+
+.optionBadge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #8b949e);
+  flex-shrink: 0;
+}
+
+.optionCheck {
+  color: var(--accent-cyan, #00a8cc);
+  margin-left: 0.2rem;
+  flex-shrink: 0;
 }
 
 /* ── Conversion Card Section ── */

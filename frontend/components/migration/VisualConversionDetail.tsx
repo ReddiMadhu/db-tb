@@ -393,6 +393,18 @@ export default function VisualConversionDetail({
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(`.${styles.dropdownWrapper}`)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const toggleCardExpand = (cardId: string) => {
     setExpandedCardIds((prev) => ({ ...prev, [cardId]: !prev[cardId] }));
@@ -688,16 +700,129 @@ export default function VisualConversionDetail({
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            <select
-              className={styles.filterSelect}
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-            >
-              <option value="ALL">All Conversion Statuses</option>
-              <option value="SUCCESS">✓ Successfully Converted</option>
-              <option value="REVIEW">⚠ Manual Review Required</option>
-              <option value="UNSUPPORTED">✗ Unsupported / Missing</option>
-            </select>
+            <div className={styles.dropdownWrapper}>
+              <button
+                type="button"
+                className={`${styles.customDropdownTrigger} ${isDropdownOpen ? styles.customDropdownTriggerOpen : ""}`}
+                onClick={() => setIsDropdownOpen((prev) => !prev)}
+                aria-expanded={isDropdownOpen}
+                aria-label="Filter conversion status"
+              >
+                <div className={styles.dropdownTriggerContent}>
+                  {statusFilter === "ALL" && <Filter size={13} style={{ color: "var(--accent-cyan, #00a8cc)" }} />}
+                  {statusFilter === "SUCCESS" && <CheckCircle2 size={13} style={{ color: "#3fb950" }} />}
+                  {statusFilter === "REVIEW" && <AlertTriangle size={13} style={{ color: "#d29922" }} />}
+                  {statusFilter === "UNSUPPORTED" && <XCircle size={13} style={{ color: "#8b949e" }} />}
+
+                  <span className={styles.dropdownSelectedLabel}>
+                    {statusFilter === "ALL" && "All Statuses"}
+                    {statusFilter === "SUCCESS" && "Successfully Converted"}
+                    {statusFilter === "REVIEW" && "Manual Review Required"}
+                    {statusFilter === "UNSUPPORTED" && "Unsupported / Missing"}
+                  </span>
+
+                  <span className={styles.dropdownCountBadge}>
+                    {statusFilter === "ALL" && cardsState.length}
+                    {statusFilter === "SUCCESS" && successfulCards}
+                    {statusFilter === "REVIEW" && reviewCards}
+                    {statusFilter === "UNSUPPORTED" && unsupportedCards}
+                  </span>
+                </div>
+
+                <ChevronDown
+                  size={14}
+                  className={`${styles.dropdownChevron} ${isDropdownOpen ? styles.dropdownChevronRotate : ""}`}
+                />
+              </button>
+
+              {isDropdownOpen && (
+                <div className={styles.customDropdownMenu}>
+                  <div className={styles.dropdownMenuHeader}>Filter Conversion Status</div>
+
+                  <button
+                    type="button"
+                    className={`${styles.dropdownOption} ${statusFilter === "ALL" ? styles.dropdownOptionSelected : ""}`}
+                    onClick={() => {
+                      setStatusFilter("ALL");
+                      setIsDropdownOpen(false);
+                    }}
+                  >
+                    <span className={styles.optionIconBox} style={{ background: "rgba(0, 168, 204, 0.12)", color: "#00a8cc" }}>
+                      <Filter size={13} />
+                    </span>
+                    <div className={styles.optionTextGroup}>
+                      <span className={styles.optionTitle}>All Statuses</span>
+                      <span className={styles.optionDesc}>Show all visual cards</span>
+                    </div>
+                    <span className={styles.optionBadge}>{cardsState.length}</span>
+                    {statusFilter === "ALL" && <Check size={14} className={styles.optionCheck} />}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`${styles.dropdownOption} ${statusFilter === "SUCCESS" ? styles.dropdownOptionSelected : ""}`}
+                    onClick={() => {
+                      setStatusFilter("SUCCESS");
+                      setIsDropdownOpen(false);
+                    }}
+                  >
+                    <span className={styles.optionIconBox} style={{ background: "rgba(63, 185, 80, 0.12)", color: "#3fb950" }}>
+                      <CheckCircle2 size={13} />
+                    </span>
+                    <div className={styles.optionTextGroup}>
+                      <span className={styles.optionTitle}>Successfully Converted</span>
+                      <span className={styles.optionDesc}>Passed automated validation</span>
+                    </div>
+                    <span className={styles.optionBadge} style={{ background: "rgba(63, 185, 80, 0.15)", color: "#3fb950" }}>
+                      {successfulCards}
+                    </span>
+                    {statusFilter === "SUCCESS" && <Check size={14} className={styles.optionCheck} />}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`${styles.dropdownOption} ${statusFilter === "REVIEW" ? styles.dropdownOptionSelected : ""}`}
+                    onClick={() => {
+                      setStatusFilter("REVIEW");
+                      setIsDropdownOpen(false);
+                    }}
+                  >
+                    <span className={styles.optionIconBox} style={{ background: "rgba(210, 153, 34, 0.12)", color: "#d29922" }}>
+                      <AlertTriangle size={13} />
+                    </span>
+                    <div className={styles.optionTextGroup}>
+                      <span className={styles.optionTitle}>Manual Review Required</span>
+                      <span className={styles.optionDesc}>Needs human verification</span>
+                    </div>
+                    <span className={styles.optionBadge} style={{ background: "rgba(210, 153, 34, 0.15)", color: "#d29922" }}>
+                      {reviewCards}
+                    </span>
+                    {statusFilter === "REVIEW" && <Check size={14} className={styles.optionCheck} />}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`${styles.dropdownOption} ${statusFilter === "UNSUPPORTED" ? styles.dropdownOptionSelected : ""}`}
+                    onClick={() => {
+                      setStatusFilter("UNSUPPORTED");
+                      setIsDropdownOpen(false);
+                    }}
+                  >
+                    <span className={styles.optionIconBox} style={{ background: "rgba(139, 148, 158, 0.12)", color: "#8b949e" }}>
+                      <XCircle size={13} />
+                    </span>
+                    <div className={styles.optionTextGroup}>
+                      <span className={styles.optionTitle}>Unsupported / Missing</span>
+                      <span className={styles.optionDesc}>Visual types not yet supported</span>
+                    </div>
+                    <span className={styles.optionBadge} style={{ background: "rgba(139, 148, 158, 0.15)", color: "#8b949e" }}>
+                      {unsupportedCards}
+                    </span>
+                    {statusFilter === "UNSUPPORTED" && <Check size={14} className={styles.optionCheck} />}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
