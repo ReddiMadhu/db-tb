@@ -415,7 +415,7 @@ export default function VisualConversionDetail({
         .filter((w: any) => w.type === "chart")
         .map((w: any, idx: number) => ({
           id: `widget-${idx}`,
-          worksheet_name: w.title || w.name || `Worksheet ${idx + 1}`,
+          worksheet_name: w.name || w.title || `Worksheet ${idx + 1}`,
           status: "SUCCESS" as const,
           tableau: {
             type: w.visual_type_label || w.visual_type || "Chart",
@@ -433,7 +433,7 @@ export default function VisualConversionDetail({
             widgetType: w.visual_type || "bar",
             datasetName: w.dataset || "",
             encodings: w.encodings || {},
-            frame: { title: w.title || w.name },
+            frame: { title: w.name || w.title },
           },
           validation: {
             visual_type_preserved: true,

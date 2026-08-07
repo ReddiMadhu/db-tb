@@ -891,10 +891,10 @@ def _extract_worksheet_title(ws_el, ws_name: str) -> str:
     """Extract display title for a worksheet, resolving <Sheet Name> to ws_name.
 
     Blank intentional titles (``<title><formatted-text/></title>`` with no runs)
-    return ``\"\"`` so downstream does not invent a sheet-name frame title.
+    return ``""`` so downstream does not invent a sheet-name frame title.
     Fall back to ``ws_name`` only when there is no title element.
     """
-    title_el = ws_el.find(".//title")
+    title_el = ws_el.find("./title") or ws_el.find("./layout-options/title")
     if title_el is not None:
         runs = title_el.findall(".//run")
         text = "".join([r.text for r in runs if r.text]).strip()
@@ -908,21 +908,42 @@ def _extract_worksheet_title(ws_el, ws_name: str) -> str:
     return ws_name
 
 
-def _infer_visual_type(mark_type: str, cols_text: str, rows_text: str) -> str:
-    """Infer high-level visual type from mark_type and shelf configuration."""
+def _infer_visual_type(
+    mark_type: str,
+    cols_text: str,
+    rows_text: str,
+    ws_el: etree._Element = None,
+    encodings: list = None,
+    measure_val_used: bool = False,
+) -> str:
+    """Infer high-level visual type from mark_type, shelves, encodings, and XML structure."""
     m_lower = (mark_type or "").lower()
     has_lat_long = 'Latitude' in rows_text or 'Longitude' in cols_text or 'Latitude' in cols_text or 'Longitude' in rows_text
-    
+
     if has_lat_long:
         if m_lower in ('pie',):
             return "Pie Map Chart"
         elif m_lower in ('circle', 'automatic'):
             return "Symbol Map"
         return "Map Chart"
+
+    # Dual-axis check
+    panes_count = len(ws_el.xpath(".//panes/pane")) if ws_el is not None else 1
+    has_dual_axis = False
+    if ws_el is not None:
+        if ws_el.xpath(".//@dual-axis") or ws_el.xpath(".//pane[@id]"):
+            has_dual_axis = True
+    if panes_count > 1 or has_dual_axis:
+        if m_lower in ('bar', 'automatic', 'kpi', ''):
+            return "Dual-axis bar"
+        return "Dual-Axis Chart"
+
     if m_lower == 'square':
-        return "Highlight Table"
+        return "Heatmap (square)"
     if m_lower == 'circle':
         return "Scatter Plot"
+    if m_lower == 'pie':
+        return "Pie chart"
     if m_lower in ('bar', 'kpi'):
         if ':Measure Names' in rows_text or ':Measure Names' in cols_text:
             return "Bar Chart / KPI Grid"
@@ -930,8 +951,14 @@ def _infer_visual_type(mark_type: str, cols_text: str, rows_text: str) -> str:
     if m_lower == 'line':
         return "Line Chart"
     if m_lower in ('text', 'table'):
-        return "Table"
-    return f"{mark_type.title()} Chart" if mark_type else "Visual Chart"
+        return "Text table"
+
+    # When mark_type is Automatic or empty
+    has_text_encoding = any(getattr(e, 'channel', '') in ('text', 'label') for e in (encodings or []))
+    if m_lower in ('automatic', '') or measure_val_used or has_text_encoding:
+        return "Text table"
+
+    return f"{mark_type.title()} Chart" if mark_type else "Text table"
 
 
 def _extract_dashboard_title(db_el, db_name: str = None) -> Optional[str]:
@@ -2198,7 +2225,15 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         used_calcs = _extract_used_calc_fields(ws_el, ds_prefixes, all_calc_names)
         tooltip = _extract_tooltip_text(ws_el)
         ws_title = _extract_worksheet_title(ws_el, ws_name)
-        vis_type = _infer_visual_type(mark_type, cols_text, rows_text)
+        measure_val_used = _detect_measure_values(ws_el)
+        vis_type = _infer_visual_type(
+            mark_type,
+            cols_text,
+            rows_text,
+            ws_el=ws_el,
+            encodings=encodings,
+            measure_val_used=measure_val_used,
+        )
         
         # Build measure bindings from shelf derivations
         measure_bindings = []

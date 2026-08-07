@@ -12,7 +12,7 @@ def resolve_mark_type(
     Handles 'Automatic' inference based on shelf dimensions/dates/measures.
     """
     mark_lower = (raw_mark_type or 'automatic').lower()
-    
+
     # Direct mappings
     if mark_lower in [
         'pie', 'shape', 'map', 'polygon', 'circle', 'line', 'bar', 'text',
@@ -22,12 +22,18 @@ def resolve_mark_type(
             return 'Gantt Bar'
         if mark_lower == 'circle':
             return 'Scatter Plot'
-        if mark_lower == 'square':
-            return 'Square'
-        if mark_lower == 'heatmap':
-            return 'Square'
+        if mark_lower in ('square', 'heatmap'):
+            return 'Heatmap (square)'
+        if mark_lower == 'pie':
+            return 'Pie chart'
+        if mark_lower == 'text':
+            return 'Text table'
         if mark_lower == 'area':
-            return 'Area'
+            return 'Area Chart'
+        if mark_lower == 'line':
+            return 'Line Chart'
+        if mark_lower == 'bar':
+            return 'Bar Chart'
         return mark_lower.capitalize()
 
     # Heuristic Automatic Resolution
@@ -36,28 +42,21 @@ def resolve_mark_type(
     combined_shelves = f"{cols_str} {rows_str}"
 
     # Generated Lon/Lat on Automatic mark → geographic map
-    # (explicit marks like Pie/Circle above already returned)
     if "longitude" in combined_shelves or "latitude" in combined_shelves:
-        return "Map"
-    
+        return "Symbol Map"
+
     has_dates = any(dt in combined_shelves for dt in ['yr:', 'mn:', 'dy:', 'qr:', 'wk:', 'mdy:', 'date:'])
     measure_tokens = ['sum:', 'avg:', 'cnt:', 'count:', 'countd:', 'min:', 'max:', 'attr:', 'median:', 'pct:']
     has_measures = any(agg in combined_shelves for agg in measure_tokens) or (len(measure_bindings or []) > 0)
-    
+
     if has_dates and has_measures:
-        return 'Line'
-    
+        return 'Line Chart'
+
     if has_measures and len(cols) > 0 and len(rows) > 0:
         cols_has_measure = any(agg in cols_str for agg in measure_tokens)
         rows_has_measure = any(agg in rows_str for agg in measure_tokens)
         if cols_has_measure and rows_has_measure:
             return 'Scatter Plot'
-        return 'Bar'
-        
-    if has_measures:
-        return 'Text Table / KPI'
-        
-    if len(cols) > 0 and len(rows) > 0:
-        return 'Text Table'
+        return 'Bar Chart'
 
-    return 'Text / Value'
+    return 'Text table'

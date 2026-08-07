@@ -408,23 +408,14 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                 >
                   <div className={styles.wsCardTop}>
                     <Icon size={14} style={{ color, flexShrink: 0 }} />
-                    <span className={styles.wsName}>{ws.title || ws.name}</span>
-                    {ws.hidden ? (
-                      <span className={styles.hiddenBadge} title="Worksheet tab is hidden (embedded in dashboard only)">Hidden</span>
-                    ) : null}
-                    {ws.complexity && (
-                      <span
-                        className={styles.chartTypeBadge}
-                        style={{
-                          backgroundColor: ws.complexity.score === "Simple" ? "rgba(39,174,96,0.15)" : ws.complexity.score === "Medium" ? "rgba(242,153,74,0.15)" : "rgba(235,87,87,0.15)",
-                          color: ws.complexity.score === "Simple" ? "#27AE60" : ws.complexity.score === "Medium" ? "#F2994A" : "#EB5757",
-                          border: `1px solid ${ws.complexity.score === "Simple" ? "#27AE6040" : ws.complexity.score === "Medium" ? "#F2994A40" : "#EB575740"}`,
-                          marginRight: "6px",
-                        }}
-                      >
-                        {ws.complexity.score}
-                      </span>
-                    )}
+                    <div className={styles.wsNameWrapper}>
+                      <span className={styles.wsName}>{ws.name}</span>
+                      {ws.title && ws.title !== ws.name ? (
+                        <span className={styles.wsTitleSub} title={`Canvas Title: ${ws.title}`}>
+                          ({ws.title})
+                        </span>
+                      ) : null}
+                    </div>
                     <span
                       className={styles.chartTypeBadge}
                       style={{ backgroundColor: `${color}18`, color, border: `1px solid ${color}40` }}
@@ -455,7 +446,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                       <div className={styles.specSectionGrid}>
                         {/* Rows / Cols Shelves */}
                         <div className={styles.specBlock}>
-                          <span className={styles.specBlockLabel}>Rows & Columns Shelves</span>
+                          <span className={styles.specBlockLabel}>Axis & Shelf Layout (Rows/Cols)</span>
                           <div className={styles.wsExpandedPills}>
                             {ws.rows_shelves && ws.rows_shelves.length > 0 ? (
                               ws.rows_shelves.map((s, i) => (
@@ -487,7 +478,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
 
                         {/* Visual Mark / Specs */}
                         <div className={styles.specBlock}>
-                          <span className={styles.specBlockLabel}>Visual Specification</span>
+                          <span className={styles.specBlockLabel}>Visual Properties & Source Dataset</span>
                           <div className={styles.wsExpandedPills}>
                             <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Mark: {ws.mark_type || "Automatic"}</span>
                             <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Source: {ws.datasource_name || "Default"}</span>
@@ -504,7 +495,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                       {/* Mark encodings (color / size / lod / angle …) */}
                       {ws.encodings && ws.encodings.length > 0 && (
                         <div className={styles.specBlock}>
-                          <span className={styles.specBlockLabel}>Mark Encodings ({ws.encodings.length})</span>
+                          <span className={styles.specBlockLabel}>Encodings & Aesthetics ({ws.encodings.length})</span>
                           <div className={styles.wsExpandedPills}>
                             {ws.encodings.map((enc, i) => (
                               <span
@@ -522,7 +513,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                       <div className={styles.specSectionGrid}>
                         {ws.dimensions && ws.dimensions.length > 0 && (
                           <div className={styles.specBlock}>
-                            <span className={styles.specBlockLabel}>Dimensions ({ws.dimensions.length})</span>
+                            <span className={styles.specBlockLabel}>Dimensions (Grouping Attributes) ({ws.dimensions.length})</span>
                             <div className={styles.wsExpandedPills}>
                               {ws.dimensions.map((d, i) => (
                                 <span key={i} className={`${styles.miniPill} ${styles.miniPillDim}`}>{d}</span>
@@ -532,7 +523,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                         )}
                         {ws.measures && ws.measures.length > 0 && (
                           <div className={styles.specBlock}>
-                            <span className={styles.specBlockLabel}>Measures ({ws.measures.length})</span>
+                            <span className={styles.specBlockLabel}>Measures (Numerical Metrics) ({ws.measures.length})</span>
                             <div className={styles.wsExpandedPills}>
                               {ws.measures.map((m, i) => (
                                 <span key={i} className={`${styles.miniPill} ${styles.miniPillMeasure}`}>{m}</span>
@@ -546,7 +537,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                       {(ws.filter_details?.length || ws.filters?.length) ? (
                         <div className={styles.specBlock}>
                           <span className={styles.specBlockLabel}>
-                            Worksheet Filters ({ws.filter_details?.length || ws.filters?.length || 0})
+                            Worksheet Filters & Slicers ({ws.filter_details?.length || ws.filters?.length || 0})
                           </span>
                           <div className={styles.wsExpandedPills}>
                             {ws.filter_details && ws.filter_details.length > 0
@@ -569,11 +560,11 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                       {/* Analytics Overlays */}
                       {ws.analytics && ws.analytics.length > 0 && (
                         <div className={styles.specBlock}>
-                          <span className={styles.specBlockLabel}>Analytics & Overlays ({ws.analytics.length})</span>
+                          <span className={styles.specBlockLabel}>Analytics & Reference Lines ({ws.analytics.length})</span>
                           <div className={styles.wsExpandedPills}>
                             {ws.analytics.map((a, i) => (
                               <span key={i} className={`${styles.miniPill} ${styles.miniPillShelf}`}>
-                                📈 {a.label || a.overlay_type} {a.field_name ? `(${a.field_name})` : ""}
+                                {a.label || a.overlay_type} {a.field_name ? `(${a.field_name})` : ""}
                               </span>
                             ))}
                           </div>
@@ -583,11 +574,11 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                       {/* Tooltip Fields */}
                       {ws.tooltip_fields && ws.tooltip_fields.length > 0 && (
                         <div className={styles.specBlock}>
-                          <span className={styles.specBlockLabel}>Hover Tooltip Fields ({ws.tooltip_fields.length})</span>
+                          <span className={styles.specBlockLabel}>Tooltips & Hover Fields ({ws.tooltip_fields.length})</span>
                           <div className={styles.wsExpandedPills}>
                             {ws.tooltip_fields.map((tf, i) => (
                               <span key={i} className={`${styles.miniPill} ${styles.miniPillDim}`}>
-                                💬 {tf.aggregation ? `${tf.aggregation}(${tf.field_name})` : tf.field_name}
+                                {tf.aggregation ? `${tf.aggregation}(${tf.field_name})` : tf.field_name}
                                 {tf.has_viz_in_tooltip ? ` [Viz in Tooltip: ${tf.viz_worksheet}]` : ""}
                               </span>
                             ))}
@@ -598,22 +589,22 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                       {/* Semantic Dependencies (Params, Sets, Groups, LODs) */}
                       {(ws.used_parameters?.length || ws.used_sets?.length || ws.used_groups?.length || ws.used_lod_calcs?.length || ws.used_table_calcs?.length) ? (
                         <div className={styles.specBlock}>
-                          <span className={styles.specBlockLabel}>Semantic Dependencies</span>
+                          <span className={styles.specBlockLabel}>Logic Dependencies (Params, Sets, Groups, LODs)</span>
                           <div className={styles.wsExpandedPills}>
                             {ws.used_parameters?.map((p, i) => (
-                              <span key={`p-${i}`} className={`${styles.miniPill} ${styles.miniPillCalc}`}>⚙ Param: {p}</span>
+                              <span key={`p-${i}`} className={`${styles.miniPill} ${styles.miniPillCalc}`}>Param: {p}</span>
                             ))}
                             {ws.used_sets?.map((s, i) => (
-                              <span key={`s-${i}`} className={`${styles.miniPill} ${styles.miniPillFilter}`}>⬡ Set: {s}</span>
+                              <span key={`s-${i}`} className={`${styles.miniPill} ${styles.miniPillFilter}`}>Set: {s}</span>
                             ))}
                             {ws.used_groups?.map((g, i) => (
-                              <span key={`g-${i}`} className={`${styles.miniPill} ${styles.miniPillDim}`}>☵ Group: {g}</span>
+                              <span key={`g-${i}`} className={`${styles.miniPill} ${styles.miniPillDim}`}>Group: {g}</span>
                             ))}
                             {ws.used_lod_calcs?.map((l, i) => (
-                              <span key={`l-${i}`} className={`${styles.miniPill} ${styles.miniPillMeasure}`}>🔒 LOD: {l}</span>
+                              <span key={`l-${i}`} className={`${styles.miniPill} ${styles.miniPillMeasure}`}>LOD: {l}</span>
                             ))}
                             {ws.used_table_calcs?.map((tc, i) => (
-                              <span key={`tc-${i}`} className={`${styles.miniPill} ${styles.miniPillMeasure}`}>🗠 TableCalc: {tc}</span>
+                              <span key={`tc-${i}`} className={`${styles.miniPill} ${styles.miniPillMeasure}`}>TableCalc: {tc}</span>
                             ))}
                           </div>
                         </div>
@@ -673,7 +664,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
           {selectedWs && selectedVisual && (selectedVisual.used_calculated_fields || []).length > 0 && (
             <div className={styles.filterBanner}>
               <span className={styles.filterBannerText}>
-                Filtered by <span className={styles.filterBannerName}>{selectedVisual.title || selectedWs}</span>
+                Filtered by <span className={styles.filterBannerName}>{selectedVisual.name || selectedWs}</span>
               </span>
               <button className={styles.clearFilterBtn} onClick={() => setSelectedWs(null)}>
                 Clear Filter

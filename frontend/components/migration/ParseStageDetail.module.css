@@ -222,6 +222,14 @@
   gap: 0.5rem;
 }
 
+.wsNameWrapper {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  overflow: hidden;
+  flex: 1;
+}
+
 .wsName {
   font-size: 0.85rem;
   font-weight: 700;
@@ -229,7 +237,15 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
+}
+
+.wsTitleSub {
+  font-size: 0.725rem;
+  font-weight: 400;
+  color: var(--text-tertiary, #718096);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chartTypeBadge {
@@ -338,43 +354,46 @@
   font-size: 0.675rem;
   padding: 0.15rem 0.45rem;
   border-radius: 4px;
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary, #cbd5e0);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .miniPillDim {
-  background: rgba(0, 168, 204, 0.12);
-  color: #00A8CC;
-  border: 1px solid rgba(0, 168, 204, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .miniPillMeasure {
-  background: rgba(155, 81, 224, 0.12);
-  color: #B57EDC;
-  border: 1px solid rgba(155, 81, 224, 0.25);
+  background: rgba(0, 168, 204, 0.08);
+  color: #38bdf8;
+  border: 1px solid rgba(0, 168, 204, 0.2);
 }
 
 .miniPillShelf {
-  background: rgba(242, 153, 74, 0.1);
-  color: #F2994A;
-  border: 1px solid rgba(242, 153, 74, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+  color: #cbd5e0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .miniPillFilter {
-  background: rgba(39, 174, 96, 0.1);
-  color: #27AE60;
-  border: 1px solid rgba(39, 174, 96, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .miniPillCalc {
-  background: rgba(155, 81, 224, 0.1);
-  color: #B57EDC;
-  border: 1px solid rgba(155, 81, 224, 0.25);
+  background: rgba(0, 168, 204, 0.08);
+  color: #38bdf8;
+  border: 1px solid rgba(0, 168, 204, 0.2);
   cursor: pointer;
 }
 
 .miniPillCalc:hover {
-  background: rgba(155, 81, 224, 0.25);
+  background: rgba(0, 168, 204, 0.18);
 }
 
 
