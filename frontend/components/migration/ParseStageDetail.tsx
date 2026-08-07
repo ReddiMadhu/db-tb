@@ -208,8 +208,16 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const calcNameMap = useMemo(() => {
     const map = new Map<string, string>();
     calcFields.forEach((cf) => {
-      if (cf.name) map.set(cf.name, cf.caption || cf.name);
-      if (cf.caption) map.set(cf.caption, cf.caption);
+      const cap = cf.caption || cf.name;
+      if (cf.name) map.set(cf.name, cap);
+      if (cf.caption) map.set(cf.caption, cap);
+
+      const cleanName = cf.name.replace(/^\[|\]$/g, "").trim();
+      if (cleanName) map.set(cleanName, cap);
+
+      // Strip trailing ID numbers e.g. Exposure Change (copy)_0500583912902664 -> Exposure Change (copy)
+      const stripped = cleanName.replace(/_\d{8,}$/, "").trim();
+      if (stripped) map.set(stripped, cap);
     });
     return map;
   }, [calcFields]);
@@ -217,8 +225,17 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const resolveFieldName = useCallback(
     (field: string): string => {
       if (!field) return "";
+      const clean = field.replace(/^\[|\]$/g, "").trim();
+
+      if (calcNameMap.has(clean)) return calcNameMap.get(clean)!;
       if (calcNameMap.has(field)) return calcNameMap.get(field)!;
-      return field;
+
+      // Strip trailing _0500... digits
+      const stripped = clean.replace(/_\d{8,}$/, "").trim();
+      if (calcNameMap.has(stripped)) return calcNameMap.get(stripped)!;
+      if (stripped && !stripped.startsWith("Calculation_")) return stripped;
+
+      return clean;
     },
     [calcNameMap]
   );
@@ -235,8 +252,6 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     worksheets.forEach((ws) => {
       const rawWsFields = [
         ...(ws.used_calculated_fields || []),
-        ...(ws.measures || []),
-        ...(ws.dimensions || []),
         ...(ws.columns || []),
         ...(ws.rows || []),
         ...(ws.filters || []),
@@ -275,10 +290,9 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const filteredCalcs = useMemo(() => {
     let list = calcFields;
     if (selectedWs && selectedVisual) {
-      const rawWsFields = [
+      // Gather fields explicitly referenced on shelves/encodings/filters/used_calcs
+      const activeWsFields = [
         ...(selectedVisual.used_calculated_fields || []),
-        ...(selectedVisual.measures || []),
-        ...(selectedVisual.dimensions || []),
         ...(selectedVisual.columns || []),
         ...(selectedVisual.rows || []),
         ...(selectedVisual.filters || []),
@@ -288,7 +302,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       ];
 
       const matchedCalcKeys = new Set<string>();
-      rawWsFields.forEach((f) => {
+      activeWsFields.forEach((f) => {
         matchedCalcKeys.add(f);
         const resolved = resolveFieldName(f);
         if (resolved) matchedCalcKeys.add(resolved);
@@ -323,6 +337,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
 
       list = list.filter((cf) => linkedCalcs.has(cf.name) || linkedCalcs.has(cf.caption));
     }
+
     if (calcSearch.trim()) {
       const q = calcSearch.toLowerCase();
       list = list.filter((cf) => cf.caption.toLowerCase().includes(q) || cf.name.toLowerCase().includes(q));
@@ -613,25 +628,27 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                           <div className={styles.specBlock}>
                             <span className={styles.specBlockLabel}>Measures (Numerical Metrics) ({ws.measures.length})</span>
                             <div className={styles.wsExpandedPills}>
-                              {ws.measures.map((m, i) => {
-                                const resolved = resolveFieldName(m);
-                                const isCalc = calcNameMap.has(m) || calcNameMap.has(resolved);
-                                return (
-                                  <span
-                                    key={i}
-                                    className={`${styles.miniPill} ${isCalc ? styles.miniPillCalc : styles.miniPillMeasure}`}
-                                    onClick={(e) => {
-                                      if (isCalc) {
-                                        e.stopPropagation();
-                                        setSelectedCalc(resolved);
-                                      }
-                                    }}
-                                    style={isCalc ? { cursor: "pointer" } : undefined}
-                                  >
-                                    {resolved}
-                                  </span>
-                                );
-                              })}
+                              {ws.measures
+                                .map((m) => ({ raw: m, resolved: resolveFieldName(m) }))
+                                .filter(({ resolved }) => !resolved.startsWith("Calculation_"))
+                                .map(({ raw, resolved }, i) => {
+                                  const isCalc = calcNameMap.has(raw) || calcNameMap.has(resolved);
+                                  return (
+                                    <span
+                                      key={i}
+                                      className={`${styles.miniPill} ${isCalc ? styles.miniPillCalc : styles.miniPillMeasure}`}
+                                      onClick={(e) => {
+                                        if (isCalc) {
+                                          e.stopPropagation();
+                                          setSelectedCalc(resolved);
+                                        }
+                                      }}
+                                      style={isCalc ? { cursor: "pointer" } : undefined}
+                                    >
+                                      {resolved}
+                                    </span>
+                                  );
+                                })}
                             </div>
                           </div>
                         )}
