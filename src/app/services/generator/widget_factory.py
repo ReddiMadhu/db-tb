@@ -38,7 +38,21 @@ PLACEHOLDER_FIELDS = {"x", "y", "value", "filter_col", "X", "Y", "Value", "0", "
 # Chart widgetTypes that require version 3
 CHART_TYPES_V3 = {
     "bar", "line", "area", "scatter", "pie",
-    "heatmap", "histogram", "combo", "boxplot", "map",
+    "heatmap", "histogram", "boxplot", "map",
+}
+
+# Chart widgetTypes that require version 1
+CHART_TYPES_V1 = {"table", "combo", "pivot", "funnel", "sankey"}
+
+# Canonical mapping of widgetType to expected Lakeview schema version
+WIDGET_VERSION: Dict[str, int] = {
+    "bar": 3, "line": 3, "area": 3, "scatter": 3, "pie": 3,
+    "heatmap": 3, "histogram": 3, "boxplot": 3, "map": 3,
+    "choropleth-map": 3, "symbol-map": 3,
+    "counter": 2,
+    "filter-multi-select": 2, "filter-single-select": 2,
+    "filter-date-range-picker": 2, "filter-date-picker": 2,
+    "table": 1, "combo": 1, "pivot": 3, "funnel": 1, "sankey": 1,
 }
 
 TEMPORAL_HINTS = re.compile(
@@ -140,6 +154,8 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
 
     if wt in CHART_TYPES_V3 and v != 3:
         errors.append(f"Chart widgetType '{wt}' requires version 3, got {v}.")
+    elif wt == "combo" and v != 1:
+        errors.append(f"Combo widget requires version 1, got {v}.")
     elif wt == "counter" and v != 2:
         errors.append(f"Counter widget requires version 2, got {v}.")
     elif wt and wt.startswith("filter-") and v != 2:
@@ -202,6 +218,14 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
 
     elif wt == "histogram":
         _require_channels(("x", "y"))
+
+    elif wt == "combo":
+        y_enc = encodings.get("y")
+        if not isinstance(y_enc, list) or not y_enc:
+            errors.append("Combo widget missing required 'y' encodings list.")
+        x_enc = encodings.get("x")
+        if not isinstance(x_enc, dict) or not x_enc.get("fieldName"):
+            errors.append("Combo widget missing required 'x' encoding fieldName.")
 
     elif wt == "table":
         cols = encodings.get("columns")
@@ -790,5 +814,61 @@ class WidgetFactory:
 
         return Widget(
             queries=[cls._create_widget_query(dataset_name, qfields, True, query_name=qname)],
+            spec=spec,
+        )
+
+    @classmethod
+    def create_combo_widget(
+        cls,
+        dataset_name: str,
+        x_field: str,
+        y_fields: List[Dict[str, str]],
+        title: str = "",
+        color_field: Optional[str] = None,
+        query_fields: Optional[List[Dict[str, str]]] = None,
+        show_title: bool = True,
+        enable_dual_axis: bool = True,
+    ) -> Widget:
+        """Create a Version 1 Combo Chart widget (bar+line dual-axis)."""
+        qfields = list(query_fields) if query_fields else []
+        cls._ensure_field(qfields, x_field)
+        for yf in y_fields:
+            fname = yf.get("field") or yf.get("fieldName") or ""
+            if fname:
+                cls._ensure_field(qfields, fname, f"SUM(`{fname}`)")
+
+        y_encodings = []
+        for yf in y_fields:
+            fname = yf.get("field") or yf.get("fieldName") or ""
+            y_encodings.append({
+                "fieldName": fname,
+                "displayName": _clean_title(fname),
+                "type": yf.get("mark", "bar"),
+                "scale": {"type": "quantitative"},
+            })
+
+        encodings: Dict[str, Any] = {
+            "x": _axis_encoding(x_field, infer_scale_type(x_field)),
+            "y": y_encodings,
+        }
+        if color_field:
+            encodings["color"] = _channel_encoding(color_field, "categorical")
+
+        spec: Dict[str, Any] = {
+            "version": 1,
+            "widgetType": "combo",
+            "encodings": encodings,
+            "frame": _frame(title, show_title, fallback=_clean_title(x_field)),
+            "mark": {"colors": DEFAULT_COLORS},
+        }
+        if enable_dual_axis:
+            spec["dualAxis"] = True
+
+        ok, errs = validate_widget_spec(spec)
+        if not ok:
+            raise ValueError(f"Invalid combo widget spec: {errs}")
+
+        return Widget(
+            queries=[cls._create_widget_query(dataset_name, qfields, False)],
             spec=spec,
         )

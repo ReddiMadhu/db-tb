@@ -212,6 +212,7 @@ def _create_widget_via_factory(
     query_fields_list: List[Dict[str, str]],
     show_title: bool = True,
     dashboard_id: Optional[str] = None,
+    w_ubim: Optional[Any] = None,
 ):
     """Dispatch to WidgetFactory. Returns Widget or None if incomplete."""
     # Attempt recovery again at dispatch boundary (belt + suspenders)
@@ -500,7 +501,38 @@ def _create_widget_via_factory(
             show_title=show_title,
         )
 
-    # MAP / BOXPLOT / COMBO / TABLE / fallback → table
+    if chart_type == ChartType.COMBO:
+        y_fields = []
+        if w_ubim and getattr(w_ubim, "encodings", None):
+            y_encodings = [e for e in w_ubim.encodings if getattr(e, "channel", None) == EncodingChannel.Y]
+            for i, enc in enumerate(y_encodings):
+                mark = "bar" if i == 0 else "line"
+                y_fields.append({"field": enc.field_name, "mark": mark})
+        if not y_fields and y_field and y_field not in PLACEHOLDER_FIELDS:
+            y_fields = [{"field": y_field, "mark": "bar"}]
+            if color_field and color_field not in PLACEHOLDER_FIELDS:
+                y_fields.append({"field": color_field, "mark": "line"})
+        if not y_fields and query_fields_list:
+            measures = [
+                qf["name"] for qf in query_fields_list
+                if qf.get("name") and qf["name"] != x_field and qf["name"] not in PLACEHOLDER_FIELDS
+            ]
+            for i, m in enumerate(measures):
+                y_fields.append({"field": m, "mark": "bar" if i == 0 else "line"})
+        if y_fields and x_field and x_field not in PLACEHOLDER_FIELDS:
+            return WidgetFactory.create_combo_widget(
+                dataset_name=dataset_ref,
+                x_field=x_field,
+                y_fields=y_fields,
+                title=title,
+                color_field=color_field,
+                query_fields=query_fields_list or None,
+                show_title=show_title,
+                enable_dual_axis=True,
+            )
+        logger.warning("Combo widget '%s' missing axes — falling back to bar", title)
+
+    # MAP / BOXPLOT / TABLE / fallback → table
     col_names: List[str] = []
     if query_fields_list:
         col_names = [qf["name"] for qf in query_fields_list if qf.get("name")]
@@ -513,7 +545,7 @@ def _create_widget_via_factory(
         return None
 
     table_title = title
-    if chart_type in (ChartType.MAP, ChartType.BOXPLOT, ChartType.COMBO):
+    if chart_type in (ChartType.MAP, ChartType.BOXPLOT):
         table_title = f"{title} (converted from {chart_type.value})"
 
     return WidgetFactory.create_table_widget(
@@ -584,8 +616,8 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                 height=w_ubim.position.grid_h,
             )
 
-            # Title fallback: worksheet name when zone title blank
-            title = (w_ubim.title or "").strip() or (w_ubim.name or "").strip()
+            # Title fallback: prefer canonical worksheet tab name
+            title = (w_ubim.name or "").strip() or (w_ubim.title or "").strip()
             if w_ubim.show_title is not None:
                 show_title = bool(w_ubim.show_title) or bool(title)
             else:
@@ -671,6 +703,7 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     query_fields_list=query_fields_list,
                     show_title=show_title,
                     dashboard_id=dash_id,
+                    w_ubim=w_ubim,
                 )
             except ValueError as exc:
                 logger.warning("Skipping widget '%s' — factory rejected spec: %s", log_label, exc)

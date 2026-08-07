@@ -37,7 +37,8 @@ from app.services.parser.workbook_ontology import (
 TABLEAU_DERIVATIONS = (
     'none', 'sum', 'usr', 'yr', 'qr', 'wk', 'mn', 'dy',
     'cnt', 'cntd', 'ctd', 'min', 'max', 'attr', 'avg', 'med',
-    'var', 'varp', 'stdev', 'stdevp', 'collect', 'percentile'
+    'var', 'varp', 'stdev', 'stdevp', 'collect', 'percentile',
+    'tyr', 'tqr', 'tms', 'twk', 'tdy'
 )
 DERIV_RE = re.compile(r'^(' + '|'.join(TABLEAU_DERIVATIONS) + r'):', re.IGNORECASE)
 

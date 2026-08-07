@@ -55,7 +55,53 @@ DERIV_TO_AGG = {
     'max': AggregationType.MAX,
     'attr': AggregationType.NONE,
     'med': AggregationType.MEDIAN,
+    'tyr': AggregationType.NONE,
+    'tms': AggregationType.NONE,
+    'tqr': AggregationType.NONE,
+    'twk': AggregationType.NONE,
+    'tdy': AggregationType.NONE,
 }
+
+_TRUNC_PREFIX_TO_SQL = {
+    'tyr': lambda col: f"YEAR(`{col}`)",
+    'tms': lambda col: f"DATE_TRUNC('month', `{col}`)",
+    'tqr': lambda col: f"DATE_TRUNC('quarter', `{col}`)",
+    'twk': lambda col: f"DATE_TRUNC('week', `{col}`)",
+    'tdy': lambda col: f"DATE_TRUNC('day', `{col}`)",
+}
+
+
+def _resolve_field_for_sql(field_name: str, resolver: Optional[CanonicalFieldResolver] = None,
+                           ds: Optional[DatasourceMetadata] = None) -> str:
+    """Resolve a field name to its physical column name for SQL generation.
+
+    Priority:
+        1. Truncation prefix detection (tyr:, tms:, etc.)
+        2. Canonical resolver (caption→internal→physical)
+        3. Datasource column metadata fallback
+        4. Original name as-is
+    """
+    if field_name:
+        for prefix, sql_fn in _TRUNC_PREFIX_TO_SQL.items():
+            if field_name.lower().startswith(prefix + ':'):
+                base_col = field_name[len(prefix)+1:]
+                physical = resolver.resolve_to_physical(base_col) if resolver else base_col
+                return sql_fn(physical)
+
+    if resolver:
+        physical = resolver.resolve_to_physical(field_name)
+        if physical != field_name:
+            return physical
+    # Fallback: check datasource columns for internal name
+    if ds:
+        for col in ds.columns:
+            caption = (col.caption or "").strip()
+            internal = (col.internal_name or "").strip()
+            if field_name == caption and internal:
+                return internal
+            if field_name == internal:
+                return internal
+    return field_name
 
 # Encoding aggregation strings from parser → AggregationType
 ENC_AGG_TO_TYPE = {
@@ -102,6 +148,10 @@ MARK_TO_CHART = {
     "Gantt Bar": ChartType.BAR,
     "Polygon": ChartType.MAP,
     "Shape": ChartType.SCATTER,
+    "Dual-axis bar": ChartType.COMBO,
+    "Dual-Axis Chart": ChartType.COMBO,
+    "Combo Chart": ChartType.COMBO,
+    "Bar Chart / KPI Grid": ChartType.BAR,
 }
 
 
@@ -1133,12 +1183,15 @@ def _dataset_sql_projects_field(sql: str, field_name: str) -> bool:
     """Return True if ``field_name`` appears as an output column of the dataset SQL."""
     if not sql or not field_name:
         return False
-    # Match backtick-wrapped identifiers or AS aliases / bare SELECT names
-    patterns = [
-        rf"`{re.escape(field_name)}`",
-        rf"\bAS\s+`{re.escape(field_name)}`",
-        rf"'[^']*'\s+AS\s+`{re.escape(field_name)}`",
-    ]
+    alias = _make_safe_alias(field_name)
+    candidates = {field_name, alias}
+    patterns = []
+    for name in candidates:
+        patterns.extend([
+            rf"`{re.escape(name)}`",
+            rf"\bAS\s+`{re.escape(name)}`",
+            rf"'{re.escape(name)}'",
+        ])
     return any(re.search(p, sql, flags=re.IGNORECASE) for p in patterns)
 
 
@@ -1227,6 +1280,10 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     """Build an IntermediateWidget with proper encodings, query fields, and layout."""
     resolved_mark = resolve_mark_type(ws.mark_type, ws.columns, ws.rows, ws.measure_bindings)
     chart_type = MARK_TO_CHART.get(resolved_mark, ChartType.BAR)
+    if ws.visual_type and ws.visual_type in MARK_TO_CHART:
+        vt_chart = MARK_TO_CHART[ws.visual_type]
+        if vt_chart != ChartType.BAR or chart_type == ChartType.BAR:
+            chart_type = vt_chart
     
     # Determine if this is an aggregated or disaggregated query
     is_disaggregated = chart_type in DISAGGREGATED_CHART_TYPES
@@ -1553,14 +1610,10 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         pass
     
     # Carry ontology presentation hints for later layout/review stages
-    display_title = (getattr(ws, "title", None) or "").strip()
-    show_title = bool(display_title)
+    display_title = (ws.name or "").strip() or (getattr(ws, "title", None) or "").strip()
+    show_title = True
     if zone is not None and getattr(zone, "show_title", None) is False:
         show_title = False
-    # Title fallback: never emit untitled orphan widgets — use worksheet name
-    if not display_title:
-        display_title = (ws.name or "").strip()
-        show_title = True
 
     expanded_measures, expand_src = _expand_worksheet_measures(ws, ds, resolver)
 
@@ -1571,7 +1624,12 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         for sf in (ws.columns_shelves or []) + (ws.rows_shelves or [])
     )
     y_count = sum(1 for e in encodings if e.channel == EncodingChannel.Y)
-    use_pivot = has_mn and (
+    is_crosstab_visual = chart_type in (ChartType.TABLE, ChartType.HEATMAP) or (
+        ws.visual_type and ws.visual_type.lower() in (
+            "text table", "crosstab", "pivot", "heat map", "heatmap (square)"
+        )
+    )
+    use_pivot = has_mn and is_crosstab_visual and (
         y_count > 1
         or (expand_src == "measure_names_filter" and len(expanded_measures) > 1)
     )
