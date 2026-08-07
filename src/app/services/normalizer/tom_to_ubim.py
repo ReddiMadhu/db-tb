@@ -562,12 +562,28 @@ def _build_where_clause(
 
         dt = _column_datatype(physical, ds, resolver)
 
-        if f.filter_type == "categorical" and f.exclude_values:
-            lit = ", ".join(_format_sql_literal(v, dt) for v in f.exclude_values)
-            conditions.append(f"`{physical}` NOT IN ({lit})")
-        elif f.filter_type == "categorical" and f.include_values:
-            lit = ", ".join(_format_sql_literal(v, dt) for v in f.include_values)
-            conditions.append(f"`{physical}` IN ({lit})")
+        if f.filter_type == "categorical" and (f.exclude_values or f.include_values):
+            raw_values = list(f.exclude_values or f.include_values)
+            is_exclude = bool(f.exclude_values)
+            op = "NOT IN" if is_exclude else "IN"
+            null_op = "IS NOT NULL" if is_exclude else "IS NULL"
+
+            null_members = [v for v in raw_values if str(v).lower() in ("%null%", "null") or v is None]
+            real_values = [v for v in raw_values if str(v).lower() not in ("%null%", "null") and v is not None]
+
+            parts = []
+            if real_values:
+                lit = ", ".join(_format_sql_literal(v, dt) for v in real_values)
+                parts.append(f"`{physical}` {op} ({lit})")
+            if null_members:
+                parts.append(f"`{physical}` {null_op}")
+
+            if parts:
+                joiner = " AND " if is_exclude else " OR "
+                if len(parts) > 1:
+                    conditions.append("(" + joiner.join(parts) + ")")
+                else:
+                    conditions.append(parts[0])
         elif f.filter_type == "quantitative":
             if f.min_value is not None:
                 conditions.append(f"`{physical}` >= {f.min_value}")
@@ -692,7 +708,14 @@ def _build_unpivot_measure_sql(
     branches = []
     for mname, magg in measures:
         label = _metric_display_label(mname).replace("'", "''")
-        agg = magg if magg != AggregationType.NONE else AggregationType.SUM
+        if magg == AggregationType.NONE:
+            col_meta = _get_column_metadata(mname, ds)
+            sem = classify_field(mname, col_meta.get('datatype', ''), col_meta.get('role', ''))
+            agg = semantic_to_aggregation(sem, col_meta.get('default_aggregation'))
+            if agg == AggregationType.NONE:
+                agg = AggregationType.SUM
+        else:
+            agg = magg
         value_expr = _build_field_expression(mname, agg)
         # CAST numeric aggregates to DOUBLE so UNION ALL types align (incidents vs money)
         branch = (
@@ -724,7 +747,9 @@ def _build_unpivot_measure_sql(
         )
 
     if dimensions:
-        sql += " ORDER BY 1"
+        metric_idx = len(dimensions) + 1
+        dim_orders = ", ".join(str(i + 1) for i in range(len(dimensions)))
+        sql += f" ORDER BY {dim_orders}, {metric_idx}"
     return sql
 
 
@@ -1567,6 +1592,19 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                         data_type="string",
                     ))
     
+    # Detect horizontal bar orientation (measures on Columns/X, dims on Rows/Y) and swap
+    if chart_type == ChartType.BAR:
+        x_encs = [e for e in encodings if e.channel == EncodingChannel.X]
+        y_encs = [e for e in encodings if e.channel == EncodingChannel.Y]
+        all_x_are_measures = x_encs and all(e.aggregation != AggregationType.NONE for e in x_encs)
+        all_y_are_dims = y_encs and all(e.aggregation == AggregationType.NONE for e in y_encs)
+        if all_x_are_measures and all_y_are_dims:
+            for e in encodings:
+                if e.channel == EncodingChannel.X:
+                    e.channel = EncodingChannel.Y
+                elif e.channel == EncodingChannel.Y:
+                    e.channel = EncodingChannel.X
+
     # Compute layout position from zone geometry if available
     pos = IntermediatePosition(
         grid_x=0,

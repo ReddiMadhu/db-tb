@@ -475,7 +475,7 @@ def _create_widget_via_factory(
     if chart_type == ChartType.PIVOT:
         row_fields = ["Metric"]
         column_fields: List[str] = []
-        cell_field = "sum(Value)"
+        cell_field = "Value"
         for qf in query_fields_list or []:
             n = qf.get("name") or ""
             if n in PLACEHOLDER_FIELDS:
@@ -657,8 +657,9 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                 if not query_fields_list and w_ubim.filters:
                     f0 = w_ubim.filters[0]
                     fname = f0.field_name
-                    query_fields_list = [{"expression": f"`{fname}`", "name": fname}]
-                    x_field = fname
+                    safe_alias = re.sub(r'[^a-zA-Z0-9_]', '_', fname).strip('_') or fname
+                    query_fields_list = [{"expression": f"`{safe_alias}`", "name": safe_alias}]
+                    x_field = safe_alias
                 f_field = x_field
                 if (not f_field or f_field in PLACEHOLDER_FIELDS) and query_fields_list:
                     f_field = query_fields_list[0]["name"]

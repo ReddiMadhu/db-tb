@@ -83,12 +83,15 @@ def infer_scale_type(
     *,
     role: str = "dimension",
     explicit: Optional[str] = None,
+    datatype: Optional[str] = None,
 ) -> str:
     """Infer Lakeview scale.type for an encoding channel."""
     if explicit in ("quantitative", "temporal", "categorical", "ordinal"):
         return explicit
     if role == "measure":
         return "quantitative"
+    if datatype and datatype.lower() in ("integer", "int", "long", "real", "float", "double", "number", "bigint", "smallint", "tinyint"):
+        return "categorical"
     if field_name and TEMPORAL_HINTS.search(field_name):
         return "temporal"
     return "categorical"
@@ -651,11 +654,11 @@ class WidgetFactory:
         dataset_name: str,
         row_fields: List[str],
         column_fields: List[str],
-        cell_field: str = "sum(Value)",
+        cell_field: str = "Value",
         title: str = "",
         query_fields: Optional[List[Dict[str, str]]] = None,
         show_title: bool = True,
-        cell_expression: str = "SUM(`Value`)",
+        cell_expression: str = "`Value`",
     ) -> Widget:
         """Create a Version 3 Pivot widget over an unpivoted (Metric, Value) dataset.
 
@@ -835,7 +838,8 @@ class WidgetFactory:
         for yf in y_fields:
             fname = yf.get("field") or yf.get("fieldName") or ""
             if fname:
-                cls._ensure_field(qfields, fname, f"SUM(`{fname}`)")
+                fallback_expr = f"SUM(`{fname}`)" if not query_fields else f"`{fname}`"
+                cls._ensure_field(qfields, fname, fallback_expr)
 
         y_encodings = []
         for yf in y_fields:
