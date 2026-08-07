@@ -11,6 +11,7 @@ from app.models.db_models import MigrationJob
 from app.services.parser.tableau_extractor import parse_workbook
 from app.services.parser.sync_to_db import sync_metadata_to_db
 from app.services.parser.dependency_graph import DependencyGraphEngine
+from app.services.parser.workbook_ontology import build_workbook_ontology
 
 router = APIRouter()
 
@@ -175,22 +176,68 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                 biz_subject = "Executive Business Dashboard"
 
             detailed_visuals = []
-            for idx, w in enumerate(workbook_meta.worksheets):
-                ws_measures = list(getattr(w, "measures", None) or [])
-                ws_dimensions = list(getattr(w, "dimensions", None) or [])
-                ws_filters = [f.field_name for f in getattr(w, 'filters', [])]
-                ws_params = [p.name for p in workbook_meta.parameters[:2]]
-                chart_type = getattr(w, 'mark_type', None) or ("Bar Chart" if idx % 3 == 0 else "Line Chart" if idx % 3 == 1 else "Table")
+            for w in workbook_meta.worksheets:
                 detailed_visuals.append({
-                    "title": f"{w.name} Chart",
-                    "type": chart_type.title(),
+                    "name": w.name,
+                    "title": w.title or w.name,
+                    "caption": w.caption or "",
+                    "description": w.description or "",
+                    "hidden": w.hidden,
+                    "type": w.visual_type or "Visual Chart",
+                    "mark_type": w.mark_type or "Automatic",
                     "worksheet": w.name,
-                    "measures": ws_measures,
-                    "dimensions": ws_dimensions,
-                    "filters": ws_filters,
-                    "parameters": ws_params,
-                    "encoding": f"Worksheet: {w.name} | Mark: {chart_type}",
-                    "hidden": getattr(w, "hidden", False),
+                    "columns": w.columns,
+                    "rows": w.rows,
+                    "measures": list(w.measures) if w.measures else [],
+                    "dimensions": list(w.dimensions) if w.dimensions else [],
+                    "filters": [f.field_name for f in w.filters],
+                    "encoding": f"Mark Type: {w.mark_type or 'Automatic'}, Visual: {w.visual_type or 'Chart'}",
+                    "tooltip": w.tooltip_text or "",
+                    "datasource_name": w.datasource_name or "",
+                    "used_calculated_fields": list(w.used_calculated_fields) if w.used_calculated_fields else [],
+                    "used_parameters": list(w.used_parameters) if w.used_parameters else [],
+                    "used_sets": list(w.used_sets) if w.used_sets else [],
+                    "used_groups": list(w.used_groups) if w.used_groups else [],
+                    "used_hierarchies": list(w.used_hierarchies) if w.used_hierarchies else [],
+                    "used_table_calcs": list(w.used_table_calcs) if w.used_table_calcs else [],
+                    "used_lod_calcs": list(w.used_lod_calcs) if w.used_lod_calcs else [],
+                    "rows_shelves": [
+                        {"field_name": sf.field_name, "derivation": sf.derivation, "raw": sf.raw}
+                        for sf in w.rows_shelves
+                    ],
+                    "columns_shelves": [
+                        {"field_name": sf.field_name, "derivation": sf.derivation, "raw": sf.raw}
+                        for sf in w.columns_shelves
+                    ],
+                    "pages_shelf": [
+                        {"field_name": sf.field_name, "derivation": sf.derivation, "raw": sf.raw}
+                        for sf in w.pages_shelf
+                    ],
+                    "measure_values_used": w.measure_values_used,
+                    "encodings": [
+                        {"channel": enc.channel, "field_name": enc.field_name, "field_type": enc.field_type,
+                         "aggregation": enc.aggregation, "derivation": enc.derivation}
+                        for enc in w.encodings
+                    ],
+                    "mark_properties": [mp.model_dump() for mp in w.mark_properties],
+                    "axes": [a.model_dump() for a in w.axes],
+                    "legends": [l.model_dump() for l in w.legends],
+                    "tooltip_fields": [tf.model_dump() for tf in w.tooltip_fields],
+                    "analytics": [a.model_dump() for a in w.analytics],
+                    "sorts": [
+                        {"field_name": s.field_name, "direction": s.direction, "sort_type": s.sort_type}
+                        for s in w.sorts
+                    ],
+                    "filter_details": [
+                        {"field_name": f.field_name, "filter_type": f.filter_type,
+                         "min_value": f.min_value, "max_value": f.max_value,
+                         "is_context_filter": f.is_context_filter, "is_global": f.is_global, "scope": f.scope,
+                         "ui_mode": f.ui_mode, "is_datasource_filter": f.is_datasource_filter, "is_table_calc_filter": f.is_table_calc_filter}
+                        for f in w.filters
+                    ],
+                    "related_actions": w.related_actions,
+                    "dashboard_consumers": w.dashboard_consumers,
+                    "complexity": w.complexity.model_dump() if w.complexity else None,
                 })
 
             # Deduplicate datasources and calculated fields
@@ -214,8 +261,42 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                             "caption": cname,
                             "formula": cf.formula,
                             "type": cf.formula_type,
-                            "datasource": ds.name
+                            "datasource": ds.name,
+                            "return_type": cf.return_type or cf.datatype,
+                            "dependencies": list(cf.depends_on_fields),
+                            "is_used": cf.is_used,
                         })
+
+            # Build dashboard-level metadata
+            main_db = workbook_meta.dashboards[0] if workbook_meta.dashboards else None
+            dashboard_title = main_db.title if main_db else None
+            dashboard_filters = main_db.filter_controls if main_db else []
+            dashboard_legends = main_db.legend_controls if main_db else []
+
+            # Build actions list
+            actions_list = [
+                {
+                    "name": a.name,
+                    "caption": a.caption,
+                    "action_type": a.type,
+                    "activation_type": a.trigger,
+                    "source": a.source,
+                    "source_type": a.source_type,
+                    "target": a.target[0] if a.target else None,
+                    "targets": list(a.target),
+                    "field": a.fields[0] if a.fields else None,
+                    "fields": list(a.fields),
+                    "dashboard": a.dashboard,
+                    "command": a.command,
+                }
+                for a in workbook_meta.actions
+            ]
+            groups_list = [
+                {"name": g.name, "field": g.field, "members": g.members[:20], "auto_column": g.auto_column, "hidden": g.hidden}
+                for g in workbook_meta.groups
+            ]
+            sets_list = [{"name": s.name, "field": s.field, "condition": s.condition} for s in workbook_meta.sets]
+            hierarchies_list = [{"name": h.name, "levels": h.levels} for h in workbook_meta.hierarchies]
 
             db.add(StageResult(
                 job_uuid=job_uuid,
@@ -244,35 +325,44 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                 },
                 artifacts={
                     "dashboard_name": workbook_meta.dashboards[0].name if workbook_meta.dashboards else (file.filename.replace('.twbx', '').replace('.twb', '')),
+                    "dashboard_title": dashboard_title,
+                    "dashboard_filters": dashboard_filters,
+                    "dashboard_legends": dashboard_legends,
                     "business_subject": biz_subject,
                     "detected_visuals": list(set([v["type"] for v in detailed_visuals])) or ["Bar Chart", "Table"],
                     "detailed_visuals": detailed_visuals,
                     "measures": list(set(measures))[:15],
                     "dimensions": list(set(dimensions))[:15],
                     "worksheets": [w.name for w in workbook_meta.worksheets],
-                    "dashboards": [{"name": d.name, "worksheets": d.worksheets, "zone_count": len(d.zones)} for d in workbook_meta.dashboards],
+                    "dashboards": [{"name": d.name, "title": d.title, "worksheets": d.worksheets, "zone_count": len(d.zones), "filter_controls": d.filter_controls, "legend_controls": d.legend_controls} for d in workbook_meta.dashboards],
                     "datasources": [
                         {
                             "name": ds.name,
                             "caption": ds.caption or ds.name,
                             "connection_type": ds.connection_type or "unknown",
+                            "table_count": len(ds.tables),
                             "tables": [t.name for t in ds.tables],
+                            "column_count": len(ds.columns),
                             "columns": [c.internal_name for c in ds.columns[:100]],
                             "calculated_field_count": len(ds.calculated_fields),
                             "is_databricks": ds.databricks_connection is not None,
                         }
                         for ds in unique_datasources
                     ],
-                    "calculated_fields": unique_calcs,
+                    "calculated_fields": unique_calcs[:200],
                     "parameters": [
                         {"name": p.name, "datatype": p.datatype, "current_value": p.current_value, "domain_type": p.domain_type}
                         for p in workbook_meta.parameters
                     ],
                     "filters": [
-                        {"worksheet": w.name, "field": f.field_name, "type": f.filter_type}
+                        {"worksheet": w.name, "field": f.field_name, "type": f.filter_type, "scope": f.scope}
                         for w in workbook_meta.worksheets
                         for f in w.filters
                     ][:100],
+                    "actions": actions_list,
+                    "groups": groups_list,
+                    "sets": sets_list,
+                    "hierarchies": hierarchies_list,
                     "joins": [
                         {"join_type": j.join_type, "left_table": j.left_table, "left_column": j.left_column, "right_table": j.right_table, "right_column": j.right_column, "datasource": ds.name}
                         for ds in unique_datasources for j in ds.joins
@@ -288,6 +378,7 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
                             for c in workbook_meta.databricks_connections
                         ],
                     } if workbook_meta.has_databricks_connections else None,
+                    "workbook_ontology": build_workbook_ontology(workbook_meta).get("workbook_ontology"),
                 },
                 logs=[
                     f"[INFO] Parsing XML DOM tree...",
