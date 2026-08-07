@@ -227,8 +227,15 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
         if not isinstance(x_enc, dict) or not x_enc.get("fieldName"):
             errors.append("Combo widget missing required 'x' encoding fieldName.")
         y_enc = encodings.get("y")
-        if not isinstance(y_enc, dict) or not y_enc.get("primary"):
-            errors.append("Combo widget missing required 'y.primary' encoding object.")
+        if not isinstance(y_enc, dict):
+            errors.append("Combo widget missing required 'y' encoding object.")
+        else:
+            primary = y_enc.get("primary")
+            if primary is not None:
+                if not isinstance(primary, dict):
+                    errors.append("Combo widget 'y.primary' encoding must be an object.")
+            elif not y_enc.get("fieldName"):
+                errors.append("Combo widget 'y' encoding missing 'primary' object or 'fieldName'.")
 
     elif wt == "table":
         cols = encodings.get("columns")
