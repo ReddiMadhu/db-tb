@@ -824,24 +824,38 @@ def _resolve_worksheet_datasource(ws_el, ds_names: list) -> str:
     return ds_names[0] if ds_names else ""
 
 
-def _extract_used_calc_fields(ws_el, ds_prefixes: list, calc_field_names: set) -> list:
+def _extract_used_calc_fields(ws_el, ds_prefixes: list, calc_field_names: set, caption_map: dict = None) -> list:
     """Detect which calculated fields are referenced by a worksheet."""
     used = []
+    seen = set()
+
+    def add_calc(raw_field: str):
+        if not raw_field:
+            return
+        clean = _clean_field(raw_field, ds_prefixes)
+        resolved = caption_map.get(clean, clean) if caption_map else clean
+        for cand in (clean, resolved):
+            if cand in calc_field_names and cand not in seen:
+                seen.add(cand)
+                used.append(cand)
+
     # Check cols, rows, and encoding references
     for text_el in [ws_el.find(".//cols"), ws_el.find(".//rows")]:
         if text_el is not None and text_el.text:
             for bracket_ref in re.findall(r'\[([^\]]+)\]', text_el.text):
-                clean = _clean_field(f"[{bracket_ref}]", ds_prefixes)
-                if clean in calc_field_names and clean not in used:
-                    used.append(clean)
+                add_calc(f"[{bracket_ref}]")
     
     # Check encoding field references
     for enc in ws_el.xpath(".//encoding[@field]") + ws_el.xpath(".//panes/pane/encodings/encoding"):
         field = enc.get("field", "")
         if field:
-            clean = _clean_field(field, ds_prefixes)
-            if clean in calc_field_names and clean not in used:
-                used.append(clean)
+            add_calc(field)
+
+    # Check datasource-dependencies columns
+    for dep in ws_el.xpath(".//datasource-dependencies/column"):
+        field = dep.get("name", "")
+        if field:
+            add_calc(field)
     
     return used
 
@@ -2223,7 +2237,7 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         ws_measures, ws_dimensions = _extract_worksheet_field_roles(ws_el, ds_prefixes, caption_map)
         sorts = _extract_worksheet_sorts(ws_el, ds_prefixes)
         datasource_name = _resolve_worksheet_datasource(ws_el, ds_name_list)
-        used_calcs = _extract_used_calc_fields(ws_el, ds_prefixes, all_calc_names)
+        used_calcs = _extract_used_calc_fields(ws_el, ds_prefixes, all_calc_names, caption_map)
         tooltip = _extract_tooltip_text(ws_el)
         ws_title = _extract_worksheet_title(ws_el, ws_name)
         measure_val_used = _detect_measure_values(ws_el)

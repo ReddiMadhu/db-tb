@@ -519,17 +519,22 @@ def _create_widget_via_factory(
             for i, enc in enumerate(y_encodings):
                 mark = "bar" if i == 0 else "line"
                 y_fields.append({"field": enc.field_name, "mark": mark})
-        if not y_fields and y_field and y_field not in PLACEHOLDER_FIELDS:
-            y_fields = [{"field": y_field, "mark": "bar"}]
-            if color_field and color_field not in PLACEHOLDER_FIELDS:
-                y_fields.append({"field": color_field, "mark": "line"})
-        if not y_fields and query_fields_list:
+        if len(y_fields) <= 1 and query_fields_list:
+            existing_y_names = {yf.get("field") for yf in y_fields if yf.get("field")}
             measures = [
                 qf["name"] for qf in query_fields_list
                 if qf.get("name") and qf["name"] != x_field and qf["name"] not in PLACEHOLDER_FIELDS
+                and qf["name"] not in existing_y_names
             ]
-            for i, m in enumerate(measures):
-                y_fields.append({"field": m, "mark": "bar" if i == 0 else "line"})
+            if y_fields and measures:
+                y_fields.append({"field": measures[0], "mark": "line"})
+            elif not y_fields and len(measures) >= 2:
+                y_fields = [
+                    {"field": measures[0], "mark": "bar"},
+                    {"field": measures[1], "mark": "line"},
+                ]
+            elif not y_fields and measures:
+                y_fields = [{"field": measures[0], "mark": "bar"}]
         if y_fields and x_field and x_field not in PLACEHOLDER_FIELDS:
             return WidgetFactory.create_combo_widget(
                 dataset_name=dataset_ref,

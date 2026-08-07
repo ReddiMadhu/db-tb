@@ -130,21 +130,31 @@ DISAGGREGATED_CHART_TYPES = {
 }
 
 # Mark type → ChartType mapping
+# Keys must match BOTH resolve_mark_type() output AND _infer_visual_type() output.
 MARK_TO_CHART = {
     "Bar": ChartType.BAR,
+    "Bar Chart": ChartType.BAR,            # from resolve_mark_type
     "Stacked Bar": ChartType.BAR,
     "Side-by-Side Bar": ChartType.BAR,
     "Line": ChartType.LINE,
+    "Line Chart": ChartType.LINE,           # from resolve_mark_type
     "Area": ChartType.AREA,
+    "Area Chart": ChartType.AREA,           # from resolve_mark_type
     "Scatter": ChartType.SCATTER,
     "Scatter Plot": ChartType.SCATTER,
     "Circle": ChartType.SCATTER,
     "Pie": ChartType.PIE,
+    "Pie chart": ChartType.PIE,             # from resolve_mark_type (lowercase 'c')
+    "Pie Map Chart": ChartType.MAP,         # from _infer_visual_type
     "Text Table": ChartType.TABLE,
+    "Text table": ChartType.TABLE,          # from resolve_mark_type (lowercase 't')
     "Text / Value": ChartType.TABLE,
     "Text Table / KPI": ChartType.COUNTER,
     "Square": ChartType.HEATMAP,
+    "Heatmap (square)": ChartType.HEATMAP,  # from resolve_mark_type
     "Map": ChartType.MAP,
+    "Map Chart": ChartType.MAP,             # from _infer_visual_type
+    "Symbol Map": ChartType.MAP,            # from resolve_mark_type / _infer_visual_type
     "Gantt Bar": ChartType.BAR,
     "Polygon": ChartType.MAP,
     "Shape": ChartType.SCATTER,
@@ -1045,6 +1055,35 @@ def normalize_tom_to_ubim(
                 if mname not in seen_dim_names:
                     dimensions.append(mname)
                     seen_dim_names.add(mname)
+
+        # Validate dimensions and measures against datasource column names if known
+        ds_columns = set()
+        if ds and ds.columns:
+            for col in ds.columns:
+                if col.caption:
+                    ds_columns.add(col.caption)
+                if col.internal_name:
+                    ds_columns.add(col.internal_name)
+                alias = _make_safe_alias(col.internal_name or col.caption or "")
+                if alias:
+                    ds_columns.add(alias)
+
+        if ds_columns:
+            valid_dims = []
+            for d in dimensions:
+                if d in ds_columns or (resolver and resolver._lookup(d) is not None):
+                    valid_dims.append(d)
+                else:
+                    logger.warning("Dropping non-existent dimension '%s' for worksheet '%s'", d, ws.name)
+            dimensions = valid_dims
+
+            valid_meas = []
+            for mname, magg in measures:
+                if mname in ds_columns or (resolver and resolver._lookup(mname) is not None):
+                    valid_meas.append((mname, magg))
+                else:
+                    logger.warning("Dropping non-existent measure '%s' for worksheet '%s'", mname, ws.name)
+            measures = valid_meas
 
         # WHERE clause — resolve captions→physical and expand Tableau groups
         where = _build_where_clause(

@@ -204,18 +204,63 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     [worksheets, selectedWs]
   );
 
-  // ── Build reverse lookup: calc field name → worksheet names ──
+  // ── Name to caption lookup map for resolving Calculation_* IDs ──
+  const calcNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    calcFields.forEach((cf) => {
+      if (cf.name) map.set(cf.name, cf.caption || cf.name);
+      if (cf.caption) map.set(cf.caption, cf.caption);
+    });
+    return map;
+  }, [calcFields]);
+
+  const resolveFieldName = useCallback(
+    (field: string): string => {
+      if (!field) return "";
+      if (calcNameMap.has(field)) return calcNameMap.get(field)!;
+      return field;
+    },
+    [calcNameMap]
+  );
+
+  // ── Build reverse lookup: calc field name/caption → worksheet names ──
   const calcToWorksheets = useMemo(() => {
     const map = new Map<string, string[]>();
+    const addLink = (key: string, wsName: string) => {
+      if (!key) return;
+      if (!map.has(key)) map.set(key, []);
+      if (!map.get(key)!.includes(wsName)) map.get(key)!.push(wsName);
+    };
+
     worksheets.forEach((ws) => {
-      const usedCalcs = ws.used_calculated_fields || [];
-      usedCalcs.forEach((cfName) => {
-        if (!map.has(cfName)) map.set(cfName, []);
-        map.get(cfName)!.push(ws.name);
+      const rawWsFields = [
+        ...(ws.used_calculated_fields || []),
+        ...(ws.measures || []),
+        ...(ws.dimensions || []),
+        ...(ws.columns || []),
+        ...(ws.rows || []),
+        ...(ws.filters || []),
+        ...(ws.encodings || []).map((e) => e.field_name),
+        ...(ws.rows_shelves || []).map((s) => s.field_name),
+        ...(ws.columns_shelves || []).map((s) => s.field_name),
+      ];
+
+      const matchedKeys = new Set<string>();
+      rawWsFields.forEach((f) => {
+        matchedKeys.add(f);
+        const resolved = resolveFieldName(f);
+        if (resolved) matchedKeys.add(resolved);
+      });
+
+      calcFields.forEach((cf) => {
+        if (matchedKeys.has(cf.name) || matchedKeys.has(cf.caption)) {
+          addLink(cf.name, ws.name);
+          addLink(cf.caption, ws.name);
+        }
       });
     });
     return map;
-  }, [worksheets]);
+  }, [worksheets, calcFields, resolveFieldName]);
 
   // ── Filtered worksheets by search ──
   const filteredWs = useMemo(() => {
@@ -230,17 +275,60 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const filteredCalcs = useMemo(() => {
     let list = calcFields;
     if (selectedWs && selectedVisual) {
-      const usedNames = new Set(selectedVisual.used_calculated_fields || []);
-      if (usedNames.size > 0) {
-        list = list.filter((cf) => usedNames.has(cf.name) || usedNames.has(cf.caption));
+      const rawWsFields = [
+        ...(selectedVisual.used_calculated_fields || []),
+        ...(selectedVisual.measures || []),
+        ...(selectedVisual.dimensions || []),
+        ...(selectedVisual.columns || []),
+        ...(selectedVisual.rows || []),
+        ...(selectedVisual.filters || []),
+        ...(selectedVisual.encodings || []).map((e) => e.field_name),
+        ...(selectedVisual.rows_shelves || []).map((s) => s.field_name),
+        ...(selectedVisual.columns_shelves || []).map((s) => s.field_name),
+      ];
+
+      const matchedCalcKeys = new Set<string>();
+      rawWsFields.forEach((f) => {
+        matchedCalcKeys.add(f);
+        const resolved = resolveFieldName(f);
+        if (resolved) matchedCalcKeys.add(resolved);
+      });
+
+      const linkedCalcs = new Set<string>();
+      calcFields.forEach((cf) => {
+        if (matchedCalcKeys.has(cf.name) || matchedCalcKeys.has(cf.caption)) {
+          linkedCalcs.add(cf.name);
+          linkedCalcs.add(cf.caption);
+        }
+      });
+
+      // Expand to include indirect dependencies (e.g. RPC Color -> RPC % -> RPC)
+      let added = true;
+      while (added) {
+        added = false;
+        calcFields.forEach((cf) => {
+          if (!linkedCalcs.has(cf.name) && !linkedCalcs.has(cf.caption)) {
+            const dependsOnLinked = cf.dependencies?.some((dep) => {
+              const resDep = resolveFieldName(dep);
+              return linkedCalcs.has(dep) || linkedCalcs.has(resDep);
+            });
+            if (dependsOnLinked) {
+              linkedCalcs.add(cf.name);
+              linkedCalcs.add(cf.caption);
+              added = true;
+            }
+          }
+        });
       }
+
+      list = list.filter((cf) => linkedCalcs.has(cf.name) || linkedCalcs.has(cf.caption));
     }
     if (calcSearch.trim()) {
       const q = calcSearch.toLowerCase();
       list = list.filter((cf) => cf.caption.toLowerCase().includes(q) || cf.name.toLowerCase().includes(q));
     }
     return list;
-  }, [calcFields, selectedWs, selectedVisual, calcSearch]);
+  }, [calcFields, selectedWs, selectedVisual, calcSearch, resolveFieldName]);
 
   // ── Complete Workbook Tables & Data Model ──
   const tableSet = new Set<string>();
@@ -451,23 +539,23 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                             {ws.rows_shelves && ws.rows_shelves.length > 0 ? (
                               ws.rows_shelves.map((s, i) => (
                                 <span key={`r-${i}`} className={`${styles.miniPill} ${styles.miniPillShelf}`}>
-                                  Row: {s.derivation ? `${s.derivation}(${s.field_name})` : s.field_name}
+                                  Row: {s.derivation ? `${s.derivation}(${resolveFieldName(s.field_name)})` : resolveFieldName(s.field_name)}
                                 </span>
                               ))
                             ) : (
                               ws.rows?.map((r, i) => (
-                                <span key={`r-${i}`} className={`${styles.miniPill} ${styles.miniPillShelf}`}>Row: {r}</span>
+                                <span key={`r-${i}`} className={`${styles.miniPill} ${styles.miniPillShelf}`}>Row: {resolveFieldName(r)}</span>
                               ))
                             )}
                             {ws.columns_shelves && ws.columns_shelves.length > 0 ? (
                               ws.columns_shelves.map((s, i) => (
                                 <span key={`c-${i}`} className={`${styles.miniPill} ${styles.miniPillShelf}`}>
-                                  Col: {s.derivation ? `${s.derivation}(${s.field_name})` : s.field_name}
+                                  Col: {s.derivation ? `${s.derivation}(${resolveFieldName(s.field_name)})` : resolveFieldName(s.field_name)}
                                 </span>
                               ))
                             ) : (
                               ws.columns?.map((c, i) => (
-                                <span key={`c-${i}`} className={`${styles.miniPill} ${styles.miniPillShelf}`}>Col: {c}</span>
+                                <span key={`c-${i}`} className={`${styles.miniPill} ${styles.miniPillShelf}`}>Col: {resolveFieldName(c)}</span>
                               ))
                             )}
                             {(!ws.rows?.length && !ws.columns?.length && !ws.rows_shelves?.length && !ws.columns_shelves?.length) && (
@@ -502,7 +590,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                                 key={i}
                                 className={`${styles.miniPill} ${enc.channel === "lod" ? styles.miniPillLod : styles.miniPillShelf}`}
                               >
-                                {enc.channel}: {enc.aggregation ? `${enc.aggregation}(${enc.field_name})` : enc.field_name}
+                                {enc.channel}: {enc.aggregation ? `${enc.aggregation}(${resolveFieldName(enc.field_name)})` : resolveFieldName(enc.field_name)}
                               </span>
                             ))}
                           </div>
@@ -516,7 +604,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                             <span className={styles.specBlockLabel}>Dimensions (Grouping Attributes) ({ws.dimensions.length})</span>
                             <div className={styles.wsExpandedPills}>
                               {ws.dimensions.map((d, i) => (
-                                <span key={i} className={`${styles.miniPill} ${styles.miniPillDim}`}>{d}</span>
+                                <span key={i} className={`${styles.miniPill} ${styles.miniPillDim}`}>{resolveFieldName(d)}</span>
                               ))}
                             </div>
                           </div>
@@ -525,9 +613,25 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                           <div className={styles.specBlock}>
                             <span className={styles.specBlockLabel}>Measures (Numerical Metrics) ({ws.measures.length})</span>
                             <div className={styles.wsExpandedPills}>
-                              {ws.measures.map((m, i) => (
-                                <span key={i} className={`${styles.miniPill} ${styles.miniPillMeasure}`}>{m}</span>
-                              ))}
+                              {ws.measures.map((m, i) => {
+                                const resolved = resolveFieldName(m);
+                                const isCalc = calcNameMap.has(m) || calcNameMap.has(resolved);
+                                return (
+                                  <span
+                                    key={i}
+                                    className={`${styles.miniPill} ${isCalc ? styles.miniPillCalc : styles.miniPillMeasure}`}
+                                    onClick={(e) => {
+                                      if (isCalc) {
+                                        e.stopPropagation();
+                                        setSelectedCalc(resolved);
+                                      }
+                                    }}
+                                    style={isCalc ? { cursor: "pointer" } : undefined}
+                                  >
+                                    {resolved}
+                                  </span>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -543,7 +647,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                             {ws.filter_details && ws.filter_details.length > 0
                               ? ws.filter_details.map((f, i) => (
                                   <span key={i} className={`${styles.miniPill} ${styles.miniPillFilter}`} title={f.scope}>
-                                    {f.field_name}
+                                    {resolveFieldName(f.field_name)}
                                     <span className={styles.filterTypeTag}>{f.filter_type}</span>
                                     {f.filter_type === "quantitative" && (f.min_value != null || f.max_value != null)
                                       ? ` [${f.min_value ?? "…"} – ${f.max_value ?? "…"}]`
@@ -551,7 +655,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                                   </span>
                                 ))
                               : ws.filters.map((f, i) => (
-                                  <span key={i} className={`${styles.miniPill} ${styles.miniPillFilter}`}>{f}</span>
+                                  <span key={i} className={`${styles.miniPill} ${styles.miniPillFilter}`}>{resolveFieldName(f)}</span>
                                 ))}
                           </div>
                         </div>
@@ -630,15 +734,19 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                         <div className={styles.specBlock}>
                           <span className={styles.specBlockLabel}>Calculated Fields Used ({ws.used_calculated_fields.length})</span>
                           <div className={styles.wsExpandedPills}>
-                            {ws.used_calculated_fields.map((cf, i) => (
-                              <span
-                                key={i}
-                                className={`${styles.miniPill} ${styles.miniPillCalc}`}
-                                onClick={(e) => { e.stopPropagation(); setSelectedCalc(cf); }}
-                              >
-                                𝑓 {cf}
-                              </span>
-                            ))}
+                            {ws.used_calculated_fields.map((cf, i) => {
+                              const resolved = resolveFieldName(cf);
+                              return (
+                                <span
+                                  key={i}
+                                  className={`${styles.miniPill} ${styles.miniPillCalc}`}
+                                  onClick={(e) => { e.stopPropagation(); setSelectedCalc(resolved); }}
+                                  style={{ cursor: "pointer" }}
+                                >
+                                  𝑓 {resolved}
+                                </span>
+                              );
+                            })}
                           </div>
                         </div>
                       )}

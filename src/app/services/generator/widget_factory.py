@@ -223,7 +223,15 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
         _require_channels(("x", "y"))
 
     elif wt == "combo":
-        _require_channels(("x", "y"))
+        _require_channels(("x",))
+        y = encodings.get("y")
+        if not isinstance(y, dict):
+            errors.append("combo missing required 'y' encoding.")
+        else:
+            has_top_level = bool(y.get("fieldName"))
+            has_primary = isinstance(y.get("primary"), dict)
+            if not has_top_level and not has_primary:
+                errors.append("combo 'y' encoding must have either 'fieldName' or 'primary' structure.")
 
     elif wt == "table":
         cols = encodings.get("columns")
