@@ -871,15 +871,12 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                 >
                   <div className={styles.calcCardTop}>
                     <span className={styles.calcName}>{cf.caption}</span>
-                    {cf.is_used === false ? (
-                      <span className={styles.unusedBadge}>Unused</span>
-                    ) : cf.is_used === true ? (
-                      <span className={styles.usedBadge}>Used</span>
-                    ) : null}
                     {cf.return_type ? (
                       <span className={styles.calcTypeBadge}>{cf.return_type}</span>
                     ) : null}
-                    <span className={styles.calcTypeBadge}>{cf.type}</span>
+                    {cf.type && cf.type !== "STANDARD" ? (
+                      <span className={styles.calcTypeBadge}>{cf.type}</span>
+                    ) : null}
                   </div>
 
                   {isExpanded && (
