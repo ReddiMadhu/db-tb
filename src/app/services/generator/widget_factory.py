@@ -223,19 +223,7 @@ def validate_widget_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
         _require_channels(("x", "y"))
 
     elif wt == "combo":
-        x_enc = encodings.get("x")
-        if not isinstance(x_enc, dict) or not x_enc.get("fieldName"):
-            errors.append("Combo widget missing required 'x' encoding fieldName.")
-        y_enc = encodings.get("y")
-        if not isinstance(y_enc, dict):
-            errors.append("Combo widget missing required 'y' encoding object.")
-        else:
-            primary = y_enc.get("primary")
-            if primary is not None:
-                if not isinstance(primary, dict):
-                    errors.append("Combo widget 'y.primary' encoding must be an object.")
-            elif not y_enc.get("fieldName"):
-                errors.append("Combo widget 'y' encoding missing 'primary' object or 'fieldName'.")
+        _require_channels(("x", "y"))
 
     elif wt == "table":
         cols = encodings.get("columns")
@@ -862,10 +850,9 @@ class WidgetFactory:
                     cls._ensure_field(qfields, secondary_fname, fallback_expr)
 
         y_encoding: Dict[str, Any] = {
-            "primary": {
-                "fields": [{"fieldName": primary_fname}],
-                "scale": {"type": "quantitative"},
-            }
+            "fieldName": primary_fname,
+            "displayName": _clean_title(primary_fname),
+            "scale": {"type": "quantitative"},
         }
         if secondary_fname:
             y_encoding["secondary"] = {
