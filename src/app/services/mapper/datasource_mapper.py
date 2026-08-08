@@ -54,6 +54,30 @@ def clean_table_name_for_catalog(raw_name: str) -> str:
     return name.lower() or 'imported_table'
 
 
+# Statuses that carry a usable target for pipeline execute.
+EXECUTABLE_MAPPING_STATUSES = frozenset({"CONFIRMED", "AUTO_DETECTED", "MATCHED"})
+
+
+def normalize_mapping_status_for_save(status: Optional[str], target_full_name: str) -> str:
+    """Promote auto/matched/pending rows with a target to CONFIRMED on save."""
+    status = (status or "PENDING").strip() or "PENDING"
+    if target_full_name and status in ("AUTO_DETECTED", "MATCHED", "PENDING", ""):
+        return "CONFIRMED"
+    return status
+
+
+def build_execute_table_mapping(rows: list) -> Dict[str, str]:
+    """Build tableau_table → UC FQN map from DB mapping rows for /execute."""
+    out: Dict[str, str] = {}
+    for m in rows:
+        status = getattr(m, "status", None) or ""
+        target = getattr(m, "target_full_name", None) or ""
+        name = getattr(m, "tableau_table_name", None) or ""
+        if name and target and status in EXECUTABLE_MAPPING_STATUSES:
+            out[name] = target
+    return out
+
+
 def extract_embedded_files_from_twbx(twbx_path: str) -> List[Dict[str, str]]:
     """List data files embedded inside a .twbx archive."""
     if not twbx_path or not zipfile.is_zipfile(twbx_path):

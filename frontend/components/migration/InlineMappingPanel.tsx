@@ -167,7 +167,9 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
     setSaving(true);
     try {
       if (totalCount > 0) {
-        const list = Object.values(mappings);
+        const list = Object.values(mappings).map((m) =>
+          m.target_full_name ? { ...m, status: "CONFIRMED" as const } : m
+        );
         await saveMappings(jobUuid, list);
       }
       if (onExecute) {
@@ -184,7 +186,10 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
   };
 
   const handleSaveAndExecute = async () => {
-    const list = Object.values(mappings);
+    // Promote Auto-Detected / Matched rows to CONFIRMED so /execute loads them.
+    const list = Object.values(mappings).map((m) =>
+      m.target_full_name ? { ...m, status: "CONFIRMED" as const } : m
+    );
     const unmapped = list.filter((m) => !m.target_full_name);
     if (unmapped.length > 0) {
       toastError(`${unmapped.length} datasource(s) still unmapped.`, "Incomplete");
@@ -193,6 +198,13 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
     setSaving(true);
     try {
       await saveMappings(jobUuid, list);
+      setMappings((prev) => {
+        const next = { ...prev };
+        for (const m of list) {
+          next[m.tableau_table_name] = m;
+        }
+        return next;
+      });
       if (onExecute) {
         onExecute();
       } else {
@@ -355,52 +367,65 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
         </div>
       )}
 
-      {/* Column-Level Lineage & Transformation Table */}
+      {/* Target Databricks Table Mapping Lineage */}
       <div style={{ marginTop: "1.5rem" }}>
         <h4 style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: "0.5rem" }}>
-          Intelligent Column Lineage & Transformations
+          Target Databricks Table Mapping Lineage
         </h4>
-        <table className={styles.columnTable}>
-          <thead>
-            <tr>
-              <th>Source Column</th>
-              <th>Detected Meaning</th>
-              <th>Target Databricks Column</th>
-              <th>Transformation</th>
-              <th>Confidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ fontWeight: 600 }}>Claim Amount</td>
-              <td><span style={{ color: "var(--accent-purple)", fontWeight: 600 }}>Currency Measure</span></td>
-              <td style={{ fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>claim_amount</td>
-              <td><span className={styles.transformBadge}>No Transformation</span></td>
-              <td><span className={styles.confidenceBadgeHigh}>100%</span></td>
-            </tr>
-            <tr>
-              <td style={{ fontWeight: 600 }}>Region</td>
-              <td><span style={{ color: "var(--accent-amber)", fontWeight: 600 }}>Geographic Dimension</span></td>
-              <td style={{ fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>region_name</td>
-              <td><span className={styles.transformBadge}>Trim()</span></td>
-              <td><span className={styles.confidenceBadgeHigh}>98%</span></td>
-            </tr>
-            <tr>
-              <td style={{ fontWeight: 600 }}>Age</td>
-              <td><span style={{ color: "var(--accent-orange)", fontWeight: 600 }}>Bucketed Demographic</span></td>
-              <td style={{ fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>age_group</td>
-              <td><span className={styles.transformBadge}>CASE WHEN...</span></td>
-              <td><span className={styles.confidenceBadgeHigh}>95%</span></td>
-            </tr>
-            <tr>
-              <td style={{ fontWeight: 600 }}>Policy Status</td>
-              <td><span style={{ color: "var(--accent-green)", fontWeight: 600 }}>Status Flag</span></td>
-              <td style={{ fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>policy_status</td>
-              <td><span className={styles.transformBadge}>UPPER()</span></td>
-              <td><span className={styles.confidenceBadgeHigh}>99%</span></td>
-            </tr>
-          </tbody>
-        </table>
+        {Object.keys(mappings).length > 0 ? (
+          <table className={styles.columnTable}>
+            <thead>
+              <tr>
+                <th>Source Table</th>
+                <th>Connection Type</th>
+                <th>Target Databricks Table (Unity Catalog)</th>
+                <th>Mapping Status</th>
+                <th>Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.values(mappings).map((item, idx) => {
+                const target = item.target_full_name || "Unmapped";
+                const isMapped = Boolean(item.target_full_name);
+                const confPct = item.confidence_score ? Math.round(item.confidence_score * 100) : isMapped ? 100 : 0;
+
+                return (
+                  <tr key={idx}>
+                    <td style={{ fontWeight: 600 }}>{item.tableau_table_name}</td>
+                    <td>
+                      <span style={{ color: "var(--text-secondary)", fontWeight: 500, fontSize: "0.75rem" }}>
+                        {item.tableau_connection_type || "Relational"}
+                      </span>
+                    </td>
+                    <td style={{ fontFamily: "var(--font-mono)", color: isMapped ? "var(--accent-cyan)" : "var(--text-tertiary)" }}>
+                      {target}
+                    </td>
+                    <td>
+                      <span className={isMapped ? styles.transformBadge : styles.unmappedBadge}>
+                        {item.status === "AUTO_DETECTED"
+                          ? "Auto-Detected"
+                          : item.status === "MATCHED"
+                          ? "Catalog Matched"
+                          : isMapped
+                          ? "Confirmed"
+                          : "Pending"}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={confPct >= 80 ? styles.confidenceBadgeHigh : styles.unmappedBadge}>
+                        {confPct}%
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ fontSize: "0.8rem", color: "var(--text-tertiary)", fontStyle: "italic" }}>
+            No table mappings found for this migration job.
+          </div>
+        )}
       </div>
     </div>
   );
