@@ -16,10 +16,11 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import type { StageDetail } from "@/lib/types";
-import { getLakeviewJson, getStageDetail } from "@/lib/api";
+import { getLakeviewJson, getStageDetail, getMigrationStatus } from "@/lib/api";
 import {
   LakeviewDashboardAdapter,
   buildCalcLabelMap,
+  fieldAliasKeys,
   normalizeName,
   resolveCalcLabel,
   type MatchedPair,
@@ -54,9 +55,30 @@ export default function CalcLogicConversionDetail({
   const [selectedWorksheet, setSelectedWorksheet] = useState<string | null>(null);
   const [parseCalcs, setParseCalcs] = useState<Array<Record<string, unknown>>>([]);
   const [adapter, setAdapter] = useState<LakeviewDashboardAdapter | null>(null);
+  const [resolvedGolden, setResolvedGolden] = useState(Boolean(goldenOverride));
 
   useEffect(() => {
-    if (!goldenOverride) {
+    if (goldenOverride) {
+      setResolvedGolden(true);
+      return;
+    }
+    let cancelled = false;
+    getMigrationStatus(jobUuid)
+      .then((s) => {
+        if (!cancelled) setResolvedGolden(Boolean(s.golden_override));
+      })
+      .catch(() => {
+        if (!cancelled) setResolvedGolden(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [goldenOverride, jobUuid]);
+
+  const isGolden = resolvedGolden;
+
+  useEffect(() => {
+    if (!isGolden) {
       setMatchedPairs([]);
       setSelectedWorksheet(null);
       setAdapter(null);
@@ -68,11 +90,22 @@ export default function CalcLogicConversionDetail({
 
     (async () => {
       try {
-        const [json, parseStage] = await Promise.all([
+        const [json, parseStage, layoutStage] = await Promise.all([
           getLakeviewJson(jobUuid),
           getStageDetail(jobUuid, "PARSE").catch(() => null),
+          getStageDetail(jobUuid, "LAYOUT_GENERATION").catch(() => null),
         ]);
         if (cancelled) return;
+
+        let dashboardJson: unknown = json;
+        const layoutArts = (layoutStage?.artifacts || {}) as Record<string, any>;
+        if (typeof layoutArts.lakeview_json_str === "string" && layoutArts.lakeview_json_str.trim().startsWith("{")) {
+          try {
+            dashboardJson = JSON.parse(layoutArts.lakeview_json_str);
+          } catch {
+            /* keep /json */
+          }
+        }
 
         const parseArtifacts = (parseStage?.artifacts || {}) as Record<string, any>;
         const calcs = Array.isArray(parseArtifacts.calculated_fields)
@@ -80,14 +113,11 @@ export default function CalcLogicConversionDetail({
           : [];
         setParseCalcs(calcs);
 
-        const lv = new LakeviewDashboardAdapter(json);
+        const lv = new LakeviewDashboardAdapter(dashboardJson);
         setAdapter(lv);
 
         const names: string[] = [];
         const seen = new Set<string>();
-        for (const item of rawConversions) {
-          // conversions don't have worksheet — use PARSE detailed_visuals / worksheets
-        }
         const detailed = Array.isArray(parseArtifacts.detailed_visuals)
           ? parseArtifacts.detailed_visuals
           : [];
@@ -106,7 +136,6 @@ export default function CalcLogicConversionDetail({
             names.push(n);
           }
         }
-        // Fallback: match conversion captions against widget titles if no PARSE names
         if (names.length === 0) {
           for (const w of lv.getChartWidgets()) {
             if (w.title && !seen.has(w.title)) {
@@ -132,8 +161,7 @@ export default function CalcLogicConversionDetail({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [goldenOverride, jobUuid, stage.artifacts]);
+  }, [isGolden, jobUuid, stage.artifacts]);
 
   const calcLabelMap = useMemo(
     () => buildCalcLabelMap(rawConversions, parseCalcs),
@@ -181,23 +209,20 @@ export default function CalcLogicConversionDetail({
       }
     }
 
-    if (goldenOverride && selectedWorksheet) {
+    if (isGolden && selectedWorksheet) {
       // Must link to selected golden widget field set
       const candidates = [
         item.caption,
         item.name,
         item.internal_name,
-        ...(typeof item.name === "string" ? [item.name] : []),
       ].filter(Boolean) as string[];
 
       const linked = candidates.some((c) => {
-        const n = normalizeName(c);
-        if (n && selectedFieldKeys.has(n)) return true;
-        // raw Calculation_ id in field keys
+        const aliases = fieldAliasKeys(c);
+        if (aliases.some((a) => selectedFieldKeys.has(a))) return true;
         if (selectedFieldKeys.has(c)) return true;
         const label = resolveCalcLabel(c, calcLabelMap);
-        if (normalizeName(label) && selectedFieldKeys.has(normalizeName(label))) return true;
-        return false;
+        return fieldAliasKeys(label).some((a) => selectedFieldKeys.has(a));
       });
       return linked;
     }
@@ -320,8 +345,8 @@ export default function CalcLogicConversionDetail({
 
       {/* ── TAB 1: FORMULA CARDS ── */}
       {activeTab === "CARDS" && (
-        <div className={goldenOverride ? styles.goldenLayout : undefined}>
-          {goldenOverride && (
+        <div className={isGolden ? styles.goldenLayout : undefined}>
+          {isGolden && (
             <div className={styles.goldenRail}>
               <div className={styles.goldenRailTitle}>Worksheets</div>
               {goldenLoading && <div className={styles.emptyState}>Loading…</div>}
@@ -346,7 +371,7 @@ export default function CalcLogicConversionDetail({
           )}
 
           <div className={styles.cardsList}>
-            {goldenOverride && selectedWorksheet && filteredConversions.length === 0 && !goldenLoading ? (
+            {isGolden && selectedWorksheet && filteredConversions.length === 0 && !goldenLoading ? (
               <div className={styles.emptyState}>
                 No linked calculations found for this worksheet.
               </div>
@@ -362,7 +387,7 @@ export default function CalcLogicConversionDetail({
                   status === "WARNING" || (!isFail && (item.is_table_calc || status === "WARNING"));
                 const formulaType = item.formula_type || "STANDARD";
                 const title = displayNameFor(item);
-                const usage = goldenOverride ? usageFor(item) : null;
+                const usage = isGolden ? usageFor(item) : null;
 
                 return (
                   <div key={idx} className={styles.conversionCard}>
@@ -388,11 +413,7 @@ export default function CalcLogicConversionDetail({
                           <span className={styles.statusBadgeWarn}>
                             <AlertTriangle size={13} /> Requires Review
                           </span>
-                        ) : (
-                          <span className={styles.statusBadgeValid}>
-                            <ShieldCheck size={13} /> Valid Spark SQL
-                          </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
@@ -431,7 +452,7 @@ export default function CalcLogicConversionDetail({
                       <div className={styles.centerArrowDivider}>
                         <ArrowRight size={18} />
                         <span className={styles.arrowLabel}>
-                          {goldenOverride ? "Used In" : "Converted To"}
+                          {isGolden ? "Used In" : "Converted To"}
                         </span>
                       </div>
 
@@ -439,11 +460,11 @@ export default function CalcLogicConversionDetail({
                         <div className={styles.codeColumnHeader}>
                           <span className={styles.codeColumnTitleDatabricks}>
                             <Code2 size={13} />{" "}
-                            {goldenOverride
+                            {isGolden
                               ? "Lakeview Visual Usage"
                               : "Databricks Spark SQL Conversion"}
                           </span>
-                          {!goldenOverride && (
+                          {!isGolden && (
                             <button
                               className={styles.copyBtn}
                               onClick={() => copyToClipboard(compiledSql, `sql-${idx}`)}
@@ -460,7 +481,7 @@ export default function CalcLogicConversionDetail({
                             </button>
                           )}
                         </div>
-                        {goldenOverride && usage ? (
+                        {isGolden && usage ? (
                           <div className={styles.usagePanel}>
                             <div>
                               <div className={styles.usageLabel}>Calculated Field</div>

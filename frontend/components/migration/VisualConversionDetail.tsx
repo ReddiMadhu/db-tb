@@ -28,7 +28,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { StageDetail } from "@/lib/types";
-import { exportMigrationAsset, getLakeviewJson, getStageDetail } from "@/lib/api";
+import { exportMigrationAsset, getLakeviewJson, getStageDetail, getMigrationStatus } from "@/lib/api";
 import ReviewCardActions from "./ReviewCardActions";
 import {
   LakeviewDashboardAdapter,
@@ -404,6 +404,7 @@ export default function VisualConversionDetail({
   const [goldenLoading, setGoldenLoading] = useState(false);
   const [goldenEmptyReason, setGoldenEmptyReason] = useState<string | null>(null);
   const [selectedGoldenId, setSelectedGoldenId] = useState<string | null>(null);
+  const [resolvedGolden, setResolvedGolden] = useState(Boolean(goldenOverride));
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -422,6 +423,27 @@ export default function VisualConversionDetail({
 
   const artifacts = (stage.artifacts || {}) as Record<string, any>;
   const metrics = (stage.metrics || {}) as Record<string, any>;
+
+  // Prefer prop, then stage artifact flag, then status API
+  useEffect(() => {
+    if (goldenOverride || artifacts.golden_override) {
+      setResolvedGolden(true);
+      return;
+    }
+    let cancelled = false;
+    getMigrationStatus(jobUuid)
+      .then((s) => {
+        if (!cancelled) setResolvedGolden(Boolean(s.golden_override));
+      })
+      .catch(() => {
+        if (!cancelled) setResolvedGolden(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [goldenOverride, jobUuid, artifacts.golden_override]);
+
+  const isGolden = resolvedGolden;
   const visualTypesDetected: string[] = Array.isArray(metrics.visual_types_detected)
     ? metrics.visual_types_detected
     : Array.isArray(artifacts.visual_types)
@@ -471,19 +493,19 @@ export default function VisualConversionDetail({
       : [];
 
   // Non-golden: artifacts → widgets → DEFAULT. Golden: never DEFAULT.
-  const rawCards: ConversionCardItem[] = goldenOverride
+  const rawCards: ConversionCardItem[] = isGolden
     ? []
     : artifactCards.length > 0
       ? artifactCards
       : DEFAULT_CONVERSION_CARDS;
 
   useEffect(() => {
-    if (goldenOverride) return;
+    if (isGolden) return;
     setCardsState(rawCards);
-  }, [stage.artifacts, stage.generated_code, goldenOverride]);
+  }, [stage.artifacts, stage.generated_code, isGolden]);
 
   useEffect(() => {
-    if (!goldenOverride) {
+    if (!isGolden) {
       setGoldenJson(null);
       setGoldenEmptyReason(null);
       return;
@@ -495,11 +517,20 @@ export default function VisualConversionDetail({
 
     (async () => {
       try {
-        const [json, parseStage] = await Promise.all([
-          getLakeviewJson(jobUuid),
+        let json: unknown = null;
+        if (typeof artifacts.lakeview_json_str === "string" && artifacts.lakeview_json_str.trim().startsWith("{")) {
+          try {
+            json = JSON.parse(artifacts.lakeview_json_str);
+          } catch {
+            json = null;
+          }
+        }
+        const [fetched, parseStage] = await Promise.all([
+          json ? Promise.resolve(null) : getLakeviewJson(jobUuid),
           getStageDetail(jobUuid, "PARSE").catch(() => null),
         ]);
         if (cancelled) return;
+        if (!json) json = fetched;
         setGoldenJson(json);
 
         const adapter = new LakeviewDashboardAdapter(json);
@@ -631,9 +662,8 @@ export default function VisualConversionDetail({
     return () => {
       cancelled = true;
     };
-    // artifactCards identity changes each render — key off stage artifacts
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [goldenOverride, jobUuid, stage.artifacts]);
+  }, [isGolden, jobUuid, stage.artifacts]);
 
   // Filtered Cards
   const cards = cardsState.filter((card) => {
@@ -650,7 +680,7 @@ export default function VisualConversionDetail({
       (statusFilter === "UNSUPPORTED" && card.status === "UNSUPPORTED");
 
     const matchesSelection =
-      !goldenOverride ||
+      !isGolden ||
       !selectedGoldenId ||
       card.id === selectedGoldenId;
 
@@ -689,7 +719,7 @@ export default function VisualConversionDetail({
   };
 
   // Full Published Databricks Lakeview JSON
-  const fullPublishedJson = goldenOverride && goldenJson
+  const fullPublishedJson = isGolden && goldenJson
     ? JSON.stringify(goldenJson, null, 2)
     : artifacts.lakeview_json_str
     ? artifacts.lakeview_json_str
@@ -782,65 +812,6 @@ export default function VisualConversionDetail({
           <span className={styles.summarySubtext}>No widget generated</span>
         </div>
       </div>
-
-      {(visualTypesDetected.length > 0 || chromeWidgets.length > 0) && (
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "0.4rem",
-            marginBottom: "1rem",
-            alignItems: "center",
-          }}
-        >
-          <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-secondary)", marginRight: 4 }}>
-            Lakeview types:
-          </span>
-          {visualTypesDetected.map((vt) => (
-            <span
-              key={vt}
-              style={{
-                fontSize: "0.7rem",
-                padding: "0.15rem 0.5rem",
-                borderRadius: 999,
-                background: "var(--bg-secondary, #f3f4f6)",
-                border: "1px solid var(--border-primary, #e5e7eb)",
-                color: "var(--text-secondary)",
-              }}
-            >
-              {vt}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Ontology layout chrome used for Lakeview placement */}
-      {artifacts.ontology_layout && (
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "0.5rem 1.25rem",
-            marginBottom: "1rem",
-            padding: "0.65rem 0.9rem",
-            borderRadius: 8,
-            background: "var(--bg-secondary, #f6f7f9)",
-            border: "1px solid var(--border-primary, #e5e7eb)",
-            fontSize: "0.8rem",
-            color: "var(--text-secondary)",
-          }}
-        >
-          <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>Ontology layout</span>
-          <span>Zones: {artifacts.ontology_layout.zone_count ?? 0}</span>
-          <span>Filter cards: {(artifacts.ontology_layout.filter_cards || []).length}</span>
-          <span>Legend cards: {(artifacts.ontology_layout.legend_cards || []).length}</span>
-          <span>Text zones: {(artifacts.ontology_layout.text_zones || []).length}</span>
-          <span>Actions: {(artifacts.ontology_layout.actions || []).length}</span>
-          {artifacts.ontology_layout.sizing_mode && (
-            <span>Sizing: {artifacts.ontology_layout.sizing_mode}</span>
-          )}
-        </div>
-      )}
 
       {/* ── Navigation Toolbar ── */}
       <div className={styles.toolbar}>
@@ -1007,8 +978,8 @@ export default function VisualConversionDetail({
 
       {/* ── TAB 1: VISUAL CONVERSION CARDS ── */}
       {activeTab === "CARDS" && (
-        <div className={goldenOverride ? styles.goldenLayout : undefined}>
-          {goldenOverride && cardsState.length > 0 && (
+        <div className={isGolden ? styles.goldenLayout : undefined}>
+          {isGolden && cardsState.length > 0 && (
             <div className={styles.goldenRail}>
               <div className={styles.goldenRailTitle}>Worksheets</div>
               {cardsState.map((c) => (
@@ -1033,7 +1004,7 @@ export default function VisualConversionDetail({
             <div className={styles.emptyState}>Loading curated Lakeview visuals…</div>
           ) : cards.length === 0 ? (
             <div className={styles.emptyState}>
-              {goldenOverride
+              {isGolden
                 ? goldenEmptyReason ||
                   "No matched visuals between Tableau worksheets and curated Lakeview widgets"
                 : "No visual conversion cards match your search filter."}
@@ -1270,57 +1241,6 @@ export default function VisualConversionDetail({
                             )}
                           </div>
                         </div>
-                      </div>
-
-                      {/* Business Validation Grid */}
-                      <div className={styles.validationRow}>
-                        <span className={styles.validationRowTitle}>
-                          <ShieldCheck size={14} style={{ color: "var(--accent-cyan)" }} /> Business Validation Checks
-                        </span>
-                        <div className={styles.checkPillsGrid}>
-                          {card.validation.visual_type_preserved && (
-                            <span className={styles.checkPillPassed}>✓ Visual Type Preserved</span>
-                          )}
-                          {card.validation.fields_correctly_mapped ? (
-                            <span className={styles.checkPillPassed}>✓ Fields Correctly Mapped</span>
-                          ) : (
-                            <span className={styles.checkPillDiff}>⚠ Category Unmapped</span>
-                          )}
-                          {card.validation.filters_preserved && (
-                            <span className={styles.checkPillPassed}>✓ Filters Preserved</span>
-                          )}
-                          {card.validation.aggregations_preserved ? (
-                            <span className={styles.checkPillPassed}>✓ Aggregations Preserved</span>
-                          ) : (
-                            <span className={styles.checkPillDiff}>⚠ Aggregation Changed</span>
-                          )}
-                          {card.validation.formatting_preserved && (
-                            <span className={styles.checkPillPassed}>✓ Formatting Preserved</span>
-                          )}
-                          {card.validation.sort_order_preserved && (
-                            <span className={styles.checkPillPassed}>✓ Sort Order Preserved</span>
-                          )}
-                          {card.validation.tooltip_preserved && (
-                            <span className={styles.checkPillPassed}>✓ Tooltip Preserved</span>
-                          )}
-                          {card.validation.calculations_preserved && (
-                            <span className={styles.checkPillPassed}>✓ Calculations Preserved</span>
-                          )}
-                        </div>
-
-                        {/* Diff Alert Callout if anything differs */}
-                        {card.validation.differences && card.validation.differences.length > 0 && (
-                          <div className={styles.diffAlertBox}>
-                            {card.validation.differences.map((diff, idx) => (
-                              <div key={idx}>
-                                <div className={styles.diffHeader}>
-                                  <AlertTriangle size={13} /> {diff.title}: {diff.from} → {diff.to}
-                                </div>
-                                <div className={styles.diffReason}>Reason: {diff.reason}</div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
                       </div>
 
                       {/* Manual Review Details Callout */}

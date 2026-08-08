@@ -282,15 +282,41 @@ def _run_pipeline_background(
         try:
             with open(output_path, "r", encoding="utf-8") as f:
                 official_obj = json.load(f)
+            official_pretty = json.dumps(official_obj, indent=2, ensure_ascii=False)
             with open(pretty_path, "w", encoding="utf-8") as f:
-                json.dump(official_obj, f, indent=2, ensure_ascii=False)
+                f.write(official_pretty)
         except Exception:
+            official_pretty = json.dumps(lakeview_dash.to_dict(), indent=2, ensure_ascii=False)
             with open(pretty_path, "w", encoding="utf-8") as f:
-                json.dump(lakeview_dash.to_dict(), f, indent=2, ensure_ascii=False)
+                f.write(official_pretty)
 
-        # Update job record + golden metadata
+        # When golden is official, rewrite review-stage blobs so SCHEMA_VALIDATION /
+        # LAYOUT_GENERATION APIs and UI show curated JSON (not converter preview).
         from sqlalchemy.orm.attributes import flag_modified
 
+        if golden_override:
+            from app.models.stage_model import StageResult
+
+            for stage_id in ("SCHEMA_VALIDATION", "LAYOUT_GENERATION"):
+                stage_row = (
+                    db.query(StageResult)
+                    .filter(StageResult.job_uuid == job_uuid, StageResult.stage_id == stage_id)
+                    .first()
+                )
+                if not stage_row:
+                    continue
+                stage_row.generated_code = official_pretty
+                arts = dict(stage_row.artifacts or {})
+                if stage_id == "SCHEMA_VALIDATION":
+                    arts["generated_json_preview"] = official_pretty
+                if stage_id == "LAYOUT_GENERATION":
+                    arts["lakeview_json_str"] = official_pretty
+                arts["golden_override"] = True
+                arts["golden_source"] = golden_source
+                stage_row.artifacts = arts
+                flag_modified(stage_row, "artifacts")
+
+        # Update job record + golden metadata
         cfg = dict(job.pipeline_config or {})
         cfg["golden_override"] = bool(golden_override)
         cfg["golden_source"] = golden_source

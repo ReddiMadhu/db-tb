@@ -157,6 +157,7 @@ export default function StageDetailPanel({
           jobUuid={jobUuid}
           stage={stage}
           onSelectNextStage={onSelectStage}
+          goldenOverride={goldenOverride}
         />
       </div>
     );

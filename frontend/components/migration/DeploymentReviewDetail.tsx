@@ -47,18 +47,22 @@ interface DeploymentReviewDetailProps {
   jobUuid: string;
   stage: StageDetail;
   onSelectNextStage?: (stageId: string) => void;
+  goldenOverride?: boolean;
 }
 
 export default function DeploymentReviewDetail({
   jobUuid,
   stage,
   onSelectNextStage,
+  goldenOverride = false,
 }: DeploymentReviewDetailProps) {
   const artifacts = (stage?.artifacts || {}) as Record<string, any>;
   const metrics = (stage?.metrics || {}) as Record<string, any>;
 
-  // Dynamic initial JSON string from stage code/artifacts
+  // Dynamic initial JSON string from stage code/artifacts.
+  // In golden mode prefer empty here so we load official /json (curated).
   const rawJsonFromStage = useMemo(() => {
+    if (goldenOverride) return "";
     const raw = stage?.generated_code || artifacts?.generated_json_preview;
     if (raw && typeof raw === "string" && raw.trim().startsWith("{")) {
       try {
@@ -72,11 +76,11 @@ export default function DeploymentReviewDetail({
       return JSON.stringify(raw, null, 2);
     }
     return "";
-  }, [stage, artifacts]);
+  }, [stage, artifacts, goldenOverride]);
 
   const [jsonCode, setJsonCode] = useState<string>(rawJsonFromStage);
   const [originalJsonStr, setOriginalJsonStr] = useState<string>(rawJsonFromStage);
-  const [fetchingJson, setFetchingJson] = useState<boolean>(!rawJsonFromStage);
+  const [fetchingJson, setFetchingJson] = useState<boolean>(!rawJsonFromStage || goldenOverride);
 
   // Active Connection Info
   const [connectionInfo, setConnectionInfo] = useState<{
@@ -96,36 +100,42 @@ export default function DeploymentReviewDetail({
   // When true, deploy lets the server resolve the token — no paste prompt.
   const [hasSavedToken, setHasSavedToken] = useState(false);
 
-  // Fetch real JSON if missing in props
+  // Fetch official JSON (always when golden; otherwise only if stage preview missing)
   useEffect(() => {
-    if (!jsonCode && jobUuid) {
-      setFetchingJson(true);
-      getLakeviewJson(jobUuid)
-        .then((data) => {
-          const str = JSON.stringify(data, null, 2);
-          setJsonCode(str);
-          setOriginalJsonStr(str);
-        })
-        .catch(() => {
-          // If endpoint fails, construct dynamic fallback from stage artifacts
-          const dynSpec = {
-            pages: artifacts.pages || [
-              {
-                name: "page_1",
-                displayName: artifacts.dashboard_title || "Databricks Lakeview Dashboard",
-                layout: artifacts.widgets || [],
-              },
-            ],
-            widgets: artifacts.widgets || [],
-            datasets: artifacts.datasets || [],
-          };
-          const str = JSON.stringify(dynSpec, null, 2);
-          setJsonCode(str);
-          setOriginalJsonStr(str);
-        })
-        .finally(() => setFetchingJson(false));
-    }
-  }, [jobUuid, jsonCode, artifacts]);
+    if (!jobUuid) return;
+    if (!goldenOverride && jsonCode) return;
+
+    setFetchingJson(true);
+    getLakeviewJson(jobUuid)
+      .then((data) => {
+        const str = JSON.stringify(data, null, 2);
+        setJsonCode(str);
+        setOriginalJsonStr(str);
+      })
+      .catch(() => {
+        if (goldenOverride) {
+          setJsonCode("");
+          setOriginalJsonStr("");
+          return;
+        }
+        // If endpoint fails, construct dynamic fallback from stage artifacts
+        const dynSpec = {
+          pages: artifacts.pages || [
+            {
+              name: "page_1",
+              displayName: artifacts.dashboard_title || "Databricks Lakeview Dashboard",
+              layout: artifacts.widgets || [],
+            },
+          ],
+          widgets: artifacts.widgets || [],
+          datasets: artifacts.datasets || [],
+        };
+        const str = JSON.stringify(dynSpec, null, 2);
+        setJsonCode(str);
+        setOriginalJsonStr(str);
+      })
+      .finally(() => setFetchingJson(false));
+  }, [jobUuid, goldenOverride]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch active Databricks connection details dynamically
   useEffect(() => {

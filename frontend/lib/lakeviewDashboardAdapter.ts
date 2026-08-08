@@ -31,7 +31,15 @@ export interface MatchedPair {
 }
 
 export interface ParsedDashboard {
-  datasets: Map<string, { name: string; displayName: string; query: string }>;
+  datasets: Map<
+    string,
+    {
+      name: string;
+      displayName: string;
+      query: string;
+      semanticFields: string[];
+    }
+  >;
   widgets: NormalizedWidget[];
 }
 
@@ -53,10 +61,46 @@ const AGG_RE = /\b(SUM|AVG|COUNT|COUNTD|MIN|MAX|MEDIAN|STDDEV|VAR)\s*\(/i;
 export function normalizeName(input: string | null | undefined): string {
   if (!input) return "";
   let s = String(input).trim().toLowerCase();
+  // Unwrap measure(foo) / MEASURE(`foo`) style Lakeview field names
+  const measureWrap = s.match(/^measure\s*\(\s*`?([^`)]+)`?\s*\)$/i);
+  if (measureWrap) s = measureWrap[1].trim();
   // Strip common Tableau/copy suffixes
   s = s.replace(/\s*\(\s*\d+\s*\)\s*$/g, "");
   s = s.replace(/\s+copy\s*$/gi, "");
+  // Drop punctuation that often differs between Tableau captions and Lakeview ids
+  s = s.replace(/[%]/g, "");
   s = s.replace(/[\s_\-]+/g, "");
+  return s;
+}
+
+/** Expand a field token into normalized keys used for calc↔widget linkage. */
+export function fieldAliasKeys(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const keys = new Set<string>();
+  const add = (v: string) => {
+    const n = normalizeName(v);
+    if (n) keys.add(n);
+  };
+  add(raw);
+  // measure(total_claims) → total_claims, total claims
+  const m = String(raw).match(/^measure\s*\(\s*`?([^`)]+)`?\s*\)$/i);
+  if (m) {
+    add(m[1]);
+    add(m[1].replace(/_/g, " "));
+  }
+  // snake_case ↔ words
+  if (raw.includes("_")) add(raw.replace(/_/g, " "));
+  if (/\s/.test(raw)) add(raw.replace(/\s+/g, "_"));
+  for (const id of extractCalculationIds(raw)) add(id);
+  return Array.from(keys);
+}
+
+function humanizeFieldLabel(raw: string): string {
+  if (!raw) return raw;
+  let s = raw;
+  const m = s.match(/^measure\s*\(\s*`?([^`)]+)`?\s*\)$/i);
+  if (m) s = m[1];
+  s = s.replace(/_/g, " ").replace(/`/g, "").trim();
   return s;
 }
 
@@ -146,15 +190,37 @@ export class LakeviewDashboardAdapter {
 
   static parseDashboard(raw: unknown): ParsedDashboard {
     const root = asRecord(raw) || {};
-    const datasets = new Map<string, { name: string; displayName: string; query: string }>();
+    const datasets = new Map<
+      string,
+      { name: string; displayName: string; query: string; semanticFields: string[] }
+    >();
 
     for (const ds of asArray(root.datasets)) {
       const d = asRecord(ds);
       if (!d || typeof d.name !== "string") continue;
+      const config = asRecord(d.config);
+      const queryFromConfig =
+        typeof config?.source === "string" ? (config.source as string) : "";
+      const query =
+        typeof d.query === "string" && d.query
+          ? d.query
+          : queryFromConfig;
+      const semanticFields: string[] = [];
+      for (const m of asArray(config?.measures)) {
+        const mr = asRecord(m);
+        if (typeof mr?.name === "string") semanticFields.push(mr.name);
+        if (typeof mr?.expr === "string") semanticFields.push(mr.expr);
+      }
+      for (const dim of asArray(config?.dimensions)) {
+        const dr = asRecord(dim);
+        if (typeof dr?.name === "string") semanticFields.push(dr.name);
+        if (typeof dr?.expr === "string") semanticFields.push(dr.expr);
+      }
       datasets.set(d.name, {
         name: d.name,
         displayName: typeof d.displayName === "string" ? d.displayName : d.name,
-        query: typeof d.query === "string" ? d.query : "",
+        query,
+        semanticFields,
       });
     }
 
@@ -265,16 +331,20 @@ export class LakeviewDashboardAdapter {
   getDimensions(widget: NormalizedWidget): string[] {
     const dims = widget.fields
       .filter((f) => f.scaleType === "categorical" || f.scaleType === "temporal")
-      .map((f) => f.displayName || f.fieldName);
-    // Heuristic: x categorical often dimension when scales unknown — still only from fields
+      .map((f) => humanizeFieldLabel(f.displayName || f.fieldName));
     if (dims.length === 0) {
-      const enc = asRecord(asRecord(widget.raw.spec)?.encodings);
-      const x = encodingToField("x", enc?.x);
+      const enc = asRecord(asRecord(widget.raw.spec)?.encodings) || {};
+      // table columns without scale → treat as dimensions
+      for (const col of asArray(enc.columns)) {
+        const f = encodingToField("columns", col);
+        if (f) dims.push(humanizeFieldLabel(f.displayName || f.fieldName));
+      }
+      const x = encodingToField("x", enc.x);
       if (x && x.scaleType !== "quantitative") {
-        return [x.displayName || x.fieldName];
+        dims.push(humanizeFieldLabel(x.displayName || x.fieldName));
       }
     }
-    return Array.from(new Set(dims));
+    return Array.from(new Set(dims.filter(Boolean)));
   }
 
   getMeasures(widget: NormalizedWidget): string[] {
@@ -282,10 +352,18 @@ export class LakeviewDashboardAdapter {
       .filter(
         (f) =>
           f.scaleType === "quantitative" ||
-          (f.expression && AGG_RE.test(f.expression))
+          (f.expression && (AGG_RE.test(f.expression) || /MEASURE\s*\(/i.test(f.expression))) ||
+          /^measure\s*\(/i.test(f.fieldName)
       )
-      .map((f) => f.displayName || f.fieldName);
-    return Array.from(new Set(measures));
+      .map((f) => humanizeFieldLabel(f.displayName || f.fieldName));
+    if (measures.length === 0) {
+      const enc = asRecord(asRecord(widget.raw.spec)?.encodings) || {};
+      for (const key of ["value", "y", "angle", "size"]) {
+        const f = encodingToField(key, enc[key]);
+        if (f) measures.push(humanizeFieldLabel(f.displayName || f.fieldName));
+      }
+    }
+    return Array.from(new Set(measures.filter(Boolean)));
   }
 
   getAxes(widget: NormalizedWidget): { x: string[]; y: string[] } {
@@ -319,9 +397,9 @@ export class LakeviewDashboardAdapter {
   }
 
   getFilters(widget: NormalizedWidget): string[] {
+    const out: string[] = [];
     const enc = asRecord(asRecord(widget.raw.spec)?.encodings) || {};
     const filters = enc.filters;
-    const out: string[] = [];
     if (Array.isArray(filters)) {
       for (const item of filters) {
         const f = asRecord(item);
@@ -329,6 +407,7 @@ export class LakeviewDashboardAdapter {
         const name =
           (typeof f.fieldName === "string" && f.fieldName) ||
           (typeof f.displayName === "string" && f.displayName) ||
+          (typeof f.expression === "string" && f.expression) ||
           "";
         if (name) out.push(name);
       }
@@ -340,7 +419,16 @@ export class LakeviewDashboardAdapter {
         "";
       if (name) out.push(name);
     }
-    return out;
+    // Lakeview often puts filters on the query, not encodings
+    for (const q of asArray(widget.raw.queries)) {
+      const query = asRecord(asRecord(q)?.query);
+      for (const flt of asArray(query?.filters)) {
+        const f = asRecord(flt);
+        const expr = typeof f?.expression === "string" ? f.expression : "";
+        if (expr) out.push(expr);
+      }
+    }
+    return Array.from(new Set(out));
   }
 
   getQuery(widget: NormalizedWidget): string {
@@ -355,23 +443,26 @@ export class LakeviewDashboardAdapter {
 
   getFieldNames(widget: NormalizedWidget): string[] {
     const names = new Set<string>();
+    const add = (v: string | undefined | null) => {
+      if (!v) return;
+      names.add(v);
+      for (const a of fieldAliasKeys(v)) names.add(a);
+    };
     for (const f of widget.fields) {
-      if (f.fieldName) names.add(f.fieldName);
-      if (f.displayName) names.add(f.displayName);
-      for (const id of extractCalculationIds(f.fieldName)) names.add(id);
-      for (const id of extractCalculationIds(f.displayName)) names.add(id);
-      if (f.expression) {
-        for (const id of extractCalculationIds(f.expression)) names.add(id);
-      }
+      add(f.fieldName);
+      add(f.displayName);
+      if (f.expression) add(f.expression);
     }
     for (const qf of widget.queryFields) {
-      if (qf.name) names.add(qf.name);
-      for (const id of extractCalculationIds(qf.name)) names.add(id);
-      for (const id of extractCalculationIds(qf.expression)) names.add(id);
+      add(qf.name);
+      add(qf.expression);
     }
+    for (const flt of this.getFilters(widget)) add(flt);
     if (widget.datasetQuery) {
-      for (const id of extractCalculationIds(widget.datasetQuery)) names.add(id);
+      for (const id of extractCalculationIds(widget.datasetQuery)) add(id);
     }
+    // Do NOT dump entire dataset semantic model here — that falsely links
+    // workbook-wide calcs to every widget sharing the dataset.
     return Array.from(names);
   }
 
@@ -379,12 +470,10 @@ export class LakeviewDashboardAdapter {
   getNormalizedFieldKeys(widget: NormalizedWidget): Set<string> {
     const keys = new Set<string>();
     for (const name of this.getFieldNames(widget)) {
+      for (const a of fieldAliasKeys(name)) keys.add(a);
       const n = normalizeName(name);
       if (n) keys.add(n);
-      for (const id of extractCalculationIds(name)) {
-        keys.add(normalizeName(id));
-        keys.add(id); // keep raw id for exact Calculation_ lookup
-      }
+      if (name) keys.add(name);
     }
     return keys;
   }
