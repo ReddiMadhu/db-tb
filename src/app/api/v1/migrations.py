@@ -51,6 +51,17 @@ def _write_error_log(job_uuid: str, exc: BaseException) -> None:
         logger.warning("Failed to write error.log for job %s", job_uuid, exc_info=True)
 
 
+def _has_running_stage(db: Session, job_uuid: str) -> bool:
+    from app.models.stage_model import StageResult
+
+    return (
+        db.query(StageResult)
+        .filter(StageResult.job_uuid == job_uuid, StageResult.status == "RUNNING")
+        .first()
+        is not None
+    )
+
+
 # Table refs after FROM/JOIN — covers hive_metastore.default.t and `samples`.`nyctaxi`.`trips`
 _TABLE_REF_RE = re.compile(
     r"(?i)\b(?:FROM|JOIN)\s+("
@@ -397,10 +408,21 @@ def _run_pipeline_background(
         _write_error_log(job_uuid, e)
         job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
         if job:
+            from app.models.stage_model import StageResult
+
             job.status = "FAILED"
             job.error_bag = (job.error_bag or []) + [
                 {"level": "FATAL", "message": f"Pipeline execution failed: {str(e)}"}
             ]
+            # Clear half-open RUNNING stages so retry is not blocked forever
+            for row in (
+                db.query(StageResult)
+                .filter(StageResult.job_uuid == job_uuid, StageResult.status == "RUNNING")
+                .all()
+            ):
+                row.status = "FAILED"
+                row.errors = list(row.errors or []) + [str(e)]
+                row.completed_at = datetime.utcnow()
             db.commit()
         raise
     finally:
@@ -429,12 +451,19 @@ async def execute_migration_pipeline(
     if not job:
         raise HTTPException(status_code=404, detail="Migration job not found.")
 
+    # Soft-lock: only block if a stage is actually RUNNING. Stuck EXECUTING with
+    # all WAITING/COMPLETED must be retryable (org Save & Execute no-op).
     if job.status == "EXECUTING":
-        return {
-            "job_uuid": job_uuid,
-            "status": "EXECUTING",
-            "message": "Pipeline execution is already in progress.",
-        }
+        if _has_running_stage(db, job_uuid):
+            return {
+                "job_uuid": job_uuid,
+                "status": "EXECUTING",
+                "message": "Pipeline execution is already in progress.",
+            }
+        logger.warning(
+            "Superseding stuck EXECUTING job=%s (no RUNNING stage) — allowing relaunch",
+            job_uuid,
+        )
 
     allowed_statuses = (
         "PARSED",
@@ -446,6 +475,7 @@ async def execute_migration_pipeline(
         "COMPLETED",
         "WARNING",
         "DEPLOYED",
+        "EXECUTING",  # allowed only when stuck (no RUNNING) — handled above
     )
     if job.status not in allowed_statuses:
         raise HTTPException(
