@@ -168,7 +168,13 @@ export async function deployToDatabricks(
   warehouseIdOrPayload: string | { warehouse_id?: string; host?: string; token?: string; catalog?: string; schema_name?: string },
   host?: string,
   token?: string
-): Promise<{ status: string; dashboard_id: string; published_url?: string; credential_sources?: Record<string, string> }> {
+): Promise<{
+  status: string;
+  dashboard_id: string;
+  published_url?: string;
+  publish_warning?: string;
+  credential_sources?: Record<string, string>;
+}> {
   let body: Record<string, unknown>;
   if (typeof warehouseIdOrPayload === "object") {
     body = warehouseIdOrPayload;

@@ -166,8 +166,26 @@ export default function DeploymentReviewDetail({
 
   // Publish Modal state
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
+  const [showPublishModal, setShowPublishModal] = useState<boolean>(false);
   const [publishStep, setPublishStep] = useState<number>(0);
   const [publishComplete, setPublishComplete] = useState<boolean>(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishWarning, setPublishWarning] = useState<string | null>(null);
+  const [patTokenInput, setPatTokenInput] = useState<string>("");
+  const [hostOverrideInput, setHostOverrideInput] = useState<string>("");
+  const [warehouseOverrideInput, setWarehouseOverrideInput] = useState<string>("");
+  const [publishedDashboardUrl, setPublishedDashboardUrl] = useState<string | null>(
+    artifacts.published_url || null
+  );
+
+  const closePublishModal = () => {
+    if (isPublishing) return;
+    setShowPublishModal(false);
+    setPublishError(null);
+    setPublishWarning(null);
+    setPublishComplete(false);
+    setPublishStep(0);
+  };
 
   // Parsed JSON Object & Dynamic Object Counts
   const parsedJsonObject = useMemo(() => {
@@ -324,26 +342,30 @@ export default function DeploymentReviewDetail({
     }
   };
 
-  const [publishError, setPublishError] = useState<string | null>(null);
-  const [patTokenInput, setPatTokenInput] = useState<string>("");
-  const [publishedDashboardUrl, setPublishedDashboardUrl] = useState<string | null>(artifacts.published_url || null);
-
   // Handle Publish flow to Databricks API
   const handleStartPublish = async () => {
+    setShowPublishModal(true);
+    setPublishComplete(false);
+    setPublishWarning(null);
+
     if (!validationResult.isValid) {
-      alert("Please fix schema errors before publishing to Databricks.");
+      setIsPublishing(false);
+      setPublishStep(0);
+      setPublishError(
+        "Schema validation failed. Fix JSON errors in the editor before publishing to Databricks."
+      );
       return;
     }
+
     setIsPublishing(true);
     setPublishStep(1);
     setPublishError(null);
-    setPublishComplete(false);
 
     try {
       setPublishStep(2);
 
       // Ensure default connection has been attempted before building the body.
-      let latestConn = connectionInfo;
+      let latestConn = { ...connectionInfo };
       let latestHasToken = hasSavedToken;
       if (!connectionResolved) {
         try {
@@ -367,35 +389,35 @@ export default function DeploymentReviewDetail({
         }
       }
 
+      // Manual overrides from the retry panel take precedence
+      const hostOverride = (hostOverrideInput || "").trim();
+      const warehouseOverride = (warehouseOverrideInput || "").trim();
+      if (hostOverride) latestConn = { ...latestConn, host: hostOverride };
+      if (warehouseOverride) latestConn = { ...latestConn, warehouse_id: warehouseOverride };
+
       const whRaw = (latestConn.warehouse_id || "").trim();
       const whId =
         whRaw &&
         !whRaw.includes("Serverless") &&
-        !whRaw.toLowerCase().includes("warehouse")
+        !/warehouse/i.test(whRaw)
           ? whRaw
-          : undefined;
+          : warehouseOverride || undefined;
 
       const hostRaw = (latestConn.host || "").trim();
       const hostUrl =
-        hostRaw &&
-        !hostRaw.includes("Workspace") &&
-        hostRaw.includes(".")
+        hostRaw && !hostRaw.includes("Workspace") && (hostRaw.includes(".") || hostRaw.startsWith("http"))
           ? hostRaw
-          : undefined;
+          : hostOverride || undefined;
 
       const tokenOverride = (patTokenInput || "").trim() || undefined;
 
-      // Block a silent empty {} body when neither UI nor saved connection
-      // can supply credentials (server .env is still allowed if token/host
-      // will resolve there — but warehouse must be known somehow).
       const hasUiCredChannel = Boolean(whId || hostUrl || tokenOverride || latestHasToken);
-      if (!hasUiCredChannel && !whId) {
+      if (!hasUiCredChannel) {
         setIsPublishing(false);
         setPublishStep(0);
         setPublishError(
-          "No Databricks credentials available. Save a default connection " +
-            "(host, warehouse, PAT) under Connections, set DATABRICKS_* in .env, " +
-            "or paste a PAT / warehouse ID before publishing."
+          "No Databricks credentials available. Enter host, warehouse ID, and PAT below, " +
+            "or save a default connection under Connections / set DATABRICKS_* in .env."
         );
         return;
       }
@@ -423,30 +445,24 @@ export default function DeploymentReviewDetail({
       if (latestConn.catalog) deployBody.catalog = latestConn.catalog;
       if (latestConn.schema_name) deployBody.schema_name = latestConn.schema_name;
 
-      // If body would be empty, still call deploy so the server can use .env /
-      // saved connection — but tell the user that explicitly.
-      if (Object.keys(deployBody).length === 0) {
-        setPublishError(
-          "Deploy request has no UI credentials; relying on server-side " +
-            "saved connection / .env (DATABRICKS_HOST, DATABRICKS_TOKEN, DEFAULT_WAREHOUSE_ID)."
-        );
-      }
-
       const res = await deployToDatabricks(jobUuid, deployBody);
 
       setPublishStep(4);
-      setTimeout(() => {
-        setPublishStep(5);
-        setPublishComplete(true);
-        setIsPublishing(false);
-        if (res.published_url) {
-          setPublishedDashboardUrl(res.published_url);
-        }
-      }, 500);
+      setPublishStep(5);
+      setPublishComplete(true);
+      setIsPublishing(false);
+      if (res.published_url) {
+        setPublishedDashboardUrl(res.published_url);
+      }
+      if (res.publish_warning) {
+        setPublishWarning(res.publish_warning);
+      }
     } catch (err: any) {
       setIsPublishing(false);
       setPublishStep(0);
-      setPublishError(err.message || "Databricks deployment failed. Please verify your host URL and PAT token.");
+      setPublishError(
+        err.message || "Databricks deployment failed. Please verify your host URL, warehouse ID, and PAT token."
+      );
     }
   };
 
@@ -513,7 +529,15 @@ export default function DeploymentReviewDetail({
           <button className={styles.secondaryBtn} onClick={handleDownloadJson}>
             <Download size={14} /> Download JSON
           </button>
-          <button className={styles.publishCtaBtn} onClick={handleStartPublish}>
+          <button
+            className={styles.publishCtaBtn}
+            onClick={handleStartPublish}
+            title={
+              validationResult.isValid
+                ? "Publish Lakeview dashboard to Databricks"
+                : "Fix schema errors before publishing"
+            }
+          >
             <Rocket size={16} /> Publish to Databricks
           </button>
         </div>
@@ -692,18 +716,20 @@ export default function DeploymentReviewDetail({
         </div>
       </div>
 
-      {/* Interactive Publish Modal */}
-      {isPublishing && (
+      {/* Interactive Publish Modal — stays open on error/success until Cancel/Close */}
+      {showPublishModal && (
         <div className={styles.modalOverlay}>
           <div className={styles.modalContent}>
             <div className={styles.modalHeader}>
               <h3 className={styles.modalTitle}>
                 <Rocket size={20} style={{ color: "#10b981" }} /> Publishing to Databricks Workspace
               </h3>
-              {!publishComplete && (
+              {!isPublishing && (
                 <button
+                  type="button"
                   style={{ background: "none", border: "none", color: "#888", cursor: "pointer" }}
-                  onClick={() => setIsPublishing(false)}
+                  onClick={closePublishModal}
+                  aria-label="Close publish dialog"
                 >
                   <X size={18} />
                 </button>
@@ -752,12 +778,45 @@ export default function DeploymentReviewDetail({
                 <div style={{ fontSize: "0.785rem", color: "var(--text-secondary)", marginBottom: "0.75rem" }}>
                   {publishError}
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                  {/* Only ask for a PAT when none is saved on the default connection */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
+                    Databricks Host
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={connectionInfo.host || "https://xxx.cloud.databricks.com"}
+                    value={hostOverrideInput}
+                    onChange={(e) => setHostOverrideInput(e.target.value)}
+                    style={{
+                      background: "#0d1117",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "4px",
+                      padding: "0.4rem 0.6rem",
+                      color: "#fff",
+                      fontSize: "0.8rem",
+                    }}
+                  />
+                  <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
+                    SQL Warehouse ID
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={connectionInfo.warehouse_id || "abc123def456..."}
+                    value={warehouseOverrideInput}
+                    onChange={(e) => setWarehouseOverrideInput(e.target.value)}
+                    style={{
+                      background: "#0d1117",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "4px",
+                      padding: "0.4rem 0.6rem",
+                      color: "#fff",
+                      fontSize: "0.8rem",
+                    }}
+                  />
                   {!hasSavedToken && (
                     <>
                       <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
-                        Enter Databricks Personal Access Token (PAT):
+                        Databricks Personal Access Token (PAT)
                       </label>
                       <input
                         type="password"
@@ -777,20 +836,45 @@ export default function DeploymentReviewDetail({
                   )}
                   {hasSavedToken && (
                     <div style={{ fontSize: "0.72rem", color: "var(--text-tertiary)" }}>
-                      Using the PAT saved on your default Databricks connection. Fix the connection under Connections if credentials are wrong.
+                      Using the PAT saved on your default Databricks connection. Paste a new PAT above only if you clear the saved connection, or fix credentials under Connections.
                     </div>
+                  )}
+                  {hasSavedToken && (
+                    <>
+                      <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
+                        Override PAT (optional)
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="dapi... (leave blank to use saved token)"
+                        value={patTokenInput}
+                        onChange={(e) => setPatTokenInput(e.target.value)}
+                        style={{
+                          background: "#0d1117",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: "4px",
+                          padding: "0.4rem 0.6rem",
+                          color: "#fff",
+                          fontSize: "0.8rem",
+                        }}
+                      />
+                    </>
                   )}
                   <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem" }}>
                     <button
+                      type="button"
                       className={styles.secondaryBtn}
                       onClick={handleStartPublish}
+                      disabled={isPublishing}
                       style={{ background: "var(--accent-cyan)", color: "#000", border: "none", fontWeight: 700 }}
                     >
                       Retry Publish
                     </button>
                     <button
+                      type="button"
                       className={styles.secondaryBtn}
-                      onClick={() => setIsPublishing(false)}
+                      onClick={closePublishModal}
+                      disabled={isPublishing}
                     >
                       Cancel
                     </button>
@@ -801,10 +885,15 @@ export default function DeploymentReviewDetail({
 
             {publishComplete && (
               <div className={styles.completedBox}>
-                <div className={styles.completedTitle}>🎉 Dashboard Published Successfully!</div>
+                <div className={styles.completedTitle}>Dashboard Published Successfully!</div>
                 <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", margin: 0 }}>
                   Your Lakeview dashboard is now live in Databricks.
                 </p>
+                {publishWarning && (
+                  <div style={{ fontSize: "0.75rem", color: "#f59e0b", marginTop: "0.5rem" }}>
+                    {publishWarning}
+                  </div>
+                )}
                 {publishedDashboardUrl ? (
                   <a
                     href={publishedDashboardUrl}
@@ -825,9 +914,10 @@ export default function DeploymentReviewDetail({
                   </a>
                 )}
                 <button
+                  type="button"
                   className={styles.secondaryBtn}
                   style={{ marginTop: "0.5rem" }}
-                  onClick={() => setIsPublishing(false)}
+                  onClick={closePublishModal}
                 >
                   Close Review Panel
                 </button>

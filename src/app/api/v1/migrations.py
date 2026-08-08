@@ -802,6 +802,7 @@ async def deploy_to_databricks(
         # whether any dataset received a stamped location.
         deployed_dataset_locations: List[Dict] = []
         dashboard_id = result.get("dashboard_id")
+        publish_warning: Optional[str] = None
         if dashboard_id:
             try:
                 deployed = client.get_dashboard(dashboard_id)
@@ -811,6 +812,25 @@ async def deploy_to_databricks(
                     "Post-deploy location verification failed for %s: %s",
                     dashboard_id,
                     verify_err,
+                )
+            # True Lakeview publish (draft → published). Create already succeeded;
+            # soft-fail publish so the draft dashboard is still usable.
+            try:
+                client.publish_dashboard(
+                    dashboard_id,
+                    warehouse_id=warehouse_id,
+                    embed_credentials=True,
+                )
+                logger.info("Published Lakeview dashboard_id=%s", dashboard_id)
+            except Exception as pub_err:
+                publish_warning = (
+                    f"Dashboard created (draft) but publish failed: {pub_err}. "
+                    "Open the draft in Databricks and publish manually if needed."
+                )
+                logger.warning(
+                    "Lakeview publish failed for %s (create succeeded): %s",
+                    dashboard_id,
+                    pub_err,
                 )
 
         job.status = "DEPLOYED"
@@ -849,6 +869,7 @@ async def deploy_to_databricks(
                     "status": "DEPLOYED",
                     "dataset_catalog_sent": deploy_catalog,
                     "dataset_schema_sent": deploy_schema,
+                    "publish_warning": publish_warning,
                 }
                 pub_stage.artifacts = {
                     "dashboard_id": result.get("dashboard_id"),
@@ -862,8 +883,9 @@ async def deploy_to_databricks(
                     "deployed_dataset_locations": deployed_dataset_locations,
                     "credential_sources": cred_sources,
                     "connection_name": creds.get("connection_name"),
+                    "publish_warning": publish_warning,
                 }
-                pub_stage.logs = (pub_stage.logs or []) + [
+                pub_logs = (pub_stage.logs or []) + [
                     f"[INFO] Deploying Lakeview dashboard JSON to SQL Warehouse {warehouse_id}",
                     f"[INFO] {cred_source_log}",
                     f"[INFO] {catalog_decision}",
@@ -872,9 +894,13 @@ async def deploy_to_databricks(
                         f"[INFO] deployed_dataset_locations="
                         f"{json.dumps(deployed_dataset_locations)[:2000]}"
                     ),
-                    f"[SUCCESS] Dashboard deployed! ID: {result.get('dashboard_id')}",
-                    f"[SUCCESS] Published URL: {pub_url}",
+                    f"[SUCCESS] Dashboard created! ID: {result.get('dashboard_id')}",
                 ]
+                if publish_warning:
+                    pub_logs.append(f"[WARN] {publish_warning}")
+                else:
+                    pub_logs.append(f"[SUCCESS] Published URL: {pub_url}")
+                pub_stage.logs = pub_logs
                 db.commit()
         except Exception as stage_err:
             logger.warning("Failed to update StageResult for PUBLISH: %s", stage_err)
@@ -884,6 +910,7 @@ async def deploy_to_databricks(
             "dashboard_id": result.get("dashboard_id"),
             "published_url": f"{client.host}/dashboardsv3/{result.get('dashboard_id')}/published"
                 if client.host else None,
+            "publish_warning": publish_warning,
             "catalog_decision": catalog_decision,
             "dataset_catalog_sent": deploy_catalog,
             "dataset_schema_sent": deploy_schema,
