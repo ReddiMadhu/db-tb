@@ -52,6 +52,23 @@ def is_fully_qualified_table_ref(ref: str) -> bool:
     return (ref or "").count(".") >= 2
 
 
+def dataset_query_sql(dataset: Any) -> str:
+    """Return dataset SQL from classic ``query`` or AI/BI ``config.source``.
+
+    Golden Lakeview exports often omit ``query`` and store SQL under
+    ``config.source`` instead.
+    """
+    if not isinstance(dataset, dict):
+        return ""
+    direct = (dataset.get("query") or "").strip()
+    if direct:
+        return direct
+    config = dataset.get("config")
+    if isinstance(config, dict):
+        return (config.get("source") or "").strip()
+    return ""
+
+
 def all_dataset_queries_fully_qualified(queries: List[str]) -> Tuple[bool, str]:
     """Decide whether every dataset SQL uses fully-qualified table names.
 
@@ -666,6 +683,33 @@ async def deploy_to_databricks(
         with open(job.output_lvdash_path, "r", encoding="utf-8") as f:
             serialized_json = f.read()
 
+        if not (serialized_json or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Official Lakeview JSON file is empty. Re-run the migration "
+                    "pipeline before deploying."
+                ),
+            )
+        stripped = serialized_json.strip()
+        if stripped in ("{}", "[]", "null"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Official Lakeview JSON has no dashboard content. "
+                    "Re-run the migration pipeline before deploying."
+                ),
+            )
+
+        golden_override = bool((job.pipeline_config or {}).get("golden_override", False))
+        logger.info(
+            "Deploy job=%s golden_override=%s serialized_dashboard_bytes=%s path=%s",
+            job_uuid,
+            golden_override,
+            len(serialized_json.encode("utf-8")),
+            job.output_lvdash_path,
+        )
+
         # Omit dataset_catalog/schema when every dataset query is already fully
         # qualified (catalog.schema.table) — sending a wrong default like "main"
         # causes CATALOG_NOT_FOUND on workspaces that don't have that catalog.
@@ -677,9 +721,13 @@ async def deploy_to_databricks(
         deploy_schema = deploy_schema_req or None
         catalog_decision = "using request catalog/schema (no FQN check run)"
         queries: List[str] = []
+        dataset_query_count = 0
         try:
             dash_obj = json.loads(serialized_json)
-            queries = [d.get("query") or "" for d in dash_obj.get("datasets") or []]
+            queries = [
+                dataset_query_sql(d) for d in (dash_obj.get("datasets") or [])
+            ]
+            dataset_query_count = sum(1 for q in queries if (q or "").strip())
             omit, fqn_reason = all_dataset_queries_fully_qualified(queries)
             if omit:
                 deploy_catalog = None
@@ -699,7 +747,13 @@ async def deploy_to_databricks(
                 catalog_decision = (
                     f"{catalog_decision} — FQN check: {fqn_reason}"
                 )
-            logger.info("Deploy catalog decision: %s", catalog_decision)
+            logger.info(
+                "Deploy catalog decision: %s (dataset_query_count=%s)",
+                catalog_decision,
+                dataset_query_count,
+            )
+        except HTTPException:
+            raise
         except Exception as exc:
             catalog_decision = f"FQN check failed ({exc}); using request catalog/schema"
             logger.warning(catalog_decision)
@@ -804,6 +858,9 @@ async def deploy_to_databricks(
             "dataset_schema_sent": deploy_schema,
             "deployed_dataset_locations": deployed_dataset_locations,
             "credential_sources": cred_sources,
+            "serialized_dashboard_bytes": len(serialized_json.encode("utf-8")),
+            "golden_override": golden_override,
+            "dataset_query_count": dataset_query_count,
         }
     except HTTPException:
         raise

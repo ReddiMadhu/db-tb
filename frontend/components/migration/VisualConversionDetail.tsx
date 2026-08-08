@@ -580,7 +580,7 @@ export default function VisualConversionDetail({
         if (pairs.length === 0) {
           setCardsState([]);
           setGoldenEmptyReason(
-            "No matched visuals between Tableau worksheets and curated Lakeview widgets"
+            "No matched visuals between Tableau worksheets and Lakeview widgets"
           );
           setSelectedGoldenId(null);
           return;
@@ -1001,12 +1001,12 @@ export default function VisualConversionDetail({
           )}
         <div className={styles.cardsList}>
           {goldenLoading ? (
-            <div className={styles.emptyState}>Loading curated Lakeview visuals…</div>
+            <div className={styles.emptyState}>Loading Lakeview visuals…</div>
           ) : cards.length === 0 ? (
             <div className={styles.emptyState}>
               {isGolden
                 ? goldenEmptyReason ||
-                  "No matched visuals between Tableau worksheets and curated Lakeview widgets"
+                  "No matched visuals between Tableau worksheets and Lakeview widgets"
                 : "No visual conversion cards match your search filter."}
             </div>
           ) : (

@@ -59,10 +59,9 @@ export default function DeploymentReviewDetail({
   const artifacts = (stage?.artifacts || {}) as Record<string, any>;
   const metrics = (stage?.metrics || {}) as Record<string, any>;
 
-  // Dynamic initial JSON string from stage code/artifacts.
-  // In golden mode prefer empty here so we load official /json (curated).
+  // Seed Monaco from stage preview even in golden mode (already backfilled to
+  // curated JSON). Refresh from /json when available; never wipe to empty on failure.
   const rawJsonFromStage = useMemo(() => {
-    if (goldenOverride) return "";
     const raw = stage?.generated_code || artifacts?.generated_json_preview;
     if (raw && typeof raw === "string" && raw.trim().startsWith("{")) {
       try {
@@ -76,11 +75,12 @@ export default function DeploymentReviewDetail({
       return JSON.stringify(raw, null, 2);
     }
     return "";
-  }, [stage, artifacts, goldenOverride]);
+  }, [stage, artifacts]);
 
   const [jsonCode, setJsonCode] = useState<string>(rawJsonFromStage);
   const [originalJsonStr, setOriginalJsonStr] = useState<string>(rawJsonFromStage);
   const [fetchingJson, setFetchingJson] = useState<boolean>(!rawJsonFromStage || goldenOverride);
+  const [connectionResolved, setConnectionResolved] = useState(false);
 
   // Active Connection Info
   const [connectionInfo, setConnectionInfo] = useState<{
@@ -89,8 +89,8 @@ export default function DeploymentReviewDetail({
     catalog: string;
     schema_name: string;
   }>({
-    host: artifacts.workspace || "Databricks Workspace",
-    warehouse_id: artifacts.warehouse_id || "Serverless Warehouse",
+    host: artifacts.workspace || "",
+    warehouse_id: artifacts.warehouse_id || "",
     // Never invent a catalog/schema — empty means the deploy call omits
     // dataset_catalog/dataset_schema and lets FQN SQL stand alone.
     catalog: artifacts.catalog || "",
@@ -100,7 +100,7 @@ export default function DeploymentReviewDetail({
   // When true, deploy lets the server resolve the token — no paste prompt.
   const [hasSavedToken, setHasSavedToken] = useState(false);
 
-  // Fetch official JSON (always when golden; otherwise only if stage preview missing)
+  // Fetch official JSON (always when golden or stage preview missing)
   useEffect(() => {
     if (!jobUuid) return;
     if (!goldenOverride && jsonCode) return;
@@ -113,12 +113,15 @@ export default function DeploymentReviewDetail({
         setOriginalJsonStr(str);
       })
       .catch(() => {
-        if (goldenOverride) {
-          setJsonCode("");
-          setOriginalJsonStr("");
+        // Keep stage-seeded JSON if present; do not clear to empty on failure.
+        if (rawJsonFromStage) {
+          setJsonCode(rawJsonFromStage);
+          setOriginalJsonStr(rawJsonFromStage);
           return;
         }
-        // If endpoint fails, construct dynamic fallback from stage artifacts
+        if (goldenOverride) {
+          return;
+        }
         const dynSpec = {
           pages: artifacts.pages || [
             {
@@ -147,20 +150,15 @@ export default function DeploymentReviewDetail({
         setHasSavedToken(hasTok);
         if (res.has_default && res.connection) {
           setConnectionInfo({
-            host: res.connection.host || "dbc-prod.cloud.databricks.com",
-            // Prefer real warehouse; placeholder labels stay empty so the
-            // server can resolve from the saved connection / settings.
-            warehouse_id:
-              res.connection.warehouse_id &&
-              !String(res.connection.warehouse_id).includes("Serverless")
-                ? res.connection.warehouse_id
-                : res.connection.warehouse_id || "",
+            host: res.connection.host || "",
+            warehouse_id: res.connection.warehouse_id || "",
             catalog: res.connection.catalog || "",
             schema_name: res.connection.schema_name || "",
           });
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setConnectionResolved(true));
   }, []);
 
   const [viewMode, setViewMode] = useState<"code" | "tree" | "diff">("code");
@@ -343,40 +341,111 @@ export default function DeploymentReviewDetail({
 
     try {
       setPublishStep(2);
-      // Never invent a warehouse id — omit placeholders and let the server
-      // resolve from the saved connection / settings.
-      const whRaw = connectionInfo.warehouse_id || "";
+
+      // Ensure default connection has been attempted before building the body.
+      let latestConn = connectionInfo;
+      let latestHasToken = hasSavedToken;
+      if (!connectionResolved) {
+        try {
+          const res = await getDefaultConnection();
+          latestHasToken = Boolean(
+            res.has_token || res.connection?.has_token || res.connection?.token
+          );
+          setHasSavedToken(latestHasToken);
+          if (res.has_default && res.connection) {
+            latestConn = {
+              host: res.connection.host || "",
+              warehouse_id: res.connection.warehouse_id || "",
+              catalog: res.connection.catalog || "",
+              schema_name: res.connection.schema_name || "",
+            };
+            setConnectionInfo(latestConn);
+          }
+          setConnectionResolved(true);
+        } catch {
+          /* server .env may still resolve credentials */
+        }
+      }
+
+      const whRaw = (latestConn.warehouse_id || "").trim();
       const whId =
-        whRaw && !whRaw.includes("Serverless") && !whRaw.includes("Warehouse")
+        whRaw &&
+        !whRaw.includes("Serverless") &&
+        !whRaw.toLowerCase().includes("warehouse")
           ? whRaw
           : undefined;
 
+      const hostRaw = (latestConn.host || "").trim();
       const hostUrl =
-        connectionInfo.host &&
-        !connectionInfo.host.includes("Workspace") &&
-        connectionInfo.host.includes(".")
-          ? connectionInfo.host
+        hostRaw &&
+        !hostRaw.includes("Workspace") &&
+        hostRaw.includes(".")
+          ? hostRaw
           : undefined;
 
+      const tokenOverride = (patTokenInput || "").trim() || undefined;
+
+      // Block a silent empty {} body when neither UI nor saved connection
+      // can supply credentials (server .env is still allowed if token/host
+      // will resolve there — but warehouse must be known somehow).
+      const hasUiCredChannel = Boolean(whId || hostUrl || tokenOverride || latestHasToken);
+      if (!hasUiCredChannel && !whId) {
+        setIsPublishing(false);
+        setPublishStep(0);
+        setPublishError(
+          "No Databricks credentials available. Save a default connection " +
+            "(host, warehouse, PAT) under Connections, set DATABRICKS_* in .env, " +
+            "or paste a PAT / warehouse ID before publishing."
+        );
+        return;
+      }
+
+      if (!jsonCode || !jsonCode.trim().startsWith("{")) {
+        setIsPublishing(false);
+        setPublishStep(0);
+        setPublishError(
+          "Lakeview JSON is empty in the editor. Wait for the dashboard JSON to load, then try again."
+        );
+        return;
+      }
+
       setPublishStep(3);
-      const res = await deployToDatabricks(jobUuid, {
-        warehouse_id: whId,
-        host: hostUrl,
-        // Only send a pasted override; otherwise the server uses the saved connection PAT
-        token: patTokenInput || undefined,
-        catalog: connectionInfo.catalog || undefined,
-        schema_name: connectionInfo.schema_name || undefined,
-      });
+      const deployBody: {
+        warehouse_id?: string;
+        host?: string;
+        token?: string;
+        catalog?: string;
+        schema_name?: string;
+      } = {};
+      if (whId) deployBody.warehouse_id = whId;
+      if (hostUrl) deployBody.host = hostUrl;
+      if (tokenOverride) deployBody.token = tokenOverride;
+      if (latestConn.catalog) deployBody.catalog = latestConn.catalog;
+      if (latestConn.schema_name) deployBody.schema_name = latestConn.schema_name;
+
+      // If body would be empty, still call deploy so the server can use .env /
+      // saved connection — but tell the user that explicitly.
+      if (Object.keys(deployBody).length === 0) {
+        setPublishError(
+          "Deploy request has no UI credentials; relying on server-side " +
+            "saved connection / .env (DATABRICKS_HOST, DATABRICKS_TOKEN, DEFAULT_WAREHOUSE_ID)."
+        );
+      }
+
+      const res = await deployToDatabricks(jobUuid, deployBody);
 
       setPublishStep(4);
       setTimeout(() => {
         setPublishStep(5);
         setPublishComplete(true);
+        setIsPublishing(false);
         if (res.published_url) {
           setPublishedDashboardUrl(res.published_url);
         }
       }, 500);
     } catch (err: any) {
+      setIsPublishing(false);
+      setPublishStep(0);
       setPublishError(err.message || "Databricks deployment failed. Please verify your host URL and PAT token.");
     }
   };

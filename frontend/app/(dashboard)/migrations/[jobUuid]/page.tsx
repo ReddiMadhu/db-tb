@@ -202,11 +202,6 @@ export default function MigrationWorkspacePage() {
           </button>
           <div className={styles.jobInfo}>
             <h1 className={styles.jobFilename}>{filename || jobUuid}</h1>
-            {goldenOverride && (
-              <span className={styles.curatedBadge} title={goldenSource || undefined}>
-                ✦ Curated Demo Output
-              </span>
-            )}
           </div>
         </div>
         <div className={styles.actionBarRight}>

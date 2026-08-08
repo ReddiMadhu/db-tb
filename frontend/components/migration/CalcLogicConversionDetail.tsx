@@ -352,7 +352,7 @@ export default function CalcLogicConversionDetail({
               {goldenLoading && <div className={styles.emptyState}>Loading…</div>}
               {!goldenLoading && matchedPairs.length === 0 && (
                 <div className={styles.emptyState}>
-                  No matched visuals between Tableau worksheets and curated Lakeview widgets
+                  No matched visuals between Tableau worksheets and Lakeview widgets
                 </div>
               )}
               {matchedPairs.map((p) => (
