@@ -179,17 +179,19 @@ def _build_query_fields(w_ubim) -> List[Dict[str, str]]:
     query_fields_list: List[Dict[str, str]] = []
     if w_ubim.query_fields:
         for qf in w_ubim.query_fields:
-            query_fields_list.append({
-                "expression": qf.expression,
-                "name": qf.name,
-            })
+            if qf.name and qf.name not in PLACEHOLDER_FIELDS:
+                query_fields_list.append({
+                    "expression": qf.expression or f"`{qf.name}`",
+                    "name": qf.name,
+                })
     elif w_ubim.encodings:
         for enc in w_ubim.encodings:
-            expr = enc.expression_sql or f"`{enc.field_name}`"
-            query_fields_list.append({
-                "expression": expr,
-                "name": enc.field_name,
-            })
+            if enc.field_name and enc.field_name not in PLACEHOLDER_FIELDS:
+                expr = enc.expression_sql or f"`{enc.field_name}`"
+                query_fields_list.append({
+                    "expression": expr,
+                    "name": enc.field_name,
+                })
     return query_fields_list
 
 

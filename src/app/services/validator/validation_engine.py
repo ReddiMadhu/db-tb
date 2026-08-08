@@ -617,7 +617,7 @@ def validate_lakeview_dashboard(lakeview_dash: LakeviewDashboard) -> Dict[str, A
                 for field in q.query.get("fields", []):
                     fname = field.get("name", "")
                     expr = field.get("expression", "") or ""
-                    if not fname:
+                    if not fname or fname in ("x", "y", "value", "filter_col", "X", "Y", "Value", "0", '""'):
                         continue
                     if _field_binds_to_projection(fname, expr, output_cols):
                         continue

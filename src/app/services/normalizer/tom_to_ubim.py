@@ -208,6 +208,13 @@ def _resolve_field_for_sql(field_name: str, resolver: Optional[CanonicalFieldRes
     return field_name
 
 
+def _is_aggregated_expr(expr: str) -> bool:
+    if not expr:
+        return False
+    u = expr.upper().strip()
+    return any(u.startswith(fn) for fn in ("SUM(", "AVG(", "COUNT(", "MIN(", "MAX(", "MEDIAN(", "PERCENTILE(", "STDDEV("))
+
+
 def _build_field_expression(field_name: str, aggregation: AggregationType) -> str:
     """Build a Lakeview-compatible field expression.
     
@@ -216,7 +223,7 @@ def _build_field_expression(field_name: str, aggregation: AggregationType) -> st
     For dimensions (no agg): `field name`
     """
     backtick_name = f"`{field_name}`"
-    if aggregation == AggregationType.NONE:
+    if aggregation == AggregationType.NONE or _is_aggregated_expr(field_name):
         return backtick_name
     elif aggregation == AggregationType.SUM:
         return f"SUM({backtick_name})"
@@ -1058,13 +1065,37 @@ def normalize_tom_to_ubim(
 
         # Validate dimensions and measures against datasource column names if known
         ds_columns = set()
-        if ds and ds.columns:
-            for col in ds.columns:
-                if col.caption:
-                    ds_columns.add(col.caption)
-                if col.internal_name:
-                    ds_columns.add(col.internal_name)
-                alias = _make_safe_alias(col.internal_name or col.caption or "")
+        if ds:
+            if ds.columns:
+                for col in ds.columns:
+                    if col.caption:
+                        ds_columns.add(col.caption)
+                    if col.internal_name:
+                        ds_columns.add(col.internal_name)
+                    alias = _make_safe_alias(col.internal_name or col.caption or "")
+                    if alias:
+                        ds_columns.add(alias)
+            if ds.calculated_fields:
+                for cf in ds.calculated_fields:
+                    if cf.caption:
+                        ds_columns.add(cf.caption)
+                    if cf.name:
+                        ds_columns.add(cf.name)
+                    if cf.internal_name:
+                        ds_columns.add(cf.internal_name)
+                    alias = _make_safe_alias(cf.caption or cf.name or cf.internal_name or "")
+                    if alias:
+                        ds_columns.add(alias)
+
+        if workbook_meta and workbook_meta.calculated_fields:
+            for cf in workbook_meta.calculated_fields:
+                if cf.caption:
+                    ds_columns.add(cf.caption)
+                if cf.name:
+                    ds_columns.add(cf.name)
+                if cf.internal_name:
+                    ds_columns.add(cf.internal_name)
+                alias = _make_safe_alias(cf.caption or cf.name or cf.internal_name or "")
                 if alias:
                     ds_columns.add(alias)
 
