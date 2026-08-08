@@ -124,28 +124,42 @@ def _build_ds_prefixes(root: etree._Element) -> list:
     return prefixes
 
 
+_FILE_EXT_RE = re.compile(
+    r"\.(csv|txt|tsv|xlsx?|xlsm|xls|hyper|tde|json|parquet|avro)$",
+    re.IGNORECASE,
+)
+
+
 def _normalize_table_name(raw_name: str) -> str:
     if not raw_name or not isinstance(raw_name, str):
         return raw_name
 
     def clean_table(t: str) -> str:
-        if '.' in t:
-            t = t.split('.')[-1]
-        t = t.strip('"').strip("'")
-        t = re.sub(r'_[A-Fa-f0-9]{8,}$', '', t)
-        parts = re.split(r'[!_]', t)
-        meaningful = [p for p in parts if not re.match(r'^\d+$', p) and p]
-        if len(meaningful) >= 2 and meaningful[0].lower() in ['gcrm', 'extract', 'logical']:
+        t = t.strip().strip('"').strip("'").strip("[]")
+        # File sources: keep stem (insurance_tableau_dataset.csv → insurance_tableau_dataset)
+        # Do NOT treat the extension as a schema.table segment (that produced "Csv").
+        ext_m = _FILE_EXT_RE.search(t)
+        if ext_m:
+            t = t[: ext_m.start()]
+            if "#" in t:
+                t = t.split("#", 1)[0]
+        elif "." in t:
+            # catalog.schema.table or db.table — keep the last segment only
+            t = t.split(".")[-1]
+        t = re.sub(r"_[A-Fa-f0-9]{8,}$", "", t)
+        parts = re.split(r"[!_]", t)
+        meaningful = [p for p in parts if not re.match(r"^\d+$", p) and p]
+        if len(meaningful) >= 2 and meaningful[0].lower() in ["gcrm", "extract", "logical"]:
             t = meaningful[-1]
-        elif '!' in t:
+        elif "!" in t:
             t = meaningful[-1] if meaningful else t
         return t.title() if t.islower() else t
 
     def _repl_table(match):
         return f"({clean_table(match.group(1))})"
 
-    if '(' in raw_name and ')' in raw_name:
-        return re.sub(r'\(([^)]+)\)', _repl_table, raw_name)
+    if "(" in raw_name and ")" in raw_name:
+        return re.sub(r"\(([^)]+)\)", _repl_table, raw_name)
     return clean_table(raw_name)
 
 
@@ -1668,26 +1682,34 @@ def extract_connections(root: etree._Element, ds_prefixes: list) -> List[Dict[st
 
 
 def extract_tables(root: etree._Element, ds_prefixes: list) -> List[TableMetadata]:
+    """Extract tables from a datasource element (or workbook root).
+
+    Uses ``.//`` so worksheet-embedded ``<datasource>`` copies do not
+    re-collect every relation in the workbook (which duplicated the same
+    table once per worksheet when callers passed a datasource node).
+    """
     tables = []
     seen = set()
     extract_alias_map = {}
-    for rel in root.xpath("//relation[@type='table' or @type='text']"):
+    for rel in root.xpath(".//relation[@type='table' or @type='text']"):
         name = rel.get("name", "")
         if re.search(r'_[A-Fa-f0-9]{32}$', name) or "[Extract]." in rel.get("table", ""):
             base_name = re.sub(r'_[A-Fa-f0-9]{32}$', '', name)
             extract_alias_map[base_name] = name
             extract_alias_map[base_name.replace('!', '_')] = name
 
-    for rel in root.xpath("//relation[@type='table' or @type='text']"):
+    for rel in root.xpath(".//relation[@type='table' or @type='text']"):
         name = rel.get("name", "")
         rtype = rel.get("type", "")
         if re.search(r'_[A-Fa-f0-9]{32}$', name) or "[Extract]." in rel.get("table", ""):
             continue
 
         normalized = _normalize_table_name(name)
-        if normalized in seen:
+        # Case-insensitive dedupe (Csv / csv / CSV)
+        seen_key = (normalized or "").lower()
+        if not seen_key or seen_key in seen:
             continue
-        seen.add(normalized)
+        seen.add(seen_key)
 
         hyper_alias = extract_alias_map.get(name, extract_alias_map.get(name.replace('_', '!'), ""))
         if rtype == "text":
@@ -1702,7 +1724,7 @@ def extract_tables(root: etree._Element, ds_prefixes: list) -> List[TableMetadat
             ))
         else:
             cols = [c.get("name", "") for c in rel.xpath(".//column")]
-            alias_keys = root.xpath(f"//cols/map[contains(@value,'[{name}].')]/@key")
+            alias_keys = root.xpath(f".//cols/map[contains(@value,'[{name}].')]/@key")
             aliases = [k.strip("[]") for k in alias_keys if k.strip("[]") not in cols]
             tables.append(TableMetadata(
                 name=normalized,
@@ -1723,7 +1745,7 @@ def extract_joins(root: etree._Element, ds_prefixes: list) -> List[JoinRelations
         m = re.match(r'\[?([^\]]+)\]?\.\[?([^\]]+)\]?', s)
         return {"table": m.group(1).strip(), "column": m.group(2).strip()} if m else {"table": "", "column": s}
 
-    for rel in root.xpath("//relation[@type='join']"):
+    for rel in root.xpath(".//relation[@type='join']"):
         join_type = rel.get("join", "inner")
         clause = rel.find(".//clause[@type='join']")
         if clause is None:
@@ -1749,7 +1771,6 @@ def extract_joins(root: etree._Element, ds_prefixes: list) -> List[JoinRelations
 
 def extract_relationships(root: etree._Element, ds_prefixes: list) -> List[RelationshipMetadata]:
     relationships = []
-
     def _parse_endpoint_col(raw: str) -> tuple:
         """Parse ``[object_id].[column]`` → (object_id, column)."""
         s = (raw or "").strip()
@@ -1760,7 +1781,7 @@ def extract_relationships(root: etree._Element, ds_prefixes: list) -> List[Relat
         cleaned = re.sub(r'\s+\([^)]+\)$', '', cleaned).strip()
         return "", cleaned
 
-    for rel in root.xpath("//*[local-name()='relationships']/*[local-name()='relationship']"):
+    for rel in root.xpath(".//*[local-name()='relationships']/*[local-name()='relationship']"):
         expr = rel.find("expression")
         left_obj = right_obj = ""
         left_col = right_col = ""
@@ -1799,7 +1820,15 @@ def extract_columns(root: etree._Element, ds_prefixes: list, caption_map: dict, 
     alias_map = alias_map or {}
     columns = []
     seen = set()
-    for col in root.xpath("//datasource[not(@name='Parameters')]/column"):
+    # Scope to this datasource when called with a <datasource> element.
+    # Absolute //datasource escapes to the workbook root and re-imports
+    # columns from every worksheet-embedded copy.
+    tag = root.tag.split("}")[-1] if isinstance(root.tag, str) else ""
+    if tag == "datasource":
+        col_nodes = root.xpath("./column")
+    else:
+        col_nodes = root.xpath("//datasource[not(@name='Parameters')]/column")
+    for col in col_nodes:
         name = col.get("name", "").strip("[]")
         caption = col.get("caption", "")
         dtype = col.get("datatype", "")
@@ -2248,9 +2277,25 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
     # Build set of all calculated field names for reference detection
     all_calc_names = set()
 
-    # Parse datasources — target top-level datasources under /workbook/datasources/
+    # Parse datasources — top-level only. Worksheet embeds reuse the same @name
+    # and must not be listed again (that showed the same table N times in mapping).
     ds_name_list = []
-    top_datasources = root.xpath("/workbook/datasources/datasource[@name and not(@name='Parameters')]") or root.xpath("//datasources/datasource[@name and not(@name='Parameters')]")
+    top_datasources = root.xpath(
+        "/workbook/datasources/datasource[@name and not(@name='Parameters')]"
+    )
+    if not top_datasources:
+        # Fallback: any datasources node not under a worksheet, deduped by name
+        candidates = root.xpath(
+            "//datasources[not(ancestor::worksheet)]/datasource[@name and not(@name='Parameters')]"
+        ) or root.xpath("//datasources/datasource[@name and not(@name='Parameters')]")
+        seen_names = set()
+        top_datasources = []
+        for ds_el in candidates:
+            n = ds_el.get("name", "")
+            if n in seen_names:
+                continue
+            seen_names.add(n)
+            top_datasources.append(ds_el)
     for ds_el in top_datasources:
         ds_name = ds_el.attrib.get("name", "Unknown")
         ds_name_list.append(ds_name)

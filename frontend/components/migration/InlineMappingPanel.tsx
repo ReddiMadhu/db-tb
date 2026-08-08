@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { Sparkles, Database, ArrowRight, CheckCircle2, RefreshCw, FileSpreadsheet } from "lucide-react";
 import CatalogBrowser from "@/components/mapping/CatalogBrowser";
 import { useToast } from "@/components/ui/ToastProvider";
@@ -74,7 +74,12 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
       const initial: Record<string, DatasourceMappingItem> = {};
       for (const ds of res.datasources || []) {
         for (const t of ds.tables) {
-          const ex = res.existing_mappings?.[t.name];
+          const ex =
+            res.existing_mappings?.[t.name] ||
+            res.existing_mappings?.[t.clean_name] ||
+            res.existing_mappings?.[t.raw_name] ||
+            // legacy key when "*.csv" was wrongly normalized to "Csv"
+            (/\.csv$/i.test(t.raw_name || "") ? res.existing_mappings?.["Csv"] : undefined);
           // Auto-compose target from Databricks connection if available
           let autoTarget = "";
           let autoStatus: any = "PENDING";
@@ -264,52 +269,63 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
       </div>
 
       <div className={styles.mainGrid}>
-        {/* Left: mapping list */}
+        {/* Left: mapping list — one card per unique table */}
         <div className={styles.mappingList}>
-          {datasources.map((ds) =>
-            ds.tables.map((t) => {
-              const mapItem = mappings[t.name];
-              const target = mapItem?.target_full_name;
-              const isSelected = activeMappingTable === t.name;
-              const sug = suggestions[t.name];
+          {(() => {
+            const seen = new Set<string>();
+            const cards: ReactNode[] = [];
+            for (const ds of datasources) {
+              for (const t of ds.tables) {
+                const key = t.name.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                const mapItem = mappings[t.name];
+                const target = mapItem?.target_full_name;
+                const isSelected = activeMappingTable === t.name;
+                const sug = suggestions[t.name];
+                const label = t.raw_name && !/\.(csv|txt|tsv|xlsx?)$/i.test(t.name)
+                  ? t.name
+                  : (t.name || t.raw_name);
 
-              return (
-                <div key={t.name} className={isSelected ? styles.mappingCardSelected : styles.mappingCard}>
-                  <div className={styles.sourceRow}>
-                    <span className={styles.sourceName}>{t.name}</span>
-                    {target ? (
-                      mapItem?.status === "AUTO_DETECTED" ? (
-                        <span className={styles.mappedBadge} style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}>✓ Auto-Detected</span>
+                cards.push(
+                  <div key={`${ds.name}:${t.name}`} className={isSelected ? styles.mappingCardSelected : styles.mappingCard}>
+                    <div className={styles.sourceRow}>
+                      <span className={styles.sourceName}>{label}</span>
+                      {target ? (
+                        mapItem?.status === "AUTO_DETECTED" ? (
+                          <span className={styles.mappedBadge} style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}>✓ Auto-Detected</span>
+                        ) : (
+                          <span className={styles.mappedBadge}>Mapped</span>
+                        )
                       ) : (
-                        <span className={styles.mappedBadge}>Mapped</span>
-                      )
-                    ) : (
-                      <span className={styles.unmappedBadge}>Unmapped</span>
-                    )}
-                  </div>
-                  <div className={styles.sourceType}>{ds.connection_type} • {ds.column_count} cols</div>
-                  <div className={styles.targetRow}>
-                    <Database size={13} color={target ? "var(--accent-cyan)" : "var(--text-disabled)"} />
-                    {target ? (
-                      <span className={styles.targetName}>{target}</span>
-                    ) : (
-                      <span className={styles.unmapped}>No target selected</span>
-                    )}
-                  </div>
-                  <div style={{ display: "flex", gap: "0.25rem", marginTop: "0.25rem" }}>
-                    {sug?.matches?.[0] && !target && (
-                      <button className={styles.selectBtn} onClick={() => handleSelectTarget(t.name, sug.matches[0].target_full_name)}>
-                        <CheckCircle2 size={11} /> Accept ({Math.round(sug.matches[0].confidence_score * 100)}%)
+                        <span className={styles.unmappedBadge}>Unmapped</span>
+                      )}
+                    </div>
+                    <div className={styles.sourceType}>{ds.caption || ds.name} • {ds.connection_type} • {ds.column_count} cols</div>
+                    <div className={styles.targetRow}>
+                      <Database size={13} color={target ? "var(--accent-cyan)" : "var(--text-disabled)"} />
+                      {target ? (
+                        <span className={styles.targetName}>{target}</span>
+                      ) : (
+                        <span className={styles.unmapped}>No target selected</span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: "0.25rem", marginTop: "0.25rem" }}>
+                      {sug?.matches?.[0] && !target && (
+                        <button className={styles.selectBtn} onClick={() => handleSelectTarget(t.name, sug.matches[0].target_full_name)}>
+                          <CheckCircle2 size={11} /> Accept ({Math.round(sug.matches[0].confidence_score * 100)}%)
+                        </button>
+                      )}
+                      <button className={styles.selectBtn} onClick={() => setActiveMappingTable(isSelected ? null : t.name)}>
+                        {isSelected ? "Cancel" : target ? "Change" : "Select →"}
                       </button>
-                    )}
-                    <button className={styles.selectBtn} onClick={() => setActiveMappingTable(isSelected ? null : t.name)}>
-                      {isSelected ? "Cancel" : target ? "Change" : "Select →"}
-                    </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })
-          )}
+                );
+              }
+            }
+            return cards;
+          })()}
         </div>
 
         {/* Right: catalog browser */}

@@ -38,9 +38,23 @@ export interface ParsedDashboard {
       displayName: string;
       query: string;
       semanticFields: string[];
+      joins: SemanticJoin[];
     }
   >;
   widgets: NormalizedWidget[];
+  /** All semantic-model joins across datasets (Lakeview AI/BI config.joins). */
+  semanticJoins: SemanticJoin[];
+}
+
+/** Join declared on a Lakeview dataset semantic model (`config.joins`). */
+export interface SemanticJoin {
+  leftTable: string;
+  leftColumn: string;
+  rightTable: string;
+  rightColumn: string;
+  joinType: string;
+  rightSource?: string;
+  datasetName?: string;
 }
 
 const NON_CHART_PREFIXES = ["filter-", "textbox", "markdown", "text"];
@@ -56,6 +70,99 @@ const NON_CHART_TYPES = new Set([
 
 const CALC_ID_RE = /Calculation_[0-9a-fA-F]+/g;
 const AGG_RE = /\b(SUM|AVG|COUNT|COUNTD|MIN|MAX|MEDIAN|STDDEV|VAR)\s*\(/i;
+
+/** Last segment of catalog.schema.table (strips backticks). */
+export function shortTableName(fqn: string | null | undefined): string {
+  if (!fqn) return "";
+  const parts = String(fqn).replace(/`/g, "").trim().split(".");
+  return parts[parts.length - 1] || "";
+}
+
+/** Primary physical table from a Lakeview dataset SQL / config.source. */
+export function primaryTableFromSql(sql: string | null | undefined): string {
+  if (!sql) return "source";
+  const m = String(sql).match(/\bFROM\s+([`\w.]+)/i);
+  if (!m) return "source";
+  return shortTableName(m[1]) || "source";
+}
+
+/**
+ * Parse Lakeview semantic join ON clause:
+ *   source.`Benefit ID` = benefit_type_dim.`Benefit ID`
+ */
+export function parseJoinOnClause(
+  on: string,
+  fallbackLeftTable: string,
+  fallbackRightTable: string
+): { leftTable: string; leftColumn: string; rightTable: string; rightColumn: string } | null {
+  if (!on || typeof on !== "string") return null;
+  const m = on.match(
+    /^\s*([A-Za-z_][\w.]*)?\s*\.?\s*`?([^`=]+?)`?\s*=\s*([A-Za-z_][\w.]*)?\s*\.?\s*`?([^`=]+?)`?\s*$/
+  );
+  if (!m) return null;
+  const leftTable = shortTableName(m[1]) || fallbackLeftTable;
+  const leftColumn = (m[2] || "").replace(/`/g, "").trim();
+  const rightTable = shortTableName(m[3]) || fallbackRightTable;
+  const rightColumn = (m[4] || "").replace(/`/g, "").trim();
+  if (!leftColumn || !rightColumn) return null;
+  return { leftTable, leftColumn, rightTable, rightColumn };
+}
+
+/** Extract config.joins from raw Lakeview datasets (AI/BI semantic model). */
+export function extractSemanticJoins(raw: unknown): SemanticJoin[] {
+  const root = asRecord(raw) || {};
+  const out: SemanticJoin[] = [];
+  const seen = new Set<string>();
+
+  for (const ds of asArray(root.datasets)) {
+    const d = asRecord(ds);
+    if (!d || typeof d.name !== "string") continue;
+    const config = asRecord(d.config);
+    const queryFromConfig =
+      typeof config?.source === "string" ? (config.source as string) : "";
+    const query =
+      typeof d.query === "string" && d.query ? d.query : queryFromConfig;
+    const primary = primaryTableFromSql(query);
+
+    for (const j of asArray(config?.joins)) {
+      const jr = asRecord(j);
+      if (!jr) continue;
+      const joinName = typeof jr.name === "string" ? jr.name : "";
+      const rightSource = typeof jr.source === "string" ? jr.source : "";
+      const rightTable = joinName || shortTableName(rightSource);
+      const on = typeof jr.on === "string" ? jr.on : "";
+      const parsed = parseJoinOnClause(on, primary, rightTable);
+      if (!parsed) continue;
+      // Prefer physical primary table over literal "source" alias
+      const leftTable =
+        parsed.leftTable.toLowerCase() === "source" ? primary : parsed.leftTable;
+      const joinType =
+        (typeof jr.cardinality === "string" && jr.cardinality) ||
+        (typeof jr.joinType === "string" && jr.joinType) ||
+        "many_to_one";
+      const key = [
+        leftTable,
+        parsed.leftColumn,
+        parsed.rightTable || rightTable,
+        parsed.rightColumn,
+      ]
+        .join("|")
+        .toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        leftTable,
+        leftColumn: parsed.leftColumn,
+        rightTable: parsed.rightTable || rightTable,
+        rightColumn: parsed.rightColumn,
+        joinType,
+        rightSource: rightSource || undefined,
+        datasetName: d.name,
+      });
+    }
+  }
+  return out;
+}
 
 /** Deterministic name normalization for matching (no fuzzy scoring). */
 export function normalizeName(input: string | null | undefined): string {
@@ -190,9 +297,16 @@ export class LakeviewDashboardAdapter {
 
   static parseDashboard(raw: unknown): ParsedDashboard {
     const root = asRecord(raw) || {};
+    const allJoins = extractSemanticJoins(raw);
     const datasets = new Map<
       string,
-      { name: string; displayName: string; query: string; semanticFields: string[] }
+      {
+        name: string;
+        displayName: string;
+        query: string;
+        semanticFields: string[];
+        joins: SemanticJoin[];
+      }
     >();
 
     for (const ds of asArray(root.datasets)) {
@@ -221,6 +335,7 @@ export class LakeviewDashboardAdapter {
         displayName: typeof d.displayName === "string" ? d.displayName : d.name,
         query,
         semanticFields,
+        joins: allJoins.filter((j) => j.datasetName === d.name),
       });
     }
 
@@ -307,7 +422,12 @@ export class LakeviewDashboardAdapter {
       }
     }
 
-    return { datasets, widgets };
+    return { datasets, widgets, semanticJoins: allJoins };
+  }
+
+  /** Lakeview AI/BI semantic-model joins (`config.joins`). */
+  getSemanticJoins(): SemanticJoin[] {
+    return this.parsed.semanticJoins;
   }
 
   getChartWidgets(): NormalizedWidget[] {

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import {
   BarChart3,
   TrendingUp,
@@ -17,6 +17,11 @@ import {
   LayoutDashboard,
 } from "lucide-react";
 import type { StageDetail } from "@/lib/types";
+import { getLakeviewJson } from "@/lib/api";
+import {
+  LakeviewDashboardAdapter,
+  type SemanticJoin,
+} from "@/lib/lakeviewDashboardAdapter";
 import RelationshipDiagram from "./RelationshipDiagram";
 import type { JoinRelation } from "./RelationshipDiagram";
 import styles from "./ParseStageDetail.module.css";
@@ -83,6 +88,8 @@ interface ParseStageDetailProps {
   jobUuid: string;
   stage: StageDetail;
   onSelectNextStage?: (stageId: string) => void;
+  /** When true, load official Lakeview JSON and surface config.joins in Data Model. */
+  goldenOverride?: boolean;
 }
 
 /* ═══════════════════════════════════════
@@ -129,7 +136,11 @@ function calcComplexity(formula: string): string {
 /* ═══════════════════════════════════════
    COMPONENT
    ═══════════════════════════════════════ */
-export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailProps) {
+export default function ParseStageDetail({
+  jobUuid,
+  stage,
+  goldenOverride = false,
+}: ParseStageDetailProps) {
   // ── State ──
   const [selectedWs, setSelectedWs] = useState<string | null>(null);
   const [selectedCalc, setSelectedCalc] = useState<string | null>(null);
@@ -139,9 +150,32 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const [expandedWs, setExpandedWs] = useState<Set<string>>(new Set());
   const [expandedCalcs, setExpandedCalcs] = useState<Set<string>>(new Set());
   const [showOntology, setShowOntology] = useState(false);
+  const [semanticJoins, setSemanticJoins] = useState<SemanticJoin[]>([]);
 
   const artifacts = (stage.artifacts || {}) as Record<string, any>;
   const metrics = (stage.metrics || {}) as Record<string, any>;
+
+  // Golden / official Lakeview semantic-model joins (config.joins)
+  useEffect(() => {
+    if (!goldenOverride || !jobUuid) {
+      setSemanticJoins([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await getLakeviewJson(jobUuid);
+        if (cancelled) return;
+        const adapter = new LakeviewDashboardAdapter(raw);
+        setSemanticJoins(adapter.getSemanticJoins());
+      } catch {
+        if (!cancelled) setSemanticJoins([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [goldenOverride, jobUuid]);
 
   // ── Extract Data ──
   const worksheets: WorksheetVisual[] = useMemo(() => {
@@ -274,6 +308,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   // ── Aggregate all joins from datasources for RelationshipDiagram ──
   const allJoinRelations: JoinRelation[] = useMemo(() => {
     const result: JoinRelation[] = [];
+    const seen = new Set<string>();
     const pushRel = (
       jType: string,
       lTable: string,
@@ -285,6 +320,9 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       const left = cleanTableName(lTable);
       const right = cleanTableName(rTable);
       if (!left || !right) return;
+      const key = `${left}|${lCol}|${right}|${rCol}`.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
       result.push({
         join_type: jType || "inner",
         left_table: left,
@@ -295,7 +333,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       });
     };
 
-    // From top-level joins
+    // From top-level joins (Tableau explicit)
     joins.forEach((j: any) => {
       pushRel(
         j.join_type || j.type,
@@ -307,7 +345,34 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       );
     });
 
-    // From datasource-level joins
+    // From top-level relationships (Tableau relationship model)
+    relationships.forEach((r: any) => {
+      pushRel(
+        r.relationship_type || r.cardinality || "relationship",
+        r.table1 || r.left_table,
+        r.table1_column || r.column1 || r.left_column,
+        r.table2 || r.right_table,
+        r.table2_column || r.column2 || r.right_column,
+        r.datasource
+      );
+    });
+
+    // From UC / semantic discovery (when Databricks credentials were available)
+    const discovery = artifacts.databricks_discovery;
+    if (discovery && Array.isArray(discovery.relationships)) {
+      discovery.relationships.forEach((r: any) => {
+        pushRel(
+          r.relationship_type || "discovered",
+          r.from_table || r.table1,
+          r.from_column || r.table1_column,
+          r.to_table || r.table2,
+          r.to_column || r.table2_column,
+          "unity_catalog"
+        );
+      });
+    }
+
+    // From datasource-level joins / relationships
     datasources.forEach((ds: any) => {
       if (Array.isArray(ds.joins)) {
         ds.joins.forEach((j: any) => {
@@ -326,17 +391,29 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
           pushRel(
             r.relationship_type || "relationship",
             r.table1 || r.left_table,
-            r.column1 || r.left_column,
+            r.table1_column || r.column1 || r.left_column,
             r.table2 || r.right_table,
-            r.column2 || r.right_column,
+            r.table2_column || r.column2 || r.right_column,
             resolveDsName(ds.name)
           );
         });
       }
     });
 
+    // From Lakeview golden / official semantic model (config.joins)
+    semanticJoins.forEach((j) => {
+      pushRel(
+        j.joinType || "many_to_one",
+        j.leftTable,
+        j.leftColumn,
+        j.rightTable,
+        j.rightColumn,
+        j.datasetName || "lakeview_semantic"
+      );
+    });
+
     return result;
-  }, [joins, datasources, resolveDsName, cleanTableName]);
+  }, [joins, relationships, datasources, artifacts.databricks_discovery, semanticJoins, resolveDsName, cleanTableName]);
 
   // ── Counts ──
   const dashboardCount = metrics.dashboards_parsed ?? (artifacts.dashboards ? artifacts.dashboards.length : 0);
@@ -542,6 +619,12 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       if (r.right_table) addT(r.right_table);
     });
 
+    // Lakeview semantic joins may name dim tables not present in Tableau TOM
+    semanticJoins.forEach((j) => {
+      if (j.leftTable) addT(j.leftTable);
+      if (j.rightTable) addT(j.rightTable);
+    });
+
     let list = Array.from(tableMap.values());
 
     // If specific domain tables exist (e.g. Claims_Fact, Benefit_Type_Dim), filter unlinked generic placeholders "Fact", "Dim", "Extract"
@@ -551,7 +634,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     }
 
     return list;
-  }, [datasources, allJoinRelations, cleanTableName]);
+  }, [datasources, allJoinRelations, semanticJoins, cleanTableName]);
 
   const activeTable = tablesList.includes(selectedTable)
     ? selectedTable
@@ -1135,7 +1218,11 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
           <h3 className={styles.sectionTitle}>
             <Database size={16} style={{ color: "#2D9CDB" }} /> Detected Data Model
           </h3>
-          <span className={styles.subtextHint}>Click any table below to inspect schema, measures, and relationships</span>
+          <span className={styles.subtextHint}>
+            {semanticJoins.length > 0
+              ? `Includes ${semanticJoins.length} Lakeview semantic-model join${semanticJoins.length === 1 ? "" : "s"} from official dashboard JSON`
+              : "Click any table below to inspect schema, measures, and relationships"}
+          </span>
         </div>
 
         <div className={styles.dataModelContainer}>
