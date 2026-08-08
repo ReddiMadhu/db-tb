@@ -64,6 +64,34 @@ class MigrationPipeline:
     def log(self, level: str, message: str):
         self.error_bag.append({"level": level, "message": message})
 
+    def _exec_debug(self, message: str) -> None:
+        """Greppable breadcrumb for org debugging; also mirrors into job.error_bag."""
+        msg = f"[exec-debug] {message}"
+        self.log("INFO", msg)
+        logger.info("%s job=%s", msg, self.job_uuid or "-")
+        if not self.job_uuid:
+            return
+        from app.models.db_models import MigrationJob
+        from sqlalchemy.orm.attributes import flag_modified
+
+        db = self._get_db_session()
+        try:
+            job = db.query(MigrationJob).filter(MigrationJob.job_uuid == self.job_uuid).first()
+            if not job:
+                return
+            bag = list(job.error_bag or [])
+            bag.append({"level": "INFO", "message": msg})
+            if len(bag) > 200:
+                bag = bag[-200:]
+            job.error_bag = bag
+            flag_modified(job, "error_bag")
+            db.commit()
+        except Exception as e:
+            logger.warning("Failed to persist exec-debug breadcrumb: %s", e)
+            db.rollback()
+        finally:
+            db.close()
+
     # ── Per-Stage DB Persistence ──
 
     def _get_db_session(self):
@@ -625,15 +653,35 @@ class MigrationPipeline:
             }
 
         # Upload already completed PARSE — rebuild workbook_meta in memory without
-        # flipping the stage to RUNNING (UI would jump back to Dashboard Intelligence).
+        # flipping PARSE to RUNNING (UI would jump back to Dashboard Intelligence).
+        # Mark CALC RUNNING first so progress is not stuck on "Waiting...".
         if self._get_stage_status("PARSE") == "COMPLETED":
-            self.log(
-                "INFO",
-                "PARSE already completed during upload — skipping UI-visible re-run",
+            self._exec_debug("silent PARSE branch — skip UI-visible PARSE re-run")
+            self._persist_stage(
+                "CALC_LOGIC_CONVERSION",
+                status="RUNNING",
+                started_at=datetime.utcnow(),
+                input_summary="Preparing workbook metadata (parse + UC discovery)",
             )
-            workbook_meta = parse_workbook(self.file_path)
-            self._run_catalog_discovery(workbook_meta)
+            t0 = time.time()
+            self._exec_debug("parse_workbook start")
+            try:
+                workbook_meta = parse_workbook(self.file_path)
+            except Exception as e:
+                self._exec_debug(f"parse_workbook FAILED: {e}")
+                raise
+            self._exec_debug(f"parse_workbook done ({int((time.time() - t0) * 1000)}ms)")
+
+            t1 = time.time()
+            self._exec_debug("catalog discovery start")
+            try:
+                self._run_catalog_discovery(workbook_meta)
+            except Exception as e:
+                self._exec_debug(f"catalog discovery FAILED: {e}")
+                raise
+            self._exec_debug(f"catalog discovery done ({int((time.time() - t1) * 1000)}ms)")
         else:
+            self._exec_debug("full PARSE stage path (PARSE not pre-completed)")
             workbook_meta = self._run_stage(
                 "PARSE",
                 input_summary=f"{filename} ({os.path.getsize(self.file_path)} bytes)",
@@ -650,6 +698,7 @@ class MigrationPipeline:
         # Stage 4: Calculation Logic Conversion
         # (field resolve + expression analysis + SQL transpile)
         # ═══════════════════════════════════════════
+        self._exec_debug("entering CALC_LOGIC_CONVERSION stage")
         self.log("INFO", "Stage 4: Resolving fields and compiling expressions to Databricks SQL")
 
         def _do_calc_logic_conversion():

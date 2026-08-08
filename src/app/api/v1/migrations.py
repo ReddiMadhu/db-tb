@@ -39,6 +39,31 @@ _TABLE_REF_RE = re.compile(
 )
 
 
+def _append_exec_debug(db: Session, job: MigrationJob, message: str, level: str = "INFO") -> None:
+    """Persist a greppable [exec-debug] milestone on the job for org UI/status polling."""
+    msg = f"[exec-debug] {message}"
+    logger.info("%s job=%s", msg, job.job_uuid)
+    from sqlalchemy.orm.attributes import flag_modified
+
+    bag = list(job.error_bag or [])
+    bag.append({"level": level, "message": msg})
+    if len(bag) > 200:
+        bag = bag[-200:]
+    job.error_bag = bag
+    flag_modified(job, "error_bag")
+
+
+def _has_running_stage(db: Session, job_uuid: str) -> bool:
+    from app.models.stage_model import StageResult
+
+    return (
+        db.query(StageResult)
+        .filter(StageResult.job_uuid == job_uuid, StageResult.status == "RUNNING")
+        .first()
+        is not None
+    )
+
+
 def _normalize_table_ref(raw: str) -> str:
     """Strip backticks/whitespace so `a`.`b`.`c` and a.b.c compare the same."""
     return re.sub(r"[`\s]", "", raw or "")
@@ -244,12 +269,17 @@ def _run_pipeline_background(
     schema_name: str,
 ):
     """Executes full migration pipeline in background worker task."""
+    logger.info("[exec-debug] job=%s background worker started upload=%s maps=%s",
+                job_uuid, upload_path, len(table_mapping or {}))
     db = SessionLocal()
     try:
         job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
         if not job:
-            logger.error("Job %s not found in background task", job_uuid)
+            logger.error("[exec-debug] job=%s not found in background task", job_uuid)
             return
+
+        _append_exec_debug(db, job, "background worker started")
+        db.commit()
 
         pipeline = MigrationPipeline(
             upload_path,
@@ -369,16 +399,36 @@ def _run_pipeline_background(
         )
         db.add(report_orm)
         db.commit()
-        logger.info("Background pipeline execution succeeded for job %s (status=%s)", job_uuid, result["status"])
+        logger.info(
+            "[exec-debug] job=%s background succeeded status=%s",
+            job_uuid,
+            result["status"],
+        )
         return result
     except Exception as e:
-        logger.exception("Background pipeline execution failed for job %s", job_uuid)
+        logger.exception("[exec-debug] job=%s FATAL background failed: %s", job_uuid, e)
         job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
         if job:
+            from app.models.stage_model import StageResult
+            from sqlalchemy.orm.attributes import flag_modified
+
             job.status = "FAILED"
-            job.error_bag = (job.error_bag or []) + [
-                {"level": "FATAL", "message": f"Pipeline execution failed: {str(e)}"}
-            ]
+            bag = list(job.error_bag or [])
+            bag.append({
+                "level": "FATAL",
+                "message": f"[exec-debug] Pipeline execution failed: {str(e)}",
+            })
+            job.error_bag = bag
+            flag_modified(job, "error_bag")
+            # Clear half-open RUNNING stages so retry is not blocked forever
+            for row in (
+                db.query(StageResult)
+                .filter(StageResult.job_uuid == job_uuid, StageResult.status == "RUNNING")
+                .all()
+            ):
+                row.status = "FAILED"
+                row.errors = list(row.errors or []) + [str(e)]
+                row.completed_at = datetime.utcnow()
             db.commit()
         raise
     finally:
@@ -407,12 +457,22 @@ async def execute_migration_pipeline(
     if not job:
         raise HTTPException(status_code=404, detail="Migration job not found.")
 
+    # Soft-lock: only block if a stage is actually RUNNING. Stuck EXECUTING with
+    # all WAITING/COMPLETED (org screenshot) must be retryable.
     if job.status == "EXECUTING":
-        return {
-            "job_uuid": job_uuid,
-            "status": "EXECUTING",
-            "message": "Pipeline execution is already in progress.",
-        }
+        if _has_running_stage(db, job_uuid):
+            return {
+                "job_uuid": job_uuid,
+                "status": "EXECUTING",
+                "message": "Pipeline execution is already in progress.",
+            }
+        _append_exec_debug(
+            db,
+            job,
+            "superseding stuck EXECUTING (no RUNNING stage) — allowing relaunch",
+            level="WARNING",
+        )
+        db.commit()
 
     allowed_statuses = (
         "PARSED",
@@ -424,6 +484,7 @@ async def execute_migration_pipeline(
         "COMPLETED",
         "WARNING",
         "DEPLOYED",
+        "EXECUTING",  # allowed only when stuck (no RUNNING) — handled above
     )
     if job.status not in allowed_statuses:
         raise HTTPException(
@@ -437,6 +498,13 @@ async def execute_migration_pipeline(
             status_code=404,
             detail="Source workbook file not found. Please re-upload."
         )
+
+    _append_exec_debug(
+        db,
+        job,
+        f"kickoff sync_query={sync} upload_exists={os.path.exists(upload_path)}",
+    )
+    db.commit()
 
     # Load saved mappings that have a target (CONFIRMED / AUTO_DETECTED / MATCHED).
     # Auto-detected live Databricks paths must participate in execute the same as
@@ -515,6 +583,11 @@ async def execute_migration_pipeline(
 
     job.status = "EXECUTING"
     job.current_stage = 4  # Start from CALC_LOGIC_CONVERSION (stage 4)
+    _append_exec_debug(
+        db,
+        job,
+        f"job marked EXECUTING mapped_tables={mapped_count} mode={'sync' if is_sync else 'async'}",
+    )
     db.commit()
 
     if is_sync:
@@ -539,10 +612,13 @@ async def execute_migration_pipeline(
                 else "Pipeline completed with validation errors."
         }
     else:
+        _append_exec_debug(db, job, "scheduling background task")
+        db.commit()
         background_tasks.add_task(
             _run_pipeline_background,
             job_uuid, upload_path, table_mapping, catalog, schema_name
         )
+        logger.info("[exec-debug] job=%s background task scheduled", job_uuid)
         return {
             "job_uuid": job_uuid,
             "status": "EXECUTING",
