@@ -315,6 +315,10 @@ class MigrationPipeline:
 
             for ds in workbook_meta.datasources:
                 ds_key = ds.caption or ds.name
+                if ds_key == "Parameters" or ds.name == "Parameters":
+                    continue
+                if not ds.tables and not ds.columns and getattr(ds, "databricks_connection", None) is None:
+                    continue
                 if ds_key not in seen_ds_names:
                     seen_ds_names.add(ds_key)
                     unique_datasources.append(ds)

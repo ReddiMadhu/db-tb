@@ -415,11 +415,21 @@ export default function ParseStageDetail({
     return result;
   }, [joins, relationships, datasources, artifacts.databricks_discovery, semanticJoins, resolveDsName, cleanTableName]);
 
+  // ── Real Data Sources Filter (Excludes internal Parameters container and empty stubs) ──
+  const realDataSources = useMemo(() => {
+    return datasources.filter(
+      (ds: any) =>
+        ds.name !== "Parameters" &&
+        ds.caption !== "Parameters" &&
+        ((ds.tables && ds.tables.length > 0) || (ds.columns && ds.columns.length > 0) || ds.is_databricks)
+    );
+  }, [datasources]);
+
   // ── Counts ──
   const dashboardCount = metrics.dashboards_parsed ?? (artifacts.dashboards ? artifacts.dashboards.length : 0);
   const wsCount = worksheets.length;
   const calcCount = calcFields.length;
-  const dsCount = metrics.datasource_count ?? datasources.length;
+  const dsCount = realDataSources.length || (metrics.datasource_count ? Math.min(metrics.datasource_count, datasources.length) : 1);
 
   // ── Selected Worksheet ──
   const selectedVisual = useMemo(
@@ -732,13 +742,6 @@ export default function ParseStageDetail({
             <span className={styles.statLabel}>Worksheets</span>
           </div>
           <div className={styles.statValue}>{wsCount}</div>
-        </div>
-        <div className={styles.statCard}>
-          <div className={styles.statHeader}>
-            <TrendingUp size={16} style={{ color: "#F2994A" }} />
-            <span className={styles.statLabel}>Measures</span>
-          </div>
-          <div className={styles.statValue}>{measuresList.length}</div>
         </div>
         <div className={styles.statCard}>
           <div className={styles.statHeader}>
