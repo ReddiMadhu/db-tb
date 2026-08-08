@@ -354,28 +354,10 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     return result;
   }, [joins, relationships, datasources, resolveDsName, cleanTableName]);
 
-  // ── Real Data Sources Filter (Excludes Parameters and empty stubs) ──
-  const realDataSources = useMemo(() => {
-    return datasources.filter(
-      (ds: any) =>
-        ds.name !== "Parameters" &&
-        ds.caption !== "Parameters" &&
-        ((ds.tables && ds.tables.length > 0) || (ds.columns && ds.columns.length > 0))
-    );
-  }, [datasources]);
-
-  // ── Counts ──
+  // ── Counts (Data Sources badge = unique tables in Detected Data Model) ──
   const dashboardCount = metrics.dashboards_parsed ?? (artifacts.dashboards ? artifacts.dashboards.length : 0);
   const wsCount = worksheets.length;
   const calcCount = calcFields.length;
-  const dsCount =
-    realDataSources.length > 0
-      ? realDataSources.length
-      : metrics.datasource_count
-        ? Math.min(Number(metrics.datasource_count), Math.max(datasources.length, 1))
-        : datasources.length > 0
-          ? datasources.filter((ds: any) => ds.name !== "Parameters" && ds.caption !== "Parameters").length || 1
-          : 1;
 
   // ── Selected Worksheet ──
   const selectedVisual = useMemo(
@@ -585,6 +567,14 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
 
     return list;
   }, [datasources, allJoinRelations, cleanTableName]);
+
+  // Badge matches Detected Data Model nodes (tables), not Tableau container count
+  const dsCount =
+    tablesList.length > 0
+      ? tablesList.length
+      : metrics.datasource_count
+        ? Number(metrics.datasource_count)
+        : 1;
 
   const activeTable = tablesList.includes(selectedTable)
     ? selectedTable
