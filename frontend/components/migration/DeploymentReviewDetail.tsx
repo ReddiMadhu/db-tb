@@ -177,6 +177,52 @@ export default function DeploymentReviewDetail({
   const [publishedDashboardUrl, setPublishedDashboardUrl] = useState<string | null>(
     artifacts.published_url || null
   );
+  const [needsCredentials, setNeedsCredentials] = useState(false);
+
+  const PLACEHOLDER_HOSTS = new Set([
+    "",
+    "workspace",
+    "databricks workspace",
+    "https://xxx.cloud.databricks.com",
+  ]);
+  const PLACEHOLDER_WAREHOUSES = new Set([
+    "",
+    "warehouse",
+    "sql warehouse",
+    "serverless",
+    "serverless warehouse",
+  ]);
+
+  const isPlaceholderHost = (raw: string) => {
+    const v = raw.trim().toLowerCase();
+    return PLACEHOLDER_HOSTS.has(v);
+  };
+
+  const isPlaceholderWarehouse = (raw: string) => {
+    const v = raw.trim().toLowerCase();
+    return PLACEHOLDER_WAREHOUSES.has(v);
+  };
+
+  const errorNeedsCredentials = (msg: string) => {
+    const m = msg.toLowerCase();
+    return (
+      m.includes("credential") ||
+      m.includes("host url") ||
+      m.includes("databricks host") ||
+      m.includes("personal access token") ||
+      m.includes("(pat)") ||
+      m.includes("pat token") ||
+      m.includes("databricks_token") ||
+      m.includes("databricks_host") ||
+      m.includes("warehouse id") ||
+      m.includes("warehouse_id") ||
+      m.includes("default_warehouse") ||
+      /\b401\b/.test(m) ||
+      /\b403\b/.test(m) ||
+      m.includes("unauthorized") ||
+      m.includes("forbidden")
+    );
+  };
 
   const closePublishModal = () => {
     if (isPublishing) return;
@@ -185,6 +231,7 @@ export default function DeploymentReviewDetail({
     setPublishWarning(null);
     setPublishComplete(false);
     setPublishStep(0);
+    setNeedsCredentials(false);
   };
 
   // Parsed JSON Object & Dynamic Object Counts
@@ -347,6 +394,7 @@ export default function DeploymentReviewDetail({
     setShowPublishModal(true);
     setPublishComplete(false);
     setPublishWarning(null);
+    setNeedsCredentials(false);
 
     if (!validationResult.isValid) {
       setIsPublishing(false);
@@ -364,63 +412,52 @@ export default function DeploymentReviewDetail({
     try {
       setPublishStep(2);
 
-      // Ensure default connection has been attempted before building the body.
+      // Always refresh default connection; backend still falls back to .env
       let latestConn = { ...connectionInfo };
-      let latestHasToken = hasSavedToken;
-      if (!connectionResolved) {
-        try {
-          const res = await getDefaultConnection();
-          latestHasToken = Boolean(
-            res.has_token || res.connection?.has_token || res.connection?.token
-          );
-          setHasSavedToken(latestHasToken);
-          if (res.has_default && res.connection) {
-            latestConn = {
-              host: res.connection.host || "",
-              warehouse_id: res.connection.warehouse_id || "",
-              catalog: res.connection.catalog || "",
-              schema_name: res.connection.schema_name || "",
-            };
-            setConnectionInfo(latestConn);
+      try {
+        const res = await getDefaultConnection();
+        const hasTok = Boolean(
+          res.has_token || res.connection?.has_token || res.connection?.token
+        );
+        setHasSavedToken(hasTok);
+        if (res.has_default && res.connection) {
+          latestConn = {
+            host: res.connection.host || latestConn.host || "",
+            warehouse_id: res.connection.warehouse_id || latestConn.warehouse_id || "",
+            catalog: res.connection.catalog || latestConn.catalog || "",
+            schema_name: res.connection.schema_name || latestConn.schema_name || "",
+          };
+          setConnectionInfo(latestConn);
+          // Prefill override fields only if empty so Retry can edit them when needed
+          if (!hostOverrideInput.trim() && latestConn.host) {
+            setHostOverrideInput(latestConn.host);
           }
-          setConnectionResolved(true);
-        } catch {
-          /* server .env may still resolve credentials */
+          if (!warehouseOverrideInput.trim() && latestConn.warehouse_id) {
+            setWarehouseOverrideInput(latestConn.warehouse_id);
+          }
         }
+        setConnectionResolved(true);
+      } catch {
+        /* server .env / settings may still resolve credentials */
       }
 
-      // Manual overrides from the retry panel take precedence
+      // Manual overrides from the retry panel take precedence when non-placeholder
       const hostOverride = (hostOverrideInput || "").trim();
       const warehouseOverride = (warehouseOverrideInput || "").trim();
-      if (hostOverride) latestConn = { ...latestConn, host: hostOverride };
-      if (warehouseOverride) latestConn = { ...latestConn, warehouse_id: warehouseOverride };
+      if (hostOverride && !isPlaceholderHost(hostOverride)) {
+        latestConn = { ...latestConn, host: hostOverride };
+      }
+      if (warehouseOverride && !isPlaceholderWarehouse(warehouseOverride)) {
+        latestConn = { ...latestConn, warehouse_id: warehouseOverride };
+      }
 
       const whRaw = (latestConn.warehouse_id || "").trim();
-      const whId =
-        whRaw &&
-        !whRaw.includes("Serverless") &&
-        !/warehouse/i.test(whRaw)
-          ? whRaw
-          : warehouseOverride || undefined;
+      const whId = whRaw && !isPlaceholderWarehouse(whRaw) ? whRaw : undefined;
 
       const hostRaw = (latestConn.host || "").trim();
-      const hostUrl =
-        hostRaw && !hostRaw.includes("Workspace") && (hostRaw.includes(".") || hostRaw.startsWith("http"))
-          ? hostRaw
-          : hostOverride || undefined;
+      const hostUrl = hostRaw && !isPlaceholderHost(hostRaw) ? hostRaw : undefined;
 
       const tokenOverride = (patTokenInput || "").trim() || undefined;
-
-      const hasUiCredChannel = Boolean(whId || hostUrl || tokenOverride || latestHasToken);
-      if (!hasUiCredChannel) {
-        setIsPublishing(false);
-        setPublishStep(0);
-        setPublishError(
-          "No Databricks credentials available. Enter host, warehouse ID, and PAT below, " +
-            "or save a default connection under Connections / set DATABRICKS_* in .env."
-        );
-        return;
-      }
 
       if (!jsonCode || !jsonCode.trim().startsWith("{")) {
         setIsPublishing(false);
@@ -432,6 +469,7 @@ export default function DeploymentReviewDetail({
       }
 
       setPublishStep(3);
+      // Empty {} is fine — server resolves Connection → .env
       const deployBody: {
         warehouse_id?: string;
         host?: string;
@@ -451,6 +489,7 @@ export default function DeploymentReviewDetail({
       setPublishStep(5);
       setPublishComplete(true);
       setIsPublishing(false);
+      setNeedsCredentials(false);
       if (res.published_url) {
         setPublishedDashboardUrl(res.published_url);
       }
@@ -458,11 +497,13 @@ export default function DeploymentReviewDetail({
         setPublishWarning(res.publish_warning);
       }
     } catch (err: any) {
+      const msg =
+        err.message ||
+        "Databricks deployment failed. Please verify your host URL, warehouse ID, and PAT token.";
       setIsPublishing(false);
       setPublishStep(0);
-      setPublishError(
-        err.message || "Databricks deployment failed. Please verify your host URL, warehouse ID, and PAT token."
-      );
+      setPublishError(msg);
+      setNeedsCredentials(errorNeedsCredentials(msg));
     }
   };
 
@@ -778,107 +819,87 @@ export default function DeploymentReviewDetail({
                 <div style={{ fontSize: "0.785rem", color: "var(--text-secondary)", marginBottom: "0.75rem" }}>
                   {publishError}
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                  <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
-                    Databricks Host
-                  </label>
-                  <input
-                    type="text"
-                    placeholder={connectionInfo.host || "https://xxx.cloud.databricks.com"}
-                    value={hostOverrideInput}
-                    onChange={(e) => setHostOverrideInput(e.target.value)}
-                    style={{
-                      background: "#0d1117",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: "4px",
-                      padding: "0.4rem 0.6rem",
-                      color: "#fff",
-                      fontSize: "0.8rem",
-                    }}
-                  />
-                  <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
-                    SQL Warehouse ID
-                  </label>
-                  <input
-                    type="text"
-                    placeholder={connectionInfo.warehouse_id || "abc123def456..."}
-                    value={warehouseOverrideInput}
-                    onChange={(e) => setWarehouseOverrideInput(e.target.value)}
-                    style={{
-                      background: "#0d1117",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: "4px",
-                      padding: "0.4rem 0.6rem",
-                      color: "#fff",
-                      fontSize: "0.8rem",
-                    }}
-                  />
-                  {!hasSavedToken && (
-                    <>
-                      <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
-                        Databricks Personal Access Token (PAT)
-                      </label>
-                      <input
-                        type="password"
-                        placeholder="dapi..."
-                        value={patTokenInput}
-                        onChange={(e) => setPatTokenInput(e.target.value)}
-                        style={{
-                          background: "#0d1117",
-                          border: "1px solid var(--border-subtle)",
-                          borderRadius: "4px",
-                          padding: "0.4rem 0.6rem",
-                          color: "#fff",
-                          fontSize: "0.8rem",
-                        }}
-                      />
-                    </>
-                  )}
-                  {hasSavedToken && (
-                    <div style={{ fontSize: "0.72rem", color: "var(--text-tertiary)" }}>
-                      Using the PAT saved on your default Databricks connection. Paste a new PAT above only if you clear the saved connection, or fix credentials under Connections.
-                    </div>
-                  )}
-                  {hasSavedToken && (
-                    <>
-                      <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
-                        Override PAT (optional)
-                      </label>
-                      <input
-                        type="password"
-                        placeholder="dapi... (leave blank to use saved token)"
-                        value={patTokenInput}
-                        onChange={(e) => setPatTokenInput(e.target.value)}
-                        style={{
-                          background: "#0d1117",
-                          border: "1px solid var(--border-subtle)",
-                          borderRadius: "4px",
-                          padding: "0.4rem 0.6rem",
-                          color: "#fff",
-                          fontSize: "0.8rem",
-                        }}
-                      />
-                    </>
-                  )}
-                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem" }}>
-                    <button
-                      type="button"
-                      className={styles.secondaryBtn}
-                      onClick={handleStartPublish}
-                      disabled={isPublishing}
-                      style={{ background: "var(--accent-cyan)", color: "#000", border: "none", fontWeight: 700 }}
-                    >
-                      Retry Publish
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.secondaryBtn}
-                      onClick={closePublishModal}
-                      disabled={isPublishing}
-                    >
-                      Cancel
-                    </button>
+                {hasSavedToken && !needsCredentials && (
+                  <div style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", marginBottom: "0.5rem" }}>
+                    Using your saved default Databricks connection / server .env credentials.
                   </div>
+                )}
+                {needsCredentials && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    <div style={{ fontSize: "0.72rem", color: "var(--text-tertiary)" }}>
+                      Server could not resolve host / warehouse / PAT from Connections or .env. Enter overrides below, or mark a connection as default under Connections.
+                    </div>
+                    <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
+                      Databricks Host
+                    </label>
+                    <input
+                      type="text"
+                      placeholder={connectionInfo.host || "https://xxx.cloud.databricks.com"}
+                      value={hostOverrideInput}
+                      onChange={(e) => setHostOverrideInput(e.target.value)}
+                      style={{
+                        background: "#0d1117",
+                        border: "1px solid var(--border-subtle)",
+                        borderRadius: "4px",
+                        padding: "0.4rem 0.6rem",
+                        color: "#fff",
+                        fontSize: "0.8rem",
+                      }}
+                    />
+                    <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
+                      SQL Warehouse ID
+                    </label>
+                    <input
+                      type="text"
+                      placeholder={connectionInfo.warehouse_id || "abc123def456..."}
+                      value={warehouseOverrideInput}
+                      onChange={(e) => setWarehouseOverrideInput(e.target.value)}
+                      style={{
+                        background: "#0d1117",
+                        border: "1px solid var(--border-subtle)",
+                        borderRadius: "4px",
+                        padding: "0.4rem 0.6rem",
+                        color: "#fff",
+                        fontSize: "0.8rem",
+                      }}
+                    />
+                    <label style={{ fontSize: "0.72rem", color: "var(--text-tertiary)", fontWeight: 600 }}>
+                      {hasSavedToken ? "Override PAT (optional)" : "Databricks Personal Access Token (PAT)"}
+                    </label>
+                    <input
+                      type="password"
+                      placeholder={hasSavedToken ? "leave blank to use saved token" : "dapi..."}
+                      value={patTokenInput}
+                      onChange={(e) => setPatTokenInput(e.target.value)}
+                      style={{
+                        background: "#0d1117",
+                        border: "1px solid var(--border-subtle)",
+                        borderRadius: "4px",
+                        padding: "0.4rem 0.6rem",
+                        color: "#fff",
+                        fontSize: "0.8rem",
+                      }}
+                    />
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={handleStartPublish}
+                    disabled={isPublishing}
+                    style={{ background: "var(--accent-cyan)", color: "#000", border: "none", fontWeight: 700 }}
+                  >
+                    Retry Publish
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={closePublishModal}
+                    disabled={isPublishing}
+                  >
+                    Cancel
+                  </button>
                 </div>
               </div>
             )}
