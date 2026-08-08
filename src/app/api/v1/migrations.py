@@ -4,6 +4,7 @@ import re
 import tempfile
 import shutil
 import logging
+import traceback
 from datetime import datetime
 from typing import Any, Optional, Dict, List, Tuple
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
@@ -29,6 +30,25 @@ router = APIRouter()
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+def _write_error_log(job_uuid: str, exc: BaseException) -> None:
+    """Append background/pipeline failures to project error.log (cwd).
+
+    FastAPI's global handler only catches HTTP request exceptions; async
+    execute failures never reached error.log before this.
+    """
+    try:
+        log_path = os.path.join(os.getcwd(), "error.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(
+                f"\n--- ERROR AT {datetime.now()} ---\n"
+                f"job_uuid={job_uuid}\n"
+                f"Exception: {exc}\n"
+                f"{traceback.format_exc()}\n"
+            )
+    except Exception:
+        logger.warning("Failed to write error.log for job %s", job_uuid, exc_info=True)
 
 # Table refs after FROM/JOIN — covers hive_metastore.default.t and `samples`.`nyctaxi`.`trips`
 _TABLE_REF_RE = re.compile(
@@ -407,6 +427,7 @@ def _run_pipeline_background(
         return result
     except Exception as e:
         logger.exception("[exec-debug] job=%s FATAL background failed: %s", job_uuid, e)
+        _write_error_log(job_uuid, e)
         job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
         if job:
             from app.models.stage_model import StageResult
