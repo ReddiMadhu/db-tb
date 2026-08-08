@@ -16,8 +16,8 @@ import {
   LayoutDashboard,
 } from "lucide-react";
 import type { StageDetail } from "@/lib/types";
-import RelationshipDiagram from "./RelationshipDiagram";
 import type { JoinRelation } from "./RelationshipDiagram";
+import DataModelCanvas from "./DataModelCanvas";
 import styles from "./ParseStageDetail.module.css";
 
 /* ═══════════════════════════════════════
@@ -270,7 +270,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     return s;
   }, []);
 
-  // ── Aggregate all joins from datasources for RelationshipDiagram ──
+  // ── Aggregate all joins from datasources for DataModelCanvas ──
   const allJoinRelations: JoinRelation[] = useMemo(() => {
     const result: JoinRelation[] = [];
     const pushRel = (
@@ -1137,32 +1137,22 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
           <h3 className={styles.sectionTitle}>
             <Database size={16} style={{ color: "#2D9CDB" }} /> Detected Data Model
           </h3>
-          <span className={styles.subtextHint}>Click any table below to inspect schema, measures, and relationships</span>
+          <span className={styles.subtextHint}>
+            Click a table to inspect it; hover a connection line to see join columns
+          </span>
         </div>
 
         <div className={styles.dataModelContainer}>
-          {/* Left / Center Diagram */}
           <div className={styles.diagramCanvas}>
-            <div className={styles.diagramFlow}>
-              {tablesList.length > 0 ? (
-                tablesList.map((tName: string, idx: number) => (
-                  <div
-                    key={idx}
-                    className={`${styles.tableNode} ${activeTable === tName ? styles.nodeSelected : ""}`}
-                    onClick={() => setSelectedTable(tName)}
-                  >
-                    <Database size={16} /> {tName}
-                  </div>
-                ))
-              ) : (
-                <div className={styles.tableNode}>
-                  <Database size={16} /> {dashboardName} (Logical Model)
-                </div>
-              )}
-            </div>
+            <DataModelCanvas
+              tables={tablesList}
+              joins={allJoinRelations}
+              activeTable={activeTable}
+              onSelectTable={setSelectedTable}
+              fallbackLabel={`${dashboardName} (Logical Model)`}
+            />
           </div>
 
-          {/* Right Table Detail Panel */}
           <div className={styles.tableDetailInspector}>
             <div className={styles.inspectorHeader}>
               <Database size={16} style={{ color: "var(--accent-cyan)" }} />
@@ -1188,28 +1178,8 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                 <span className={styles.inspectorVal}>{activeRelsList.length}</span>
               </div>
             </div>
-
-            {activeRelsList.length > 0 && (
-              <div className={styles.relationshipsSection}>
-                <span className={styles.inspectorKey}>Linked Tables</span>
-                <div className={styles.relTagsList}>
-                  {activeRelsList.map((r: string, idx: number) => (
-                    <span key={idx} className={styles.relTag}>
-                      ↔ {r}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
-
-        {/* Table Joins & Linkage Data Model */}
-        {allJoinRelations.length > 0 && (
-          <div style={{ marginTop: "1rem" }}>
-            <RelationshipDiagram joins={allJoinRelations} activeTable={activeTable} />
-          </div>
-        )}
       </div>
     </div>
   );
