@@ -43,11 +43,19 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
     saved_file_path = os.path.join(job_dir, file.filename)
 
     try:
+        file.file.seek(0)
         with open(saved_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
         # Stage 1-3: Parse XML into TOM Pydantic models
-        workbook_meta = parse_workbook(saved_file_path)
+        try:
+            workbook_meta = parse_workbook(saved_file_path)
+        except Exception as parse_err:
+            logger.error(f"Failed to parse uploaded workbook: {parse_err}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Parsing failed: {str(parse_err)}. Please ensure the file is a valid .twb or .twbx archive."
+            )
 
         # Stage 4: Build Dependency Graph
         dag_engine = DependencyGraphEngine(workbook_meta)

@@ -53,10 +53,24 @@ TABLEAU_ENCODING_CHANNELS = frozenset({
 def _load_xml(path: str) -> etree._Element:
     """Load Tableau XML from either a .twbx ZIP archive or a plain .twb file."""
     p = Path(path)
-    if p.suffix.lower() == '.twbx':
-        with zipfile.ZipFile(path, 'r') as zf:
-            twb_name = next(f for f in zf.namelist() if f.endswith('.twb'))
-            return etree.fromstring(zf.read(twb_name))
+    if p.suffix.lower() == '.twbx' or zipfile.is_zipfile(path):
+        if zipfile.is_zipfile(path):
+            try:
+                with zipfile.ZipFile(path, 'r') as zf:
+                    twb_files = [
+                        f for f in zf.namelist()
+                        if f.endswith('.twb') and not f.startswith('__MACOSX/') and not Path(f).name.startswith('._')
+                    ]
+                    if twb_files:
+                        twb_name = twb_files[0]
+                        return etree.fromstring(zf.read(twb_name))
+            except zipfile.BadZipFile:
+                pass
+        # Fallback: file may be a plain .twb XML file renamed with a .twbx extension
+        try:
+            return etree.parse(path).getroot()
+        except Exception as e:
+            raise ValueError(f"Could not parse workbook file: file is corrupted or not a valid ZIP archive ({e})")
     return etree.parse(path).getroot()
 
 
