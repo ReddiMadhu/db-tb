@@ -6,6 +6,7 @@ auto-matching, saving mappings, and validating that mapped tables exist.
 """
 
 import os
+import re
 import logging
 from typing import Dict, List, Optional
 
@@ -112,14 +113,33 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
         embedded_files = extract_and_list_embedded(upload_path)
 
     datasources = []
+    seen_table_keys: set = set()
     for ds in workbook_meta.datasources:
         tables = []
         for t in ds.tables:
+            key = (t.name or "").lower()
+            if key and key in seen_table_keys:
+                continue
+            if key:
+                seen_table_keys.add(key)
+            # Prefer a readable label: strip file extension from raw_name when
+            # normalize previously collapsed "*.csv" → "Csv"
+            display = t.name
+            raw = t.raw_name or t.name
+            if display and display.lower() in ("csv", "txt", "tsv", "xlsx", "xls", "hyper"):
+                stem = re.sub(
+                    r"\.(csv|txt|tsv|xlsx?|xlsm|xls|hyper|tde|json|parquet|avro)$",
+                    "",
+                    raw,
+                    flags=re.IGNORECASE,
+                )
+                if stem and stem != raw:
+                    display = stem
             tables.append({
-                "name": t.name,
-                "raw_name": t.raw_name or t.name,
-                "is_unresolved": is_unresolved_table(t.name),
-                "clean_name": clean_table_name_for_catalog(t.name),
+                "name": display,
+                "raw_name": raw,
+                "is_unresolved": is_unresolved_table(display),
+                "clean_name": clean_table_name_for_catalog(display),
             })
 
         # Find which worksheets reference this datasource
