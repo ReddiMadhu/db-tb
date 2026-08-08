@@ -273,6 +273,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   // ── Aggregate all joins from datasources for DataModelCanvas ──
   const allJoinRelations: JoinRelation[] = useMemo(() => {
     const result: JoinRelation[] = [];
+    const seen = new Set<string>();
     const pushRel = (
       jType: string,
       lTable: string,
@@ -284,6 +285,9 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       const left = cleanTableName(lTable);
       const right = cleanTableName(rTable);
       if (!left || !right) return;
+      const key = `${left}|${lCol}|${right}|${rCol}`.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
       result.push({
         join_type: jType || "inner",
         left_table: left,
@@ -294,7 +298,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       });
     };
 
-    // From top-level joins
+    // From top-level joins (Tableau explicit)
     joins.forEach((j: any) => {
       pushRel(
         j.join_type || j.type,
@@ -306,7 +310,20 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       );
     });
 
-    // From datasource-level joins
+    // From top-level relationships (Tableau relationship model)
+    // upload.py serializes these here — not nested under datasources[]
+    relationships.forEach((r: any) => {
+      pushRel(
+        r.type || r.relationship_type || r.cardinality || "relationship",
+        r.table1 || r.left_table,
+        r.table1_column || r.column1 || r.left_column,
+        r.table2 || r.right_table,
+        r.table2_column || r.column2 || r.right_column,
+        r.datasource
+      );
+    });
+
+    // From datasource-level joins / relationships (if present)
     datasources.forEach((ds: any) => {
       if (Array.isArray(ds.joins)) {
         ds.joins.forEach((j: any) => {
@@ -323,11 +340,11 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
       if (Array.isArray(ds.relationships)) {
         ds.relationships.forEach((r: any) => {
           pushRel(
-            r.relationship_type || "relationship",
+            r.type || r.relationship_type || r.cardinality || "relationship",
             r.table1 || r.left_table,
-            r.column1 || r.left_column,
+            r.table1_column || r.column1 || r.left_column,
             r.table2 || r.right_table,
-            r.column2 || r.right_column,
+            r.table2_column || r.column2 || r.right_column,
             resolveDsName(ds.name)
           );
         });
@@ -335,15 +352,15 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     });
 
     return result;
-  }, [joins, datasources, resolveDsName, cleanTableName]);
+  }, [joins, relationships, datasources, resolveDsName, cleanTableName]);
 
-  // ── Real Data Sources Filter (Excludes internal Parameters container and empty stubs) ──
+  // ── Real Data Sources Filter (Excludes Parameters and empty stubs) ──
   const realDataSources = useMemo(() => {
     return datasources.filter(
       (ds: any) =>
         ds.name !== "Parameters" &&
         ds.caption !== "Parameters" &&
-        ((ds.tables && ds.tables.length > 0) || (ds.columns && ds.columns.length > 0) || ds.is_databricks)
+        ((ds.tables && ds.tables.length > 0) || (ds.columns && ds.columns.length > 0))
     );
   }, [datasources]);
 
@@ -351,7 +368,14 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const dashboardCount = metrics.dashboards_parsed ?? (artifacts.dashboards ? artifacts.dashboards.length : 0);
   const wsCount = worksheets.length;
   const calcCount = calcFields.length;
-  const dsCount = realDataSources.length || (metrics.datasource_count ? Math.min(metrics.datasource_count, datasources.length) : 1);
+  const dsCount =
+    realDataSources.length > 0
+      ? realDataSources.length
+      : metrics.datasource_count
+        ? Math.min(Number(metrics.datasource_count), Math.max(datasources.length, 1))
+        : datasources.length > 0
+          ? datasources.filter((ds: any) => ds.name !== "Parameters" && ds.caption !== "Parameters").length || 1
+          : 1;
 
   // ── Selected Worksheet ──
   const selectedVisual = useMemo(
