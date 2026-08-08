@@ -33,7 +33,9 @@ DEFAULT_COLORS = [
     "#AB4057", "#99DDB4", "#FCA4A1", "#919191", "#BF7080",
 ]
 
-PLACEHOLDER_FIELDS = {"x", "y", "value", "filter_col", "X", "Y", "Value", "0", ""}
+# Stub axis names used when bindings are incomplete — NOT real dataset columns.
+# Do NOT include "Value" / "Metric": those are legitimate unpivot output columns.
+PLACEHOLDER_FIELDS = {"x", "y", "value", "filter_col", "X", "Y", "0", ""}
 
 # Chart widgetTypes that require version 3
 CHART_TYPES_V3 = {
@@ -85,15 +87,41 @@ def infer_scale_type(
     explicit: Optional[str] = None,
     datatype: Optional[str] = None,
 ) -> str:
-    """Infer Lakeview scale.type for an encoding channel."""
+    """Infer Lakeview scale.type for an encoding channel.
+
+    Temporal requires a date-like datatype (or explicit). Name hints alone
+    (e.g. Effective_Year) must not force temporal when the column is integer
+    or a non-date string/categorical.
+    """
     if explicit in ("quantitative", "temporal", "categorical", "ordinal"):
         return explicit
     if role == "measure":
         return "quantitative"
-    if datatype and datatype.lower() in ("integer", "int", "long", "real", "float", "double", "number", "bigint", "smallint", "tinyint"):
-        return "categorical"
-    if field_name and TEMPORAL_HINTS.search(field_name):
+    dt = (datatype or "").lower().strip()
+    date_like = dt in (
+        "date", "datetime", "timestamp", "timestamptz", "time",
+    )
+    numeric_like = dt in (
+        "integer", "int", "long", "real", "float", "double", "number",
+        "bigint", "smallint", "tinyint", "decimal", "numeric",
+    )
+    if date_like:
         return "temporal"
+    if numeric_like:
+        # Integer years / ids stay categorical on axes unless role=measure
+        return "categorical"
+    # Name-based temporal only when datatype is unknown/string-like and looks like a real date field
+    if field_name and TEMPORAL_HINTS.search(field_name):
+        # "year" / "month" alone as integer-named dims are categorical when no date type
+        if re.search(r"(^|_)(year|month|week|day|period)(_|$)", field_name, re.IGNORECASE):
+            if not dt or dt in ("string", "str", "varchar", "text", ""):
+                # Ambiguous — prefer categorical for year/month token fields
+                if re.search(r"year|month|week|day|period", field_name, re.IGNORECASE) and not re.search(
+                    r"date|time|timestamp|datetime", field_name, re.IGNORECASE
+                ):
+                    return "categorical"
+        if re.search(r"date|time|timestamp|datetime", field_name, re.IGNORECASE):
+            return "temporal"
     return "categorical"
 
 
@@ -742,9 +770,10 @@ class WidgetFactory:
     ) -> Widget:
         """Create a Version 2 Counter / KPI widget."""
         qfields = list(query_fields) if query_fields else [
-            {"expression": f"SUM(`{value_field}`)", "name": value_field},
+            {"expression": f"`{value_field}`", "name": value_field},
         ]
-        cls._ensure_field(qfields, value_field, f"SUM(`{value_field}`)")
+        # Prefer passthrough of dataset output alias (dataset owns aggregation)
+        cls._ensure_field(qfields, value_field, f"`{value_field}`")
 
         spec = {
             "version": 2,
@@ -777,12 +806,10 @@ class WidgetFactory:
     ) -> Widget:
         """Create a Version 2 Filter widget.
 
-        ``queryName`` in encodings must equal the widget query ``name``. When
-        ``dashboard_id`` is provided the path is stable; otherwise a relative
-        dataset-scoped name is used (no random per-call dashboard UUID).
+        ``queryName`` in encodings must equal the widget query ``name``.
+        Always use a local query name (default ``main_query``); never an
+        external ``dashboards/.../datasets/...`` path.
         """
-        from app.models.lakeview_model import stable_lakeview_id
-
         allowed = {
             "filter-multi-select",
             "filter-single-select",
@@ -797,8 +824,9 @@ class WidgetFactory:
         ]
         cls._ensure_field(qfields, field_name)
 
-        dash = dashboard_id or "local"
-        qname = query_name or f"dashboards/{dash}/datasets/{dataset_name}_{field_name}"
+        qname = query_name or "main_query"
+        if "/" in qname or qname.startswith("dashboards/"):
+            qname = "main_query"
 
         spec = {
             "version": 2,

@@ -165,6 +165,27 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
         "confidence_score": m.confidence_score,
     } for m in existing_mappings}
 
+    # Auto-compose target_full_name for Databricks-connected datasources
+    # When catalog + schema are known from the live connection, pre-fill the mapping
+    for ds in workbook_meta.datasources:
+        if ds.databricks_connection and ds.databricks_connection.catalog:
+            catalog = ds.databricks_connection.catalog
+            schema = ds.databricks_connection.schema_name or "default"
+            for t in ds.tables:
+                clean_name = clean_table_name_for_catalog(t.name)
+                if clean_name and clean_name not in mapping_lookup:
+                    mapping_lookup[clean_name] = {
+                        "target_full_name": f"{catalog}.{schema}.{clean_name}",
+                        "status": "AUTO_DETECTED",
+                        "confidence_score": 1.0,
+                    }
+                if t.name and t.name not in mapping_lookup:
+                    mapping_lookup[t.name] = {
+                        "target_full_name": f"{catalog}.{schema}.{clean_name}",
+                        "status": "AUTO_DETECTED",
+                        "confidence_score": 1.0,
+                    }
+
     # Build the top-level list of all Databricks sources for the Data Model screen
     databricks_sources = []
     for conn in workbook_meta.databricks_connections:

@@ -17,6 +17,8 @@ import {
   LayoutDashboard,
 } from "lucide-react";
 import type { StageDetail } from "@/lib/types";
+import RelationshipDiagram from "./RelationshipDiagram";
+import type { JoinRelation } from "./RelationshipDiagram";
 import styles from "./ParseStageDetail.module.css";
 
 /* ═══════════════════════════════════════
@@ -193,7 +195,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
         caption: cap || rawName || "Calculated Field",
         formula: cf.formula || "",
         type: cf.type || cf.formula_type || "STANDARD",
-        datasource: cf.datasource || "Default",
+        datasource: resolveDsName(cf.datasource || "Default"),
         return_type: cf.return_type || undefined,
         dependencies: Array.isArray(cf.dependencies) ? cf.dependencies : undefined,
         is_used: typeof cf.is_used === "boolean" ? cf.is_used : undefined,
@@ -212,9 +214,78 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
   const dashboardLegends = Array.isArray(artifacts.dashboard_legends) ? artifacts.dashboard_legends : [];
   const workbookActions = Array.isArray(artifacts.actions) ? artifacts.actions : [];
   const ontology = (artifacts.workbook_ontology || null) as Record<string, any> | null;
-  const ontologyDashboard = Array.isArray(ontology?.dashboards) ? ontology.dashboards[0] : null;
-  const ontologyWorkbook = ontology?.workbook || null;
-  const ontologyDs = Array.isArray(ontology?.datasources) ? ontology.datasources[0] : null;
+
+  // ── Datasource Name Resolution: federated.* hash → friendly caption ──
+  const dsNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    datasources.forEach((ds: any) => {
+      if (ds.caption && ds.caption !== ds.name) {
+        map.set(ds.name, ds.caption);
+      } else if (Array.isArray(ds.tables) && ds.tables.length > 0) {
+        const firstName = typeof ds.tables[0] === "string" ? ds.tables[0] : ds.tables[0]?.name || ds.name;
+        map.set(ds.name, firstName);
+      }
+    });
+    return map;
+  }, [datasources]);
+
+  const resolveDsName = useCallback(
+    (raw: string | undefined): string => {
+      if (!raw) return "Default";
+      if (dsNameMap.has(raw)) return dsNameMap.get(raw)!;
+      // Strip federated. prefix as last resort
+      if (raw.startsWith("federated.")) {
+        const cleaned = raw.replace(/^federated\.\w+$/, "");
+        return cleaned || raw;
+      }
+      return raw;
+    },
+    [dsNameMap]
+  );
+
+  // ── Aggregate all joins from datasources for RelationshipDiagram ──
+  const allJoinRelations: JoinRelation[] = useMemo(() => {
+    const result: JoinRelation[] = [];
+    // From top-level joins
+    joins.forEach((j: any) => {
+      result.push({
+        join_type: j.join_type || j.type || "inner",
+        left_table: j.left_table || "",
+        left_column: j.left_column || j.left_key || "",
+        right_table: j.right_table || "",
+        right_column: j.right_column || j.right_key || "",
+        datasource: j.datasource,
+      });
+    });
+    // From datasource-level joins
+    datasources.forEach((ds: any) => {
+      if (Array.isArray(ds.joins)) {
+        ds.joins.forEach((j: any) => {
+          result.push({
+            join_type: j.join_type || j.type || "inner",
+            left_table: j.left_table || "",
+            left_column: j.left_column || j.left_key || "",
+            right_table: j.right_table || "",
+            right_column: j.right_column || j.right_key || "",
+            datasource: resolveDsName(ds.name),
+          });
+        });
+      }
+      if (Array.isArray(ds.relationships)) {
+        ds.relationships.forEach((r: any) => {
+          result.push({
+            join_type: r.relationship_type || "relationship",
+            left_table: r.table1 || r.left_table || "",
+            left_column: r.column1 || r.left_column || "",
+            right_table: r.table2 || r.right_table || "",
+            right_column: r.column2 || r.right_column || "",
+            datasource: resolveDsName(ds.name),
+          });
+        });
+      }
+    });
+    return result;
+  }, [joins, datasources, resolveDsName]);
 
   // ── Counts ──
   const dashboardCount = metrics.dashboards_parsed ?? (artifacts.dashboards ? artifacts.dashboards.length : 0);
@@ -638,7 +709,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                           <span className={styles.specBlockLabel}>Visual Properties & Source Dataset</span>
                           <div className={styles.wsExpandedPills}>
                             <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Mark: {ws.mark_type || "Automatic"}</span>
-                            <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Source: {ws.datasource_name || "Default"}</span>
+                            <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Source: {resolveDsName(ws.datasource_name) || "Default"}</span>
                             {ws.map_style ? (
                               <span className={`${styles.miniPill} ${styles.miniPillDim}`}>Map: {ws.map_style}</span>
                             ) : null}
@@ -967,147 +1038,6 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
         </div>
       </div>
 
-      {/* ═══════════════════════════════════════
-          DASHBOARD CONTROLS + ACTIONS
-          ═══════════════════════════════════════ */}
-      {(dashboardFilters.length > 0 || dashboardLegends.length > 0 || workbookActions.length > 0) && (
-        <div className={styles.sectionBlock}>
-          <div className={styles.sectionHeader}>
-            <h3 className={styles.sectionTitle}>
-              <Filter size={16} style={{ color: "#F2994A" }} /> Dashboard Controls — {dashboardName}
-            </h3>
-            <span className={styles.subtextHint}>
-              Quick filters, legends, and workbook actions from Tableau layout
-            </span>
-          </div>
-          <div className={styles.dashControlsGrid}>
-            {dashboardFilters.length > 0 && (
-              <div className={styles.specBlock}>
-                <span className={styles.specBlockLabel}>Filter Cards ({dashboardFilters.length})</span>
-                <div className={styles.wsExpandedPills}>
-                  {dashboardFilters.map((fc: any, i: number) => (
-                    <span key={i} className={`${styles.miniPill} ${styles.miniPillFilter}`}>
-                      #{fc.id} {fc.field}{fc.mode ? ` · ${fc.mode}` : ""}
-                      {fc.worksheet_owner ? ` ← ${fc.worksheet_owner}` : ""}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {dashboardLegends.length > 0 && (
-              <div className={styles.specBlock}>
-                <span className={styles.specBlockLabel}>Legend Cards ({dashboardLegends.length})</span>
-                <div className={styles.wsExpandedPills}>
-                  {dashboardLegends.map((lg: any, i: number) => (
-                    <span key={i} className={`${styles.miniPill} ${styles.miniPillDim}`}>
-                      #{lg.id} {lg.field} · {lg.legend_type || "color"}
-                      {lg.worksheet_owner ? ` ← ${lg.worksheet_owner}` : ""}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {workbookActions.length > 0 && (
-              <div className={styles.specBlock}>
-                <span className={styles.specBlockLabel}>Actions ({workbookActions.length})</span>
-                <div className={styles.wsExpandedPills}>
-                  {workbookActions.map((act: any, i: number) => (
-                    <span key={i} className={`${styles.miniPill} ${styles.miniPillCalc}`}>
-                      {act.caption || act.name}: {act.action_type || act.type}
-                      {act.field ? ` · ${act.field}` : ""}
-                      {act.activation_type ? ` · ${act.activation_type}` : ""}
-                      {act.target ? ` → ${act.target}` : ""}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ═══════════════════════════════════════
-          WORKBOOK ONTOLOGY
-          ═══════════════════════════════════════ */}
-      {ontology && (
-        <div className={styles.sectionBlock}>
-          <div className={styles.sectionHeader}>
-            <h3 className={styles.sectionTitle}>
-              <Layers size={16} style={{ color: "#9B51E0" }} /> Workbook Ontology
-            </h3>
-            <button
-              type="button"
-              className={styles.clearFilterBtn}
-              onClick={() => setShowOntology((v) => !v)}
-            >
-              {showOntology ? "Hide details" : "Show details"}
-            </button>
-          </div>
-          <div className={styles.ontologySummary}>
-            {ontologyWorkbook && (
-              <span className={styles.ontologyChip}>
-                v{ontologyWorkbook.tableau_version}
-                {ontologyWorkbook.build_version ? ` · ${String(ontologyWorkbook.build_version).split(" ")[0]}` : ""}
-                {ontologyWorkbook.style_theme ? ` · theme ${ontologyWorkbook.style_theme}` : ""}
-              </span>
-            )}
-            {ontologyWorkbook?.repository_location?.site && (
-              <span className={styles.ontologyChip}>site: {ontologyWorkbook.repository_location.site}</span>
-            )}
-            {ontologyDs?.live_or_extract && (
-              <span className={styles.ontologyChip}>
-                {ontologyDs.live_or_extract}
-                {ontologyDs.extract?.rows_inserted != null ? ` · ${ontologyDs.extract.rows_inserted} rows` : ""}
-              </span>
-            )}
-            {ontologyDashboard?.uuid && (
-              <span className={styles.ontologyChip} title={ontologyDashboard.uuid}>
-                dash UUID · zones {ontologyDashboard.zone_count ?? "—"}
-              </span>
-            )}
-            {ontologyDashboard?.sizing_mode && (
-              <span className={styles.ontologyChip}>sizing: {ontologyDashboard.sizing_mode}</span>
-            )}
-            {ontologyDashboard?.table_background && (
-              <span className={styles.ontologyChip}>bg {ontologyDashboard.table_background}</span>
-            )}
-          </div>
-          {showOntology && (
-            <div className={styles.ontologyDetail}>
-              {Array.isArray(ontologyDashboard?.text_zones) && ontologyDashboard.text_zones.length > 0 && (
-                <div className={styles.specBlock}>
-                  <span className={styles.specBlockLabel}>Text Zones</span>
-                  <div className={styles.wsExpandedPills}>
-                    {ontologyDashboard.text_zones.map((tz: any, i: number) => (
-                      <span key={i} className={`${styles.miniPill} ${styles.miniPillShelf}`}>
-                        #{tz.zone_id} “{tz.content}” · {tz.font} {tz.font_size}pt {tz.color}
-                        {tz.bold ? " Bold" : ""}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {ontologyDashboard?.layout_hierarchy && (
-                <div className={styles.specBlock}>
-                  <span className={styles.specBlockLabel}>Layout Hierarchy</span>
-                  <pre className={styles.ontologyTree}>{ontologyDashboard.layout_hierarchy}</pre>
-                </div>
-              )}
-              {ontologyDs?.extract?.hyper_file && (
-                <div className={styles.specBlock}>
-                  <span className={styles.specBlockLabel}>Extract</span>
-                  <div className={styles.wsExpandedPills}>
-                    <span className={`${styles.miniPill} ${styles.miniPillDim}`}>{ontologyDs.extract.hyper_file}</span>
-                    {ontologyDs.extract.update_time && (
-                      <span className={`${styles.miniPill} ${styles.miniPillDim}`}>{ontologyDs.extract.update_time}</span>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ═══════════════════════════════════════
           PREVIOUS WORKBOOK DATA MODEL VERSION
@@ -1184,6 +1114,13 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
             )}
           </div>
         </div>
+
+        {/* Table Joins & Linkage Data Model */}
+        {allJoinRelations.length > 0 && (
+          <div style={{ marginTop: "1rem" }}>
+            <RelationshipDiagram joins={allJoinRelations} />
+          </div>
+        )}
       </div>
     </div>
   );

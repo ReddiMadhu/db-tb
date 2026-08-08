@@ -77,6 +77,16 @@ export interface TableauDatasourceInfo {
   }[];
   column_count: number;
   worksheets: string[];
+  is_databricks?: boolean;
+  databricks_connection?: {
+    host: string;
+    http_path: string;
+    catalog: string;
+    schema: string;
+    warehouse_id: string;
+    auth_method: string;
+    connection_class: string;
+  };
 }
 
 export interface EmbeddedFileInfo {
@@ -118,7 +128,7 @@ export interface DatasourceMappingItem {
   tableau_connection_type: string;
   target_full_name: string;
   confidence_score?: number;
-  status: "PENDING" | "MATCHED" | "CONFIRMED" | "FAILED";
+  status: "PENDING" | "MATCHED" | "CONFIRMED" | "FAILED" | "AUTO_DETECTED";
 }
 
 export interface CatalogItem {

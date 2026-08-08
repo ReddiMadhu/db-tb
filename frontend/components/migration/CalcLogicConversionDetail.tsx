@@ -106,18 +106,6 @@ export default function CalcLogicConversionDetail({
           <span className={styles.kpiLabel}>Compiled to Databricks SQL</span>
           <span className={styles.kpiValue}>{validCount}</span>
         </div>
-        <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>LOD & Complex Formulas</span>
-          <span className={styles.kpiValue}>{lodCount}</span>
-        </div>
-        <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Manual Review / Failed</span>
-          <span className={styles.kpiValue}>{reviewCount}</span>
-        </div>
-        <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Databricks SQL Compatibility</span>
-          <span className={styles.kpiValue}>{compatScore}%</span>
-        </div>
       </div>
 
       {/* ── Toolbar: Tab Controls & Search/Filter ── */}
@@ -136,15 +124,6 @@ export default function CalcLogicConversionDetail({
           >
             <FileCode size={15} /> Full Databricks SQL Script (.sql)
           </button>
-          {unsupported.length > 0 && (
-            <button
-              className={`${styles.tabBtn} ${activeTab === "UNSUPPORTED" ? styles.tabBtnActive : ""}`}
-              onClick={() => setActiveTab("UNSUPPORTED")}
-            >
-              <AlertTriangle size={15} /> Manual Review Queue
-              <span className={styles.badgeCount}>{unsupported.length}</span>
-            </button>
-          )}
         </div>
 
         {activeTab === "CARDS" && (
@@ -193,7 +172,7 @@ export default function CalcLogicConversionDetail({
                       <span className={styles.cardFieldTitle}>{item.caption || item.name}</span>
                       <span className={styles.formulaTypeBadge}>{formulaType}</span>
                       {item.datasource && (
-                        <span className={styles.datasourceBadge}>Source: {item.datasource}</span>
+                        <span className={styles.datasourceBadge}>Source: {item.datasource.startsWith("federated.") ? "Datasource" : item.datasource}</span>
                       )}
                     </div>
                     <div>
@@ -328,71 +307,6 @@ export default function CalcLogicConversionDetail({
         </div>
       )}
 
-      {/* ── TAB 3: MANUAL REVIEW QUEUE ── */}
-      {activeTab === "UNSUPPORTED" && (
-        <div className={styles.reviewQueueList}>
-          {unsupported.map((item: any, idx: number) => (
-            <div key={idx} className={styles.reviewCard}>
-              <div className={styles.reviewHeader}>
-                <span className={styles.reviewTitle}>{item.name || item.caption || "Complex Calculation"}</span>
-                <span className={styles.reviewBadge}>Manual SME Review Required</span>
-              </div>
-              <div className={styles.reviewGrid}>
-                <div>
-                  <span className={styles.reviewLabel}>Tableau Formula</span>
-                  <pre className={styles.codeBlockSmall}>
-                    <code>{item.formula || item.original_formula || item.name}</code>
-                  </pre>
-                </div>
-                <div>
-                  <span className={styles.reviewLabel}>Limitation & Recommendation</span>
-                  <div className={styles.reviewReasonText}>
-                    <strong>Reason:</strong> {item.reason || "Uses Tableau-specific table calculation function"}
-                  </div>
-                  <div className={styles.reviewRecText}>
-                    <strong>Suggested Fix:</strong> {item.recommendation || "Replace with Databricks SQL window function or Lakeview calculated field."}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Footer Export Package Bar ── */}
-      <div className={styles.exportCard}>
-        <span className={styles.exportTitle}>Download Export Package</span>
-        <div className={styles.exportBtnGroup}>
-          <button
-            className={styles.exportBtn}
-            onClick={() => handleDownload("calculation-mapping", "calculation_mapping.csv")}
-            disabled={downloading !== null}
-          >
-            <FileText size={14} /> Business Mapping (.csv)
-          </button>
-          <button
-            className={styles.exportBtn}
-            onClick={() => handleDownload("sql", "converted_calculations.sql")}
-            disabled={downloading !== null}
-          >
-            <FileCode size={14} /> Transpiled SQL (.sql)
-          </button>
-          <button
-            className={styles.exportBtn}
-            onClick={() => handleDownload("compatibility-report", "compatibility_report.json")}
-            disabled={downloading !== null}
-          >
-            <Code2 size={14} /> Compatibility Specs (.json)
-          </button>
-          <button
-            className={styles.exportBtn}
-            onClick={() => handleDownload("manual-review-items", "manual_review_queue.csv")}
-            disabled={downloading !== null}
-          >
-            <FileText size={14} /> Manual Review Items (.csv)
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

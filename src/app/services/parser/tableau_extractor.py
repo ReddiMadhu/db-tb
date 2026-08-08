@@ -868,8 +868,14 @@ def _extract_worksheet_sorts(ws_el, ds_prefixes: list) -> list:
     return sorts
 
 
-def _resolve_worksheet_datasource(ws_el, ds_names: list) -> str:
-    """Resolve which datasource a worksheet uses from <datasource-dependencies>."""
+def _resolve_worksheet_datasource(ws_el, ds_names: list, ds_caption_map: dict = None) -> str:
+    """Resolve which datasource a worksheet uses from <datasource-dependencies>.
+    
+    Returns the friendly caption/name instead of the raw federated.* hash
+    when a ds_caption_map is provided.
+    """
+    raw_name = ""
+    
     # Primary method: <datasource-dependencies> element
     ds_deps = ws_el.xpath(".//datasource-dependencies[@datasource]")
     if ds_deps:
@@ -877,16 +883,26 @@ def _resolve_worksheet_datasource(ws_el, ds_names: list) -> str:
         for dep in ds_deps:
             ds_name = dep.get("datasource", "")
             if ds_name and ds_name != "Parameters":
-                return ds_name
+                raw_name = ds_name
+                break
     
     # Fallback: check <datasources> inside the worksheet's table
-    for ds_ref in ws_el.xpath(".//table/view/datasources/datasource"):
-        ds_name = ds_ref.get("name", "")
-        if ds_name and ds_name != "Parameters":
-            return ds_name
+    if not raw_name:
+        for ds_ref in ws_el.xpath(".//table/view/datasources/datasource"):
+            ds_name = ds_ref.get("name", "")
+            if ds_name and ds_name != "Parameters":
+                raw_name = ds_name
+                break
     
     # Last fallback: first available datasource
-    return ds_names[0] if ds_names else ""
+    if not raw_name:
+        raw_name = ds_names[0] if ds_names else ""
+    
+    # Resolve federated.* hash to friendly caption
+    if ds_caption_map and raw_name in ds_caption_map:
+        return ds_caption_map[raw_name]
+    
+    return raw_name
 
 
 def _extract_used_calc_fields(ws_el, ds_prefixes: list, calc_field_names: set, caption_map: dict = None) -> list:
@@ -1733,24 +1749,44 @@ def extract_joins(root: etree._Element, ds_prefixes: list) -> List[JoinRelations
 
 def extract_relationships(root: etree._Element, ds_prefixes: list) -> List[RelationshipMetadata]:
     relationships = []
+
+    def _parse_endpoint_col(raw: str) -> tuple:
+        """Parse ``[object_id].[column]`` → (object_id, column)."""
+        s = (raw or "").strip()
+        m = re.match(r'\[?([^\]]+)\]?\.\[?([^\]]+)\]?', s.strip("[]") if s.startswith("[") else s)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+        cleaned = _clean_field(s, ds_prefixes)
+        cleaned = re.sub(r'\s+\([^)]+\)$', '', cleaned).strip()
+        return "", cleaned
+
     for rel in root.xpath("//*[local-name()='relationships']/*[local-name()='relationship']"):
         expr = rel.find("expression")
+        left_obj = right_obj = ""
         left_col = right_col = ""
         if expr is not None:
             ops = expr.findall("expression")
             if len(ops) >= 2:
-                left_col = _clean_field(ops[0].get("op", ops[0].text or ""), ds_prefixes)
-                right_col = _clean_field(ops[1].get("op", ops[1].text or ""), ds_prefixes)
+                left_obj, left_col = _parse_endpoint_col(ops[0].get("op", ops[0].text or ""))
+                right_obj, right_col = _parse_endpoint_col(ops[1].get("op", ops[1].text or ""))
 
         left_col = re.sub(r'\s+\([^)]+\)$', '', left_col).strip()
         right_col = re.sub(r'\s+\([^)]+\)$', '', right_col).strip()
         fp = rel.find("first-end-point")
         sp = rel.find("second-end-point")
-        t1 = _normalize_table_name(fp.get("object-id", "")) if fp is not None else ""
-        t2 = _normalize_table_name(sp.get("object-id", "")) if sp is not None else ""
+        t1_raw = fp.get("object-id", "") if fp is not None else ""
+        t2_raw = sp.get("object-id", "") if sp is not None else ""
+        # Prefer object-id from endpoints; fall back to expression table qualifiers
+        t1 = _normalize_table_name(t1_raw or left_obj)
+        t2 = _normalize_table_name(t2_raw or right_obj)
+        # Also keep unsuffixed form for matching (orders_1 → Orders via strip in resolver)
+        if t1_raw and not t1:
+            t1 = t1_raw
+        if t2_raw and not t2:
+            t2 = t2_raw
         relationships.append(RelationshipMetadata(
-            table1=t1,
-            table2=t2,
+            table1=t1 or t1_raw or left_obj,
+            table2=t2 or t2_raw or right_obj,
             table1_column=left_col,
             table2_column=right_col,
             relationship_type="many-to-one",
@@ -2277,6 +2313,18 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
                 ))
         workbook.datasources.append(ds_meta)
 
+    # Build caption map: federated.* hash → friendly name (caption or primary table)
+    ds_caption_map = {}
+    for ds in workbook.datasources:
+        if ds.caption:
+            ds_caption_map[ds.name] = ds.caption
+        elif ds.tables and len(ds.tables) > 0:
+            # Use the first table name as fallback
+            ds_caption_map[ds.name] = ds.tables[0].name
+        else:
+            # Keep the raw name if no caption or tables available
+            ds_caption_map[ds.name] = ds.name
+
     # Worksheet hidden status comes from <windows>/<window class='worksheet'>
     ws_hidden_map = _build_worksheet_hidden_map(root)
 
@@ -2314,7 +2362,7 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         filters = _extract_worksheet_filters(ws_el, ds_prefixes, caption_map)
         ws_measures, ws_dimensions = _extract_worksheet_field_roles(ws_el, ds_prefixes, caption_map)
         sorts = _extract_worksheet_sorts(ws_el, ds_prefixes)
-        datasource_name = _resolve_worksheet_datasource(ws_el, ds_name_list)
+        datasource_name = _resolve_worksheet_datasource(ws_el, ds_name_list, ds_caption_map)
         used_calcs = _extract_used_calc_fields(ws_el, ds_prefixes, all_calc_names, caption_map)
         tooltip = _extract_tooltip_text(ws_el)
         ws_title = _extract_worksheet_title(ws_el, ws_name)

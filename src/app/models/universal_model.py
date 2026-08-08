@@ -84,6 +84,9 @@ class IntermediateDataset(BaseModel):
     sql_query: str
     tables_referenced: List[str] = Field(default_factory=list)
     fields: List[Dict[str, str]] = Field(default_factory=list)  # [{name, type}]
+    # True when sql_query already applies GROUP BY / aggregate expressions.
+    # Widget query fields must then passthrough output aliases (no second SUM/AVG).
+    is_preaggregated: bool = False
 
 
 class IntermediateWidget(BaseModel):

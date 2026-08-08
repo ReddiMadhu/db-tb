@@ -477,6 +477,9 @@ def compile_expression_to_sql(formula: str, caption_map: dict = None) -> Dict[st
     # ── 6. Convert bracket references to backtick-quoted identifiers ────────
     sql_result = _bracket_to_backtick(sql_result)
 
+    # ── 7. Prevent Spark integer division truncating measure ratios ─────────
+    sql_result = _coerce_division_to_double(sql_result)
+
     # Bracket-only rewrites of already-valid Spark aggs (AVG([x]) → AVG(`x`))
     # are RULE, not FALLBACK — common in real workbooks.
     only_brackets = sql_result.strip() == _bracket_to_backtick(readable).strip()
@@ -498,3 +501,49 @@ def compile_expression_to_sql(formula: str, caption_map: dict = None) -> Dict[st
         "confidence": confidence,
         "is_lod": False,
     }
+
+
+def _coerce_division_to_double(sql: str) -> str:
+    """Wrap division operands so Spark SQL yields floating ratios, not 0.
+
+    ``COUNT(a)/COUNT(b)`` is integer division in Spark; cast numerator to DOUBLE.
+    Skips operands that are already CAST(... AS DOUBLE) or contain a decimal literal.
+    """
+    if not sql or "/" not in sql:
+        return sql
+
+    def _needs_cast(expr: str) -> bool:
+        e = expr.strip()
+        if not e:
+            return False
+        if re.search(r'\bAS\s+DOUBLE\b', e, re.IGNORECASE):
+            return False
+        if re.search(r'\d+\.\d+', e):
+            return False
+        if e.startswith("CAST(") and "DOUBLE" in e.upper():
+            return False
+        return True
+
+    # Match simple ``left / right`` at top-ish level (non-greedy sides)
+    pattern = re.compile(
+        r"((?:CAST\s*\([^)]+\)|[A-Za-z_][\w]*(?:\s*\([^)]*\))?|`[^`]+`|\([^/%]+\)|\d+(?:\.\d+)?))"
+        r"\s*/\s*"
+        r"((?:CAST\s*\([^)]+\)|[A-Za-z_][\w]*(?:\s*\([^)]*\))?|`[^`]+`|\([^/%]+\)|\d+(?:\.\d+)?))",
+        re.IGNORECASE,
+    )
+
+    def _repl(m: re.Match) -> str:
+        left, right = m.group(1), m.group(2)
+        if _needs_cast(left):
+            left = f"CAST(({left}) AS DOUBLE)"
+        return f"{left} / NULLIF(({right}), 0)"
+
+    prev = None
+    out = sql
+    # Iterate a few times for chained divisions
+    for _ in range(4):
+        prev = out
+        out = pattern.sub(_repl, out)
+        if out == prev:
+            break
+    return out

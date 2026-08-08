@@ -128,7 +128,12 @@ class CanonicalFieldResolver:
             self._enrich_from_semantic_model(semantic_model, workbook_meta)
 
     def _build(self, workbook_meta: WorkbookMetadata):
-        """Build the canonical resolution maps from workbook metadata."""
+        """Build the canonical resolution maps from workbook metadata.
+
+        physical_name must be the real target column identifier (spaces allowed).
+        Never invent an underscored name via ``_make_safe_alias`` — that belongs
+        only on ``sql_alias`` (SELECT AS / widget fieldName).
+        """
         caption_map = {}  # internal_name → caption (for calc field resolution)
 
         for ds in workbook_meta.datasources:
@@ -136,7 +141,12 @@ class CanonicalFieldResolver:
                 internal = col.internal_name.strip('[]')
                 caption = (col.caption or internal).strip()
 
-                # Determine physical name: sanitize if contains spaces/special chars/parentheses
+                # Provisional physical name:
+                # - Safe identifiers stay as-is
+                # - Names with spaces/special chars get a safe-alias provisional so
+                #   extract/Hyper workbooks (Total Claim → Total_Claim) keep working
+                #   without UC. When a SemanticModel is present, enrichment remaps
+                #   to the true UC column (including spaced Databricks names).
                 if re.search(r'[^a-zA-Z0-9_]', internal):
                     physical = _make_safe_alias(internal)
                 else:
@@ -202,7 +212,9 @@ class CanonicalFieldResolver:
                 field = ResolvedField(
                     internal_name=internal_key,
                     caption=calc_caption,
-                    physical_name=_make_safe_alias(internal_key),
+                    # Calcs are not physical columns; provisional safe alias for AS.
+                    # UC enrichment / compiled_sql remain the source of truth.
+                    physical_name=_make_safe_alias(internal_key) if re.search(r'[^a-zA-Z0-9_]', internal_key) else internal_key,
                     datatype=calc.datatype,
                     role="measure" if calc.datatype in ('real', 'integer', 'float', 'number') else "dimension",
                     is_calculated=True,
@@ -217,7 +229,11 @@ class CanonicalFieldResolver:
                 for col_name in tbl.columns:
                     internal = col_name.strip('[]')
                     if internal and internal not in self._fields:
-                        physical = _make_safe_alias(internal)
+                        physical = (
+                            _make_safe_alias(internal)
+                            if re.search(r'[^a-zA-Z0-9_]', internal)
+                            else internal
+                        )
                         field = ResolvedField(
                             internal_name=internal,
                             caption=internal,
@@ -282,28 +298,50 @@ class CanonicalFieldResolver:
                 uc_column_names[key] = col.name
                 uc_column_types[key] = col.data_type
 
-        # Enrich existing fields with UC data types
+        # Enrich existing fields with UC data types and true physical names.
+        # Match by physical, caption, or safe-alias so space↔underscore remaps.
         for internal_name, field in self._fields.items():
             physical_lower = field.physical_name.lower()
             caption_lower = field.caption.lower()
+            alias_lower = _make_safe_alias(field.physical_name).lower()
+            caption_alias_lower = _make_safe_alias(field.caption).lower()
+            internal_alias_lower = _make_safe_alias(field.internal_name).lower()
 
-            # Try matching by physical name first, then caption
             uc_name = None
             uc_type = None
-            if physical_lower in uc_column_names:
-                uc_name = uc_column_names[physical_lower]
-                uc_type = uc_column_types[physical_lower]
-            elif caption_lower in uc_column_names:
-                uc_name = uc_column_names[caption_lower]
-                uc_type = uc_column_types[caption_lower]
+            for key in (
+                physical_lower,
+                caption_lower,
+                alias_lower,
+                caption_alias_lower,
+                internal_alias_lower,
+                field.internal_name.lower(),
+            ):
+                if key and key in uc_column_names:
+                    uc_name = uc_column_names[key]
+                    uc_type = uc_column_types[key]
+                    break
+            # Also try matching UC columns whose safe-alias equals ours
+            if uc_name is None:
+                for uc_key, actual in uc_column_names.items():
+                    if _make_safe_alias(actual).lower() in (
+                        alias_lower, caption_alias_lower, internal_alias_lower, physical_lower
+                    ):
+                        uc_name = actual
+                        uc_type = uc_column_types[uc_key]
+                        break
 
-            if uc_name and uc_type:
-                # Update data type from UC metadata
-                field.datatype = uc_type
-                # If physical name doesn't match UC exactly, prefer UC casing
-                if field.physical_name.lower() == uc_name.lower() and field.physical_name != uc_name:
+            if uc_name:
+                if uc_type:
+                    field.datatype = uc_type
+                # Always prefer the exact UC column name (spaces, casing, etc.)
+                if field.physical_name != uc_name:
+                    old_phys = field.physical_name
                     field.physical_name = uc_name
                     field.sql_alias = _make_safe_alias(uc_name)
+                    if old_phys != uc_name:
+                        self._physical_to_internal[uc_name] = field.internal_name
+                        self._physical_to_internal[_make_safe_alias(uc_name)] = field.internal_name
 
         # Register any UC columns not already known to the resolver
         for table in semantic_model.all_tables():

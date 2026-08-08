@@ -195,9 +195,17 @@ def _build_query_fields(w_ubim) -> List[Dict[str, str]]:
     return query_fields_list
 
 
-def _field_is_measure(name: Optional[str], query_fields_list: List[Dict[str, str]]) -> bool:
+def _field_is_measure(name: Optional[str], query_fields_list: List[Dict[str, str]], w_ubim: Optional[Any] = None) -> bool:
     if not name:
         return False
+    if w_ubim and getattr(w_ubim, "encodings", None):
+        for enc in w_ubim.encodings:
+            if getattr(enc, "field_name", None) == name:
+                agg = getattr(enc, "aggregation", None)
+                if agg is not None and str(agg) not in ("AggregationType.NONE", "NONE", ""):
+                    from app.models.universal_model import AggregationType as _AT
+                    if agg != _AT.NONE:
+                        return True
     for qf in query_fields_list:
         if qf.get("name") == name and _is_aggregated_expression(qf.get("expression") or ""):
             return True
@@ -226,7 +234,10 @@ def _create_widget_via_factory(
     has_placeholder_y = (y_field is None) or (y_field in PLACEHOLDER_FIELDS)
 
     # True single-measure KPI: only one real field and one axis missing → counter
-    if chart_type in (ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER):
+    # Also demote TABLE when it is a single-measure big-number worksheet.
+    if chart_type in (
+        ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER, ChartType.TABLE
+    ):
         real_names = [
             qf["name"] for qf in query_fields_list
             if qf.get("name") and qf["name"] not in PLACEHOLDER_FIELDS
@@ -239,6 +250,7 @@ def _create_widget_via_factory(
                 (has_placeholder_x and not has_placeholder_y)
                 or (not has_placeholder_x and has_placeholder_y)
                 or identical_axes
+                or (chart_type == ChartType.TABLE and len(distinct_real) == 1)
             )
         )
         if single_measure_kpi:
@@ -263,16 +275,30 @@ def _create_widget_via_factory(
                     show_title=show_title,
                 )
 
-        if has_placeholder_x or has_placeholder_y or identical_axes:
+        if chart_type != ChartType.TABLE and (has_placeholder_x or has_placeholder_y or identical_axes):
+            # Incomplete cartesian → table fallback (never emit empty fieldName)
             logger.warning(
-                "Skipping widget '%s' — incomplete cartesian bindings (x=%r, y=%r)",
+                "Widget '%s' incomplete cartesian (x=%r, y=%r) — falling back to table",
                 title, x_field, y_field,
             )
-            return None
+            col_names = [
+                qf["name"] for qf in query_fields_list
+                if qf.get("name") and qf["name"] not in PLACEHOLDER_FIELDS
+            ]
+            if not col_names:
+                logger.warning("Skipping widget '%s' — no columns for table fallback", title)
+                return None
+            return WidgetFactory.create_table_widget(
+                dataset_name=dataset_ref,
+                column_fields=col_names,
+                title=title,
+                query_fields=query_fields_list or None,
+                show_title=show_title,
+            )
 
     if chart_type == ChartType.BAR:
-        x_is_meas = _field_is_measure(x_field, query_fields_list or [])
-        y_is_meas = _field_is_measure(y_field, query_fields_list or [])
+        x_is_meas = _field_is_measure(x_field, query_fields_list or [], w_ubim)
+        y_is_meas = _field_is_measure(y_field, query_fields_list or [], w_ubim)
         if x_is_meas and not y_is_meas:
             x_st = "quantitative"
             y_st = infer_scale_type(y_field or "")
@@ -294,28 +320,39 @@ def _create_widget_via_factory(
         )
 
     if chart_type == ChartType.LINE:
+        x_is_meas = _field_is_measure(x_field, query_fields_list or [], w_ubim)
+        y_is_meas = _field_is_measure(y_field, query_fields_list or [], w_ubim)
+        # Prefer categorical/temporal on x and quantitative on y
+        lx, ly = x_field, y_field
+        if x_is_meas and not y_is_meas:
+            lx, ly = y_field, x_field
         return WidgetFactory.create_line_widget(
             dataset_name=dataset_ref,
-            x_field=x_field,  # type: ignore[arg-type]
-            y_field=y_field,  # type: ignore[arg-type]
+            x_field=lx,  # type: ignore[arg-type]
+            y_field=ly,  # type: ignore[arg-type]
             title=title,
             color_field=color_field,
             is_area=False,
             query_fields=query_fields_list or None,
-            x_scale_type=infer_scale_type(x_field or ""),
+            x_scale_type=infer_scale_type(lx or ""),
             show_title=show_title,
         )
 
     if chart_type == ChartType.AREA:
+        x_is_meas = _field_is_measure(x_field, query_fields_list or [], w_ubim)
+        y_is_meas = _field_is_measure(y_field, query_fields_list or [], w_ubim)
+        lx, ly = x_field, y_field
+        if x_is_meas and not y_is_meas:
+            lx, ly = y_field, x_field
         return WidgetFactory.create_line_widget(
             dataset_name=dataset_ref,
-            x_field=x_field,  # type: ignore[arg-type]
-            y_field=y_field,  # type: ignore[arg-type]
+            x_field=lx,  # type: ignore[arg-type]
+            y_field=ly,  # type: ignore[arg-type]
             title=title,
             color_field=color_field,
             is_area=True,
             query_fields=query_fields_list or None,
-            x_scale_type=infer_scale_type(x_field or ""),
+            x_scale_type=infer_scale_type(lx or ""),
             show_title=show_title,
         )
 
@@ -348,7 +385,7 @@ def _create_widget_via_factory(
 
     if chart_type == ChartType.HEATMAP:
         # Prefer measure on color; categoricals on x/y (fix swapped Age/Total_Claim)
-        if color_field and not _field_is_measure(color_field, query_fields_list):
+        if color_field and not _field_is_measure(color_field, query_fields_list, w_ubim):
             measure_candidate = None
             for qf in query_fields_list:
                 n = qf.get("name")
@@ -356,12 +393,15 @@ def _create_widget_via_factory(
                     n
                     and n not in PLACEHOLDER_FIELDS
                     and n != x_field
-                    and _is_aggregated_expression(qf.get("expression") or "")
+                    and (
+                        _is_aggregated_expression(qf.get("expression") or "")
+                        or _field_is_measure(n, query_fields_list, w_ubim)
+                    )
                 ):
                     measure_candidate = n
                     break
             if measure_candidate:
-                if _field_is_measure(y_field, query_fields_list):
+                if _field_is_measure(y_field, query_fields_list, w_ubim):
                     color_field, y_field = y_field, color_field
                 else:
                     color_field = measure_candidate
@@ -373,7 +413,10 @@ def _create_widget_via_factory(
                     and n not in PLACEHOLDER_FIELDS
                     and n != x_field
                     and n != y_field
-                    and _is_aggregated_expression(qf.get("expression") or "")
+                    and (
+                        _is_aggregated_expression(qf.get("expression") or "")
+                        or _field_is_measure(n, query_fields_list, w_ubim)
+                    )
                 ):
                     color_field = n
                     break
@@ -382,7 +425,7 @@ def _create_widget_via_factory(
         row_field = y_field if color_field else (
             query_fields_list[1]["name"] if len(query_fields_list) > 1 else y_field
         )
-        if row_field and _field_is_measure(row_field, query_fields_list):
+        if row_field and _field_is_measure(row_field, query_fields_list, w_ubim):
             for qf in query_fields_list:
                 n = qf.get("name")
                 if (
@@ -390,6 +433,7 @@ def _create_widget_via_factory(
                     and n not in PLACEHOLDER_FIELDS
                     and n != x_field
                     and n != color_measure
+                    and not _field_is_measure(n, query_fields_list, w_ubim)
                     and not _is_aggregated_expression(qf.get("expression") or "")
                 ):
                     row_field = n
@@ -653,7 +697,7 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
             )
 
             # Title fallback: prefer canonical worksheet tab name
-            title = (w_ubim.name or "").strip() or (w_ubim.title or "").strip()
+            title = (w_ubim.title or "").strip() or (w_ubim.name or "").strip()
             if w_ubim.show_title is not None:
                 show_title = bool(w_ubim.show_title) or bool(title)
             else:

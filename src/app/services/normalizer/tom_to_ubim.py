@@ -190,6 +190,26 @@ def _is_aggregated_expr(expr: str) -> bool:
     return any(u.startswith(fn) for fn in ("SUM(", "AVG(", "COUNT(", "MIN(", "MAX(", "MEDIAN(", "PERCENTILE(", "STDDEV("))
 
 
+def _passthrough_preaggregated_measures(
+    encodings: List[IntermediateEncoding],
+    query_fields: List[IntermediateQueryField],
+) -> None:
+    """Rewrite measure expressions to dataset-output aliases (no second aggregation).
+
+    Dataset SQL already emits ``SUM/AVG(... ) AS `alias```. Widget queries must
+    reference `` `alias` `` so Lakeview does not double-aggregate.
+    Keeps ``encoding.aggregation`` for role/axis detection upstream.
+    """
+    measure_names = set()
+    for e in encodings:
+        if e.aggregation != AggregationType.NONE:
+            e.expression_sql = f"`{e.field_name}`"
+            measure_names.add(e.field_name)
+    for qf in query_fields:
+        if qf.name in measure_names or _is_aggregated_expr(qf.expression):
+            qf.expression = f"`{qf.name}`"
+
+
 def _wrap_aggregation(inner_expr: str, aggregation: AggregationType) -> str:
     """Apply an aggregation wrapper around an already-resolved SQL expression."""
     if aggregation == AggregationType.NONE or _is_aggregated_expr(inner_expr):
@@ -307,7 +327,13 @@ def _classify_shelf_field(sf: ShelfField, ds: Optional[DatasourceMetadata]) -> A
 
 
 def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = None, catalog_schema: str = "") -> str:
-    """Build the base FROM clause for a datasource, resolving table names via mapping."""
+    """Build the base FROM clause for a datasource, resolving table names via mapping.
+
+    Emits typed JOINs from ``ds.joins`` (legacy physical joins). When joins are
+    empty but ``ds.relationships`` is populated (Tableau RELATIONSHIP model),
+    approximates each relationship as an INNER JOIN so multi-table SQL is not
+    silently collapsed to a single FROM table.
+    """
     table_mapping = table_mapping or {}
 
     custom_sql_table = next((t for t in ds.tables if t.type == "custom_sql" and t.sql), None)
@@ -334,28 +360,129 @@ def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = N
             return f"`{t_str}`"
         return t_str
 
-    raw_name = table_names[0]
-    from_clause = table_mapping.get(raw_name, raw_name)
-    # Fallback: if unresolved, clean name and prefix catalog_schema if present
-    if is_unresolved_table(from_clause):
-        clean_name = clean_table_name_for_catalog(from_clause)
-        if catalog_schema:
-            from_clause = f"{catalog_schema}.{clean_name}"
-        else:
-            from_clause = clean_name
+    def _map_table(raw: str) -> str:
+        """Resolve a Tableau table/object-id to a mapped UC FQN (or cleaned name)."""
+        canonical = _resolve_ds_table_name(raw, ds) or raw
+        mapped = table_mapping.get(canonical, table_mapping.get(raw, canonical))
+        if is_unresolved_table(mapped):
+            clean_name = clean_table_name_for_catalog(mapped)
+            if catalog_schema:
+                mapped = f"{catalog_schema}.{clean_name}"
+            else:
+                mapped = clean_name
+        return _format_tbl(mapped)
 
-    from_clause = _format_tbl(from_clause)
+    def _col_ident(col: str) -> str:
+        c = (col or "").strip().strip("`").strip("[]")
+        # Strip residual table qualifier if present
+        if "." in c:
+            c = c.rsplit(".", 1)[-1].strip().strip("[]")
+        if not c:
+            return c
+        if any(ch in c for ch in " -/$\\") or not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', c):
+            return f"`{c}`"
+        return c
+
+    raw_name = table_names[0]
+    from_clause = _map_table(raw_name)
+    joined_tables = {raw_name.lower(), (_resolve_ds_table_name(raw_name, ds) or raw_name).lower()}
 
     if len(table_names) > 1 and ds.joins:
         for j in ds.joins:
-            right = table_mapping.get(j.right_table, j.right_table)
-            if is_unresolved_table(right) and catalog_schema:
-                right = f"{catalog_schema}.{right}"
-            right = _format_tbl(right)
-            left_ref = _format_tbl(table_mapping.get(j.left_table, j.left_table))
-            from_clause += f" {j.join_type.upper()} JOIN {right} ON {left_ref}.{j.left_column} = {right}.{j.right_column}"
+            right = _map_table(j.right_table)
+            left_ref = _map_table(j.left_table)
+            left_col = _col_ident(j.left_column)
+            right_col = _col_ident(j.right_column)
+            if not left_col or not right_col:
+                logger.warning(
+                    "Skipping join with empty columns: %s.%s = %s.%s",
+                    j.left_table, j.left_column, j.right_table, j.right_column,
+                )
+                continue
+            jt = (j.join_type or "inner").upper()
+            from_clause += (
+                f" {jt} JOIN {right} ON {left_ref}.{left_col} = {right}.{right_col}"
+            )
+            joined_tables.add((j.right_table or "").lower())
+            joined_tables.add((_resolve_ds_table_name(j.right_table, ds) or j.right_table or "").lower())
+    elif len(table_names) > 1 and ds.relationships:
+        # Tableau RELATIONSHIP model → approximate as INNER JOINs
+        for rel in ds.relationships:
+            t1 = _resolve_ds_table_name(rel.table1, ds) or rel.table1
+            t2 = _resolve_ds_table_name(rel.table2, ds) or rel.table2
+            left_col = _col_ident(rel.table1_column)
+            right_col = _col_ident(rel.table2_column)
+            if not t1 or not t2 or not left_col or not right_col:
+                logger.warning(
+                    "Skipping relationship with unresolved endpoints/columns: "
+                    "%s.%s = %s.%s",
+                    rel.table1, rel.table1_column, rel.table2, rel.table2_column,
+                )
+                continue
+
+            left_mapped = _map_table(t1)
+            right_mapped = _map_table(t2)
+            # Prefer attaching the table not yet in the FROM graph
+            t1_key = t1.lower()
+            t2_key = t2.lower()
+            if t2_key not in joined_tables:
+                from_clause += (
+                    f" INNER JOIN {right_mapped} ON {left_mapped}.{left_col} = {right_mapped}.{right_col}"
+                )
+                joined_tables.add(t2_key)
+            elif t1_key not in joined_tables:
+                from_clause += (
+                    f" INNER JOIN {left_mapped} ON {right_mapped}.{right_col} = {left_mapped}.{left_col}"
+                )
+                joined_tables.add(t1_key)
+            else:
+                # Both already present — still emit ON predicate via AND if needed;
+                # for simplicity skip duplicate join of same pair.
+                logger.debug(
+                    "Relationship %s↔%s already covered in FROM graph", t1, t2
+                )
 
     return from_clause
+
+
+def _resolve_ds_table_name(ref: str, ds: DatasourceMetadata) -> Optional[str]:
+    """Map a Tableau object-id / relationship endpoint to a datasource table name."""
+    if not ref or not ds or not ds.tables:
+        return None
+    raw = (ref or "").strip().strip("[]")
+    if not raw:
+        return None
+
+    candidates = [raw, raw.lower()]
+    # Strip trailing _digits object-id suffixes (orders_1 → orders)
+    stripped = re.sub(r'_\d+$', '', raw)
+    if stripped and stripped != raw:
+        candidates.append(stripped)
+        candidates.append(stripped.lower())
+
+    by_key: Dict[str, str] = {}
+    for t in ds.tables:
+        for key in filter(None, [t.name, t.raw_name, getattr(t, "source", None)]):
+            by_key[key] = t.name
+            by_key[key.lower()] = t.name
+            # Also index without trailing _digits
+            sk = re.sub(r'_\d+$', '', key)
+            if sk:
+                by_key[sk] = t.name
+                by_key[sk.lower()] = t.name
+
+    for c in candidates:
+        if c in by_key:
+            return by_key[c]
+
+    # Fuzzy: object-id startswith table name or vice versa
+    raw_l = raw.lower()
+    for t in ds.tables:
+        for key in filter(None, [t.name, t.raw_name]):
+            kl = key.lower()
+            if raw_l.startswith(kl) or kl.startswith(raw_l.rstrip("0123456789_")):
+                return t.name
+    return None
 
 
 def _normalize_group_name(name: str) -> str:
@@ -574,6 +701,15 @@ def _build_where_clause(
 
         if f.filter_type == "categorical" and (f.exclude_values or f.include_values):
             raw_values = list(f.exclude_values or f.include_values)
+            # Huge literal IN lists (action/set filters) are fragile — skip and
+            # let the SELECT path apply ORDER BY/LIMIT when configured.
+            if len(raw_values) > 100 and not f.exclude_values:
+                logger.warning(
+                    "Skipping high-cardinality IN filter on '%s' (%d members) — "
+                    "prefer Top-N / LIMIT in dataset SQL",
+                    f.field_name, len(raw_values),
+                )
+                continue
             is_exclude = bool(f.exclude_values)
             op = "NOT IN" if is_exclude else "IN"
             null_op = "IS NOT NULL" if is_exclude else "IS NULL"
@@ -1184,16 +1320,40 @@ def normalize_tom_to_ubim(
                     order_parts = []
                     for s in clean_sorts:
                         phys = _resolve_field_for_sql(s.field_name, resolver, ds)
-                        order_parts.append(f"`{phys}` {s.direction}")
+                        # Prefer output alias when it differs (matches SELECT AS)
+                        alias = _make_safe_alias(phys)
+                        order_parts.append(f"`{alias}` {s.direction}")
                     sql += f" ORDER BY {', '.join(order_parts)}"
-                elif dimensions:
-                    sql += f" ORDER BY 1"
-            elif dimensions:
-                sql += f" ORDER BY 1"
+                # else: no default ORDER BY — only emit when Tableau sorts exist
+            # Top-N filters → ORDER BY + LIMIT instead of huge IN lists
+            top_filters = [
+                f for f in (ws.filters or [])
+                if getattr(f, "filter_type", "") == "top" and getattr(f, "top_n", None)
+            ]
+            if top_filters and " LIMIT " not in sql.upper():
+                tf = top_filters[0]
+                n = int(tf.top_n) if tf.top_n else 10
+                by_field = tf.top_n_by or (dimensions[0] if dimensions else None)
+                if by_field and " ORDER BY " not in sql.upper():
+                    phys = _resolve_field_for_sql(by_field, resolver, ds)
+                    sql += f" ORDER BY `{_make_safe_alias(phys)}` DESC"
+                sql += f" LIMIT {n}"
+            # High-cardinality categorical IN → prefer LIMIT when > 100 members
+            # (action/set filters that literalize hundreds of IDs)
+            for f in (ws.filters or []):
+                vals = list(f.include_values or f.exclude_values or [])
+                if f.filter_type == "categorical" and len(vals) > 100 and " LIMIT " not in sql.upper():
+                    # Drop the fragile IN from WHERE already baked in — rebuild without it
+                    # Safer: append LIMIT as a soft cap for closed-claims style tables
+                    if dimensions and measures and " ORDER BY " not in sql.upper():
+                        sql += " ORDER BY 1 DESC"
+                    if " LIMIT " not in sql.upper():
+                        sql += " LIMIT 50"
+                    break
 
             field_meta = (
-                [{"name": d, "type": "string"} for d in dimensions]
-                + [{"name": _make_safe_alias(m[0]), "type": "number"} for m in measures]
+                [{"name": _make_safe_alias(d), "type": "string", "physical": d} for d in dimensions]
+                + [{"name": _make_safe_alias(m[0]), "type": "number", "physical": m[0]} for m in measures]
             )
 
         ubim_ds = IntermediateDataset(
@@ -1201,6 +1361,15 @@ def normalize_tom_to_ubim(
             sql_query=sql,
             tables_referenced=[t.name for t in ds.tables],
             fields=field_meta,
+            is_preaggregated=bool(
+                use_unpivot
+                or (" GROUP BY " in (sql or "").upper())
+                or any(
+                    _is_aggregated_expr(p.split(" AS ")[0])
+                    for p in (sql or "").split(",")
+                    if " AS " in p.upper()
+                )
+            ),
         )
         ubim_dash.datasets.append(ubim_ds)
         ws_dataset_map[ws.name] = ds_id
@@ -1457,7 +1626,20 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     chart_type = MARK_TO_CHART.get(resolved_mark, ChartType.BAR)
     if ws.visual_type and ws.visual_type in MARK_TO_CHART:
         vt_chart = MARK_TO_CHART[ws.visual_type]
-        if vt_chart != ChartType.BAR or chart_type == ChartType.BAR:
+        # Explicit marks (Pie/Bar/Line/…) win over geo visual heuristics.
+        # "Pie Map Chart" must not force MAP unpivot when the mark is Pie —
+        # that half-unpivots the gender pie onto Metric/Value (R7).
+        mark_l = (ws.mark_type or "").lower()
+        explicit = mark_l in (
+            "pie", "bar", "line", "area", "circle", "square", "text",
+            "ganttbar", "polygon", "shape", "heatmap",
+        )
+        if explicit and chart_type in (
+            ChartType.PIE, ChartType.BAR, ChartType.LINE, ChartType.AREA,
+            ChartType.SCATTER, ChartType.HEATMAP, ChartType.COUNTER, ChartType.TABLE,
+        ):
+            pass  # keep resolve_mark_type result
+        elif vt_chart != ChartType.BAR or chart_type == ChartType.BAR:
             chart_type = vt_chart
     
     # Determine if this is an aggregated or disaggregated query
@@ -1571,6 +1753,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         cols_clean = _filter_pseudo_fields(ws.columns)
         rows_clean = _filter_pseudo_fields(ws.rows)
         for col_name in cols_clean:
+            physical_name = _resolve_field_for_sql(col_name, resolver, ds)
             col_meta = _get_column_metadata(col_name, ds)
             semantic = classify_field(
                 field_name=col_name,
@@ -1579,8 +1762,12 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 default_aggregation=col_meta.get('default_aggregation', ''),
             )
             agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
-            alias = _make_safe_alias(col_name) if agg != AggregationType.NONE else col_name
-            expr = _build_field_expression(col_name, agg) if agg != AggregationType.NONE else f"`{col_name}`"
+            alias = _make_safe_alias(physical_name)
+            expr = (
+                _build_field_expression(physical_name, agg)
+                if agg != AggregationType.NONE
+                else f"`{physical_name}`"
+            )
             if alias not in seen_encoding_fields:
                 seen_encoding_fields.add(alias)
                 if agg == AggregationType.NONE:
@@ -1603,6 +1790,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                     name=alias
                 ))
         for row_name in rows_clean:
+            physical_name = _resolve_field_for_sql(row_name, resolver, ds)
             col_meta = _get_column_metadata(row_name, ds)
             semantic = classify_field(
                 field_name=row_name,
@@ -1613,8 +1801,8 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
             agg = semantic_to_aggregation(semantic, col_meta.get('default_aggregation'))
             if agg == AggregationType.NONE and is_aggregatable(semantic):
                 agg = AggregationType.SUM
-            alias = _make_safe_alias(row_name)
-            expr = _build_field_expression(row_name, agg)
+            alias = _make_safe_alias(physical_name)
+            expr = _build_field_expression(physical_name, agg)
             if alias not in seen_encoding_fields:
                 seen_encoding_fields.add(alias)
                 if agg == AggregationType.NONE and assigned_x_dim:
@@ -1797,10 +1985,15 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         # Counters only need the value encoding
         pass
     
-    # Carry ontology presentation hints for later layout/review stages
-    display_title = (ws.name or "").strip() or (getattr(ws, "title", None) or "").strip()
-    show_title = True
-    if zone is not None and getattr(zone, "show_title", None) is False:
+    # Prefer worksheet display title (caption) over internal sheet name (R8)
+    display_title = (
+        (getattr(ws, "title", None) or "").strip()
+        or (ws.name or "").strip()
+    )
+    # Zone may suppress Tableau chrome title; still emit a visible Lakeview title
+    # when we have a worksheet/display name to fall back to (R8).
+    show_title = bool(display_title)
+    if zone is not None and getattr(zone, "show_title", None) is False and not display_title:
         show_title = False
 
     expanded_measures, expand_src = _expand_worksheet_measures(ws, ds, resolver)
@@ -1817,9 +2010,14 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
             "text table", "crosstab", "pivot", "heat map", "heatmap (square)"
         )
     )
-    use_pivot = has_mn and is_crosstab_visual and (
+    # R3: Measure Names with 2+ members → pivot even on bar/KPI-grid visuals
+    use_pivot = has_mn and (
+        is_crosstab_visual
+        or chart_type in (ChartType.BAR, ChartType.TABLE, ChartType.HEATMAP, ChartType.COUNTER)
+    ) and (
         y_count > 1
         or (expand_src == "measure_names_filter" and len(expanded_measures) > 1)
+        or (expand_src and len(expanded_measures) > 1)
     )
     if use_pivot:
         chart_type = ChartType.PIVOT
@@ -1863,14 +2061,14 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
         ))
         encodings.append(IntermediateEncoding(
             channel=EncodingChannel.Y,
-            field_name="sum(Value)",
+            field_name="Value",
             dataset_name=dataset_id,
             aggregation=AggregationType.SUM,
-            expression_sql="SUM(`Value`)",
+            expression_sql="`Value`",
             data_type="number",
         ))
         query_fields.append(IntermediateQueryField(
-            expression="SUM(`Value`)", name="sum(Value)", data_type="number"
+            expression="`Value`", name="Value", data_type="number"
         ))
 
     # Lon/Lat / Map → geo-LOD dimension as categorical axis (never Lon/Lat columns)
@@ -1956,10 +2154,10 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                 ),
                 IntermediateEncoding(
                     channel=EncodingChannel.Y,
-                    field_name="sum(Value)",
+                    field_name="Value",
                     dataset_name=dataset_id,
                     aggregation=AggregationType.SUM,
-                    expression_sql="SUM(`Value`)",
+                    expression_sql="`Value`",
                     data_type="number",
                 ),
                 IntermediateEncoding(
@@ -1979,7 +2177,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
                     expression="`Metric`", name="Metric", data_type="string"
                 ),
                 IntermediateQueryField(
-                    expression="SUM(`Value`)", name="sum(Value)", data_type="number"
+                    expression="`Value`", name="Value", data_type="number"
                 ),
             ]
         elif len(measure_qfs) >= 2:
@@ -1996,7 +2194,7 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
     map_grouped_bar = (
         chart_type == ChartType.BAR
         and any(e.field_name == "Metric" for e in encodings)
-        and any(e.field_name == "sum(Value)" for e in encodings)
+        and any(e.field_name in ("Value", "sum(Value)") for e in encodings)
         and (_has_generated_geo_shelves(ws) or getattr(ws, "mark_type", "") == "Map")
     )
 
@@ -2064,6 +2262,10 @@ def _build_widget(ws: WorksheetMetadata, ds: DatasourceMetadata, dataset_id: str
             ),
         }.items() if v not in (None, False, "")
     }
+
+    # Dataset SQL owns aggregation for aggregated chart types — widget passthrough
+    if not is_disaggregated or chart_type in AGGREGATED_CHART_TYPES:
+        _passthrough_preaggregated_measures(encodings, query_fields)
 
     return IntermediateWidget(
         widget_id=uuid.uuid4().hex[:8],
@@ -2205,11 +2407,11 @@ def _build_dashboard_chrome_widgets(db, y_offset: int = 0) -> List[IntermediateW
                 channel=EncodingChannel.X,
                 field_name=safe,
                 dataset_name="",
-                expression_sql=f"`{field}`",
+                expression_sql=f"`{safe}`",
                 data_type="string",
             )],
             query_fields=[IntermediateQueryField(
-                expression=f"`{field}`",
+                expression=f"`{safe}`",
                 name=safe,
                 data_type="string",
             )],

@@ -75,12 +75,22 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
       for (const ds of res.datasources || []) {
         for (const t of ds.tables) {
           const ex = res.existing_mappings?.[t.name];
+          // Auto-compose target from Databricks connection if available
+          let autoTarget = "";
+          let autoStatus: any = "PENDING";
+          if (!ex?.target_full_name && ds.is_databricks && ds.databricks_connection?.catalog) {
+            const cat = ds.databricks_connection.catalog;
+            const sch = ds.databricks_connection.schema || "default";
+            const cleanName = t.clean_name || t.name;
+            autoTarget = `${cat}.${sch}.${cleanName}`;
+            autoStatus = "AUTO_DETECTED";
+          }
           initial[t.name] = {
             tableau_datasource_name: ds.name,
             tableau_table_name: t.name,
             tableau_connection_type: ds.connection_type,
-            target_full_name: ex?.target_full_name || (t.is_unresolved ? "" : t.name),
-            status: (ex?.status as any) || (ex?.target_full_name ? "CONFIRMED" : "PENDING"),
+            target_full_name: ex?.target_full_name || autoTarget || (t.is_unresolved ? "" : t.name),
+            status: (ex?.status as any) || (autoTarget ? autoStatus : (ex?.target_full_name ? "CONFIRMED" : "PENDING")),
           };
         }
       }
@@ -268,7 +278,11 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
                   <div className={styles.sourceRow}>
                     <span className={styles.sourceName}>{t.name}</span>
                     {target ? (
-                      <span className={styles.mappedBadge}>Mapped</span>
+                      mapItem?.status === "AUTO_DETECTED" ? (
+                        <span className={styles.mappedBadge} style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}>✓ Auto-Detected</span>
+                      ) : (
+                        <span className={styles.mappedBadge}>Mapped</span>
+                      )
                     ) : (
                       <span className={styles.unmappedBadge}>Unmapped</span>
                     )}
