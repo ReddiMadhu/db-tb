@@ -17,7 +17,7 @@ import styles from "./InlineMappingPanel.module.css";
 
 interface InlineMappingPanelProps {
   jobUuid: string;
-  onExecute?: () => void;
+  onExecute?: () => void | Promise<void>;
 }
 
 export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMappingPanelProps) {
@@ -183,7 +183,7 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
         await saveMappings(jobUuid, list);
       }
       if (onExecute) {
-        onExecute();
+        await onExecute();
       } else {
         await executePipeline(jobUuid);
       }
@@ -216,7 +216,7 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
         return next;
       });
       if (onExecute) {
-        onExecute();
+        await onExecute();
       } else {
         await executePipeline(jobUuid);
       }

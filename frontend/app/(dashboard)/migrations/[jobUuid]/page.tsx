@@ -115,22 +115,27 @@ export default function MigrationWorkspacePage() {
     };
   }, [status, jobUuid]);
 
-  // Execute pipeline
+  // Execute pipeline (async background when sync=false)
   const handleExecute = async () => {
     setExecuting(true);
     setError(null);
     setStatus("EXECUTING");
     try {
       await executePipeline(jobUuid);
-      // After execution completes, refresh
+      // Immediate refresh after kickoff — keep EXECUTING so polling continues.
+      // Do not treat this 200 as pipeline completion.
       const [statusRes, stagesRes] = await Promise.all([
         getMigrationStatus(jobUuid),
         getStages(jobUuid),
       ]);
-      setStatus(statusRes.status);
       setStages(stagesRes.stages);
       setGoldenOverride(Boolean(statusRes.golden_override));
       setGoldenSource(statusRes.golden_source ?? null);
+      if (statusRes.status === "EXECUTING") {
+        setStatus("EXECUTING");
+        return;
+      }
+      setStatus(statusRes.status);
       if (["COMPLETED", "DEPLOYED", "FAILED_VALIDATION"].includes(statusRes.status)) {
         setSelectedStageId(statusRes.status === "DEPLOYED" ? "PUBLISH" : "SCHEMA_VALIDATION");
       }

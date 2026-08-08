@@ -44,7 +44,7 @@ interface StageDetailPanelProps {
   stageId?: string;
   stage?: StageDetail | null;
   loading?: boolean;
-  onExecute?: () => void;
+  onExecute?: () => void | Promise<void>;
   onSelectStage?: (stageId: string) => void;
   goldenOverride?: boolean;
 }

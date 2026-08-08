@@ -71,6 +71,26 @@ class MigrationPipeline:
         from app.db.session import SessionLocal
         return SessionLocal()
 
+    def _get_stage_status(self, stage_id: str) -> Optional[str]:
+        """Return persisted status for a stage, or None if missing / no job."""
+        if not self.job_uuid:
+            return None
+        from app.models.stage_model import StageResult
+
+        db = self._get_db_session()
+        try:
+            row = (
+                db.query(StageResult)
+                .filter(StageResult.job_uuid == self.job_uuid, StageResult.stage_id == stage_id)
+                .first()
+            )
+            return row.status if row else None
+        except Exception as e:
+            logger.warning("Failed to read stage status %s: %s", stage_id, e)
+            return None
+        finally:
+            db.close()
+
     def _init_all_stages(self):
         """Initialize or reset stages for job execution.
 
@@ -604,11 +624,21 @@ class MigrationPipeline:
                 "data": workbook_meta,
             }
 
-        workbook_meta = self._run_stage(
-            "PARSE",
-            input_summary=f"{filename} ({os.path.getsize(self.file_path)} bytes)",
-            fn=_do_parse,
-        )
+        # Upload already completed PARSE — rebuild workbook_meta in memory without
+        # flipping the stage to RUNNING (UI would jump back to Dashboard Intelligence).
+        if self._get_stage_status("PARSE") == "COMPLETED":
+            self.log(
+                "INFO",
+                "PARSE already completed during upload — skipping UI-visible re-run",
+            )
+            workbook_meta = parse_workbook(self.file_path)
+            self._run_catalog_discovery(workbook_meta)
+        else:
+            workbook_meta = self._run_stage(
+                "PARSE",
+                input_summary=f"{filename} ({os.path.getsize(self.file_path)} bytes)",
+                fn=_do_parse,
+            )
 
         # ═══════════════════════════════════════════
         # NOTE: Source Mapping Validation (Stage 3) is now handled as a
