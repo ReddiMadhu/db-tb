@@ -43,9 +43,12 @@ async def upload_workbook(file: UploadFile = File(...), db: Session = Depends(ge
     saved_file_path = os.path.join(job_dir, file.filename)
 
     try:
+        # Read entire file content first, then write — avoids partial/truncated writes
         file.file.seek(0)
+        content = await file.read()
         with open(saved_file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
+        logger.info(f"Saved uploaded file: {saved_file_path} ({len(content):,} bytes)")
 
         # Stage 1-3: Parse XML into TOM Pydantic models
         try:

@@ -62,16 +62,19 @@ def extract_embedded_files_from_twbx(twbx_path: str) -> List[Dict[str, str]]:
     embedded = []
     data_extensions = {'.xlsx', '.xls', '.csv', '.tsv', '.hyper', '.tde'}
 
-    with zipfile.ZipFile(twbx_path, 'r') as zf:
-        for name in zf.namelist():
-            ext = Path(name).suffix.lower()
-            if ext in data_extensions:
-                embedded.append({
-                    'archive_path': name,
-                    'filename': Path(name).name,
-                    'extension': ext,
-                    'size': zf.getinfo(name).file_size,
-                })
+    try:
+        with zipfile.ZipFile(twbx_path, 'r') as zf:
+            for name in zf.namelist():
+                ext = Path(name).suffix.lower()
+                if ext in data_extensions:
+                    embedded.append({
+                        'archive_path': name,
+                        'filename': Path(name).name,
+                        'extension': ext,
+                        'size': zf.getinfo(name).file_size,
+                    })
+    except (zipfile.BadZipFile, Exception):
+        return []
     return embedded
 
 

@@ -51,27 +51,58 @@ TABLEAU_ENCODING_CHANNELS = frozenset({
 
 
 def _load_xml(path: str) -> etree._Element:
-    """Load Tableau XML from either a .twbx ZIP archive or a plain .twb file."""
+    """Load Tableau XML from either a .twbx ZIP archive or a plain .twb file.
+
+    Handles:
+    - Standard .twbx archives (ZIP containing a .twb)
+    - .twb inside subdirectories within the archive
+    - macOS __MACOSX resource fork entries
+    - Plain .twb XML files (even if renamed to .twbx)
+    - Truncated or corrupted archives
+    """
+    import logging
+    log = logging.getLogger(__name__)
     p = Path(path)
-    if p.suffix.lower() == '.twbx' or zipfile.is_zipfile(path):
-        if zipfile.is_zipfile(path):
-            try:
-                with zipfile.ZipFile(path, 'r') as zf:
-                    twb_files = [
-                        f for f in zf.namelist()
-                        if f.endswith('.twb') and not f.startswith('__MACOSX/') and not Path(f).name.startswith('._')
-                    ]
-                    if twb_files:
-                        twb_name = twb_files[0]
-                        return etree.fromstring(zf.read(twb_name))
-            except zipfile.BadZipFile:
-                pass
-        # Fallback: file may be a plain .twb XML file renamed with a .twbx extension
+
+    # ── Attempt 1: Try to open as a ZIP archive ──
+    if p.suffix.lower() in ('.twbx', '.zip') or zipfile.is_zipfile(path):
         try:
-            return etree.parse(path).getroot()
+            with zipfile.ZipFile(path, 'r') as zf:
+                all_entries = zf.namelist()
+                log.info(f"Opened ZIP with {len(all_entries)} entries: {all_entries[:10]}")
+
+                # Find .twb files, preferring non-macOS entries
+                twb_candidates = [
+                    f for f in all_entries
+                    if f.lower().endswith('.twb')
+                    and '__MACOSX' not in f
+                    and not Path(f).name.startswith('._')
+                ]
+                # Fallback: accept any .twb, even in __MACOSX (better than failing)
+                if not twb_candidates:
+                    twb_candidates = [f for f in all_entries if f.lower().endswith('.twb')]
+
+                if twb_candidates:
+                    twb_name = twb_candidates[0]
+                    log.info(f"Extracting TWB: {twb_name}")
+                    xml_bytes = zf.read(twb_name)
+                    return etree.fromstring(xml_bytes)
+                else:
+                    log.warning(f"ZIP archive has no .twb files. Entries: {all_entries}")
+        except zipfile.BadZipFile as e:
+            log.warning(f"BadZipFile for {path}: {e}. Trying as plain XML...")
         except Exception as e:
-            raise ValueError(f"Could not parse workbook file: file is corrupted or not a valid ZIP archive ({e})")
-    return etree.parse(path).getroot()
+            log.warning(f"ZIP extraction failed for {path}: {e}. Trying as plain XML...")
+
+    # ── Attempt 2: Try to parse as plain XML (.twb or mislabelled .twbx) ──
+    try:
+        return etree.parse(path).getroot()
+    except etree.XMLSyntaxError as e:
+        raise ValueError(
+            f"Could not parse '{p.name}': the file is not a valid Tableau workbook. "
+            f"If it is a .twbx, the ZIP archive may be corrupted or incomplete. "
+            f"Try re-exporting the workbook from Tableau Desktop. (Detail: {e})"
+        )
 
 
 def detect_model_type(root: etree._Element) -> str:
