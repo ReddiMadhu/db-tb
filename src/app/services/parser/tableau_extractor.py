@@ -2135,6 +2135,37 @@ def extract_dashboard_actions(root: etree._Element) -> List[ActionMetadata]:
     return actions
 
 
+# Leaf connection classes that may wrap a live Databricks driver under federated.
+_DATABRICKS_LEAF_CLASSES = (
+    "databricks",
+    "spark_thrift_http",
+    "simba_spark",
+    "spark",
+    "generic-jdbc",
+)
+
+
+def _prefer_connection_element(ds_el: etree._Element) -> tuple[etree._Element | None, str]:
+    """Pick the best ``<connection class=...>`` under a datasource.
+
+    Federated Tableau datasources nest the real driver (e.g. ``databricks``)
+    under a wrapper ``connection@class=federated``. ``.//connection[@class]``
+    returns the wrapper first — prefer known leaf drivers so live Databricks
+    metadata is not skipped.
+    """
+    candidates = ds_el.xpath(".//connection[@class]")
+    if not candidates:
+        return None, ""
+
+    for cls in _DATABRICKS_LEAF_CLASSES:
+        for conn in candidates:
+            if (conn.get("class") or "").lower().strip() == cls:
+                return conn, conn.get("class", "")
+
+    first = candidates[0]
+    return first, first.get("class", "")
+
+
 def _detect_databricks_connection(
     conn_el: etree._Element,
     conn_class: str,
@@ -2176,16 +2207,20 @@ def _detect_databricks_connection(
     if not is_databricks:
         return None
 
-    # Extract HTTP Path
+    # Extract HTTP Path (Tableau native driver often uses v-http-path)
     http_path = (
         conn_el.get("httppath", "")
         or conn_el.get("HTTPPath", "")
         or conn_el.get("http-path", "")
+        or conn_el.get("v-http-path", "")
+        or conn_el.get("v-httppath", "")
     )
     if not http_path:
         for cust in conn_el.xpath(".//connection-customization/customization[@name='HTTPPath']"):
             http_path = cust.get("value", "")
         for cust in conn_el.xpath(".//connection-customization/customization[@name='httppath']"):
+            http_path = http_path or cust.get("value", "")
+        for cust in conn_el.xpath(".//connection-customization/customization[@name='v-http-path']"):
             http_path = http_path or cust.get("value", "")
 
     # Derive warehouse ID from HTTP path: /sql/1.0/warehouses/{warehouse_id}
@@ -2300,15 +2335,27 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
         ds_name = ds_el.attrib.get("name", "Unknown")
         ds_name_list.append(ds_name)
         
-        # Detect connection type and Databricks-specific attributes
+        # Detect connection type and Databricks-specific attributes.
+        # Prefer nested leaf drivers (databricks) over federated wrappers.
         conn_type = None
         db_conn_info = None
-        conn_el = ds_el.find(".//connection[@class]")
+        conn_el, conn_type = _prefer_connection_element(ds_el)
         if conn_el is not None:
-            conn_type = conn_el.get("class", "")
             db_conn_info = _detect_databricks_connection(
                 conn_el, conn_type, ds_name, ds_el.attrib.get("caption")
             )
+            # If preferred leaf was not Databricks (e.g. generic-jdbc to Postgres),
+            # still try every leaf candidate so a sibling databricks node is found.
+            if db_conn_info is None:
+                for cand in ds_el.xpath(".//connection[@class]"):
+                    cls = cand.get("class", "")
+                    db_conn_info = _detect_databricks_connection(
+                        cand, cls, ds_name, ds_el.attrib.get("caption")
+                    )
+                    if db_conn_info is not None:
+                        conn_type = cls
+                        break
+
         
         ds_enrich = extract_datasource_enrichment(ds_el)
         ds_meta = DatasourceMetadata(

@@ -78,12 +78,16 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
             res.existing_mappings?.[t.name] ||
             res.existing_mappings?.[t.clean_name] ||
             res.existing_mappings?.[t.raw_name] ||
+            (t.uc_fqn ? res.existing_mappings?.[t.uc_fqn.split(".").pop() || ""] : undefined) ||
             // legacy key when "*.csv" was wrongly normalized to "Csv"
             (/\.csv$/i.test(t.raw_name || "") ? res.existing_mappings?.["Csv"] : undefined);
-          // Auto-compose target from Databricks connection if available
+          // Prefer embedded UC FQN from live Databricks relation, then connection catalog
           let autoTarget = "";
           let autoStatus: any = "PENDING";
-          if (!ex?.target_full_name && ds.is_databricks && ds.databricks_connection?.catalog) {
+          if (!ex?.target_full_name && t.uc_fqn) {
+            autoTarget = t.uc_fqn;
+            autoStatus = "AUTO_DETECTED";
+          } else if (!ex?.target_full_name && ds.is_databricks && ds.databricks_connection?.catalog) {
             const cat = ds.databricks_connection.catalog;
             const sch = ds.databricks_connection.schema || "default";
             const cleanName = t.clean_name || t.name;
@@ -96,6 +100,7 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
             tableau_connection_type: ds.connection_type,
             target_full_name: ex?.target_full_name || autoTarget || (t.is_unresolved ? "" : t.name),
             status: (ex?.status as any) || (autoTarget ? autoStatus : (ex?.target_full_name ? "CONFIRMED" : "PENDING")),
+            confidence_score: ex?.confidence_score,
           };
         }
       }
@@ -301,7 +306,19 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
                         <span className={styles.unmappedBadge}>Unmapped</span>
                       )}
                     </div>
-                    <div className={styles.sourceType}>{ds.caption || ds.name} • {ds.connection_type} • {ds.column_count} cols</div>
+                    <div className={styles.sourceType}>
+                      {ds.is_databricks
+                        ? `Databricks • ${ds.databricks_connection?.catalog || "UC"}.${ds.databricks_connection?.schema || "default"} • ${ds.column_count} cols`
+                        : `${ds.caption || ds.name} • ${ds.connection_type} • ${ds.column_count} cols`}
+                    </div>
+                    {ds.is_databricks && ds.databricks_connection?.host && (
+                      <div className={styles.sourceType} style={{ fontSize: "0.7rem", opacity: 0.85 }}>
+                        {ds.databricks_connection.host.replace(/^https?:\/\//, "")}
+                        {ds.databricks_connection.warehouse_id
+                          ? ` • warehouse ${ds.databricks_connection.warehouse_id}`
+                          : ""}
+                      </div>
+                    )}
                     <div className={styles.targetRow}>
                       <Database size={13} color={target ? "var(--accent-cyan)" : "var(--text-disabled)"} />
                       {target ? (

@@ -54,6 +54,43 @@ def clean_table_name_for_catalog(raw_name: str) -> str:
     return name.lower() or 'imported_table'
 
 
+_BRACKETED_FQN_RE = re.compile(
+    r"^\[([^\]]+)\]\.\[([^\]]+)\]\.\[([^\]]+)\]$"
+)
+_DOT_FQN_RE = re.compile(
+    r"^`?([A-Za-z0-9_]+)`?\.`?([A-Za-z0-9_]+)`?\.`?([A-Za-z0-9_]+)`?$"
+)
+
+
+def parse_uc_fqn_from_tableau_table(raw: str | None) -> str | None:
+    """Parse a Tableau relation ``table``/``source`` into ``catalog.schema.table``.
+
+    Accepts:
+      - ``[hive_metastore].[default].[my_table]``
+      - ``hive_metastore.default.my_table``
+      - backtick-quoted 3-part names
+
+    Returns None when the value is not an already-qualified UC path.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+
+    m = _BRACKETED_FQN_RE.match(s)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+    # Strip outer brackets then try dotted form
+    unbracketed = s.replace("[", "").replace("]", "")
+    m = _DOT_FQN_RE.match(unbracketed)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+    return None
+
+
 def extract_embedded_files_from_twbx(twbx_path: str) -> List[Dict[str, str]]:
     """List data files embedded inside a .twbx archive."""
     if not twbx_path or not zipfile.is_zipfile(twbx_path):
