@@ -183,31 +183,6 @@ def _make_safe_alias(field_name: str) -> str:
     return re.sub(r'[^a-zA-Z0-9_]', '_', field_name).strip('_') or field_name
 
 
-def _resolve_field_for_sql(field_name: str, resolver: Optional[CanonicalFieldResolver] = None,
-                           ds: Optional[DatasourceMetadata] = None) -> str:
-    """Resolve a field name to its physical column name for SQL generation.
-
-    Priority:
-        1. Canonical resolver (caption→internal→physical)
-        2. Datasource column metadata fallback
-        3. Original name as-is
-    """
-    if resolver:
-        physical = resolver.resolve_to_physical(field_name)
-        if physical != field_name:
-            return physical
-    # Fallback: check datasource columns for internal name
-    if ds:
-        for col in ds.columns:
-            caption = (col.caption or "").strip()
-            internal = (col.internal_name or "").strip()
-            if field_name == caption and internal:
-                return internal
-            if field_name == internal:
-                return internal
-    return field_name
-
-
 def _is_aggregated_expr(expr: str) -> bool:
     if not expr:
         return False
@@ -215,31 +190,49 @@ def _is_aggregated_expr(expr: str) -> bool:
     return any(u.startswith(fn) for fn in ("SUM(", "AVG(", "COUNT(", "MIN(", "MAX(", "MEDIAN(", "PERCENTILE(", "STDDEV("))
 
 
-def _build_field_expression(field_name: str, aggregation: AggregationType) -> str:
-    """Build a Lakeview-compatible field expression.
-    
-    Uses the ORIGINAL field name (with spaces) inside backticks for SQL correctness.
-    For aggregated queries: SUM(`field name`), COUNT(DISTINCT `field name`), etc.
-    For dimensions (no agg): `field name`
+def _wrap_aggregation(inner_expr: str, aggregation: AggregationType) -> str:
+    """Apply an aggregation wrapper around an already-resolved SQL expression."""
+    if aggregation == AggregationType.NONE or _is_aggregated_expr(inner_expr):
+        return inner_expr
+    elif aggregation == AggregationType.SUM:
+        return f"SUM({inner_expr})"
+    elif aggregation == AggregationType.AVG:
+        return f"AVG({inner_expr})"
+    elif aggregation == AggregationType.COUNT:
+        return f"COUNT({inner_expr})"
+    elif aggregation == AggregationType.COUNT_DISTINCT:
+        return f"COUNT(DISTINCT {inner_expr})"
+    elif aggregation == AggregationType.MIN:
+        return f"MIN({inner_expr})"
+    elif aggregation == AggregationType.MAX:
+        return f"MAX({inner_expr})"
+    elif aggregation == AggregationType.MEDIAN:
+        return f"PERCENTILE({inner_expr}, 0.5)"
+    return inner_expr
+
+
+def _build_field_expression(
+    field_name: str,
+    aggregation: AggregationType,
+    resolver: Optional[CanonicalFieldResolver] = None,
+) -> str:
+    """Build a Lakeview-compatible field expression for dataset SQL.
+
+    When ``resolver`` is provided and the field is a calculated field with
+    compiled SQL, the formula is inlined (not treated as a physical column).
+    Widget builders should omit ``resolver`` so they reference dataset aliases.
     """
+    calc = resolver.get_calc_sql(field_name) if resolver else None
+    if calc:
+        calc = calc.strip()
+        if aggregation == AggregationType.NONE or _is_aggregated_expr(calc):
+            return f"({calc})"
+        return _wrap_aggregation(f"({calc})", aggregation)
+
     backtick_name = f"`{field_name}`"
     if aggregation == AggregationType.NONE or _is_aggregated_expr(field_name):
         return backtick_name
-    elif aggregation == AggregationType.SUM:
-        return f"SUM({backtick_name})"
-    elif aggregation == AggregationType.AVG:
-        return f"AVG({backtick_name})"
-    elif aggregation == AggregationType.COUNT:
-        return f"COUNT({backtick_name})"
-    elif aggregation == AggregationType.COUNT_DISTINCT:
-        return f"COUNT(DISTINCT {backtick_name})"
-    elif aggregation == AggregationType.MIN:
-        return f"MIN({backtick_name})"
-    elif aggregation == AggregationType.MAX:
-        return f"MAX({backtick_name})"
-    elif aggregation == AggregationType.MEDIAN:
-        return f"PERCENTILE({backtick_name}, 0.5)"
-    return backtick_name
+    return _wrap_aggregation(backtick_name, aggregation)
 
 
 def _get_column_metadata(field_name: str, ds: Optional[DatasourceMetadata]) -> dict:
@@ -700,6 +693,8 @@ def _build_unpivot_measure_sql(
     from_clause: str,
     where: str = "",
     top_n: Optional[int] = None,
+    ds: Optional[DatasourceMetadata] = None,
+    resolver: Optional[CanonicalFieldResolver] = None,
 ) -> str:
     """Build UNION ALL unpivot SQL: (dims..., Metric, Value) per measure.
 
@@ -716,7 +711,14 @@ def _build_unpivot_measure_sql(
         return f"SELECT 1 AS `__incomplete_projection__` FROM {from_clause}"
 
     where_sql = f" WHERE {where}" if where else ""
-    dim_select = ", ".join(f"`{d}`" for d in dimensions) if dimensions else ""
+
+    def _dim_select_expr(d: str) -> str:
+        calc = resolver.get_calc_sql(d) if resolver else None
+        if calc:
+            return f"({calc.strip()})"
+        return f"`{d}`"
+
+    dim_select = ", ".join(_dim_select_expr(d) for d in dimensions) if dimensions else ""
     dim_prefix = f"{dim_select}, " if dim_select else ""
     group_by = ""
     if dimensions:
@@ -733,7 +735,7 @@ def _build_unpivot_measure_sql(
                 agg = AggregationType.SUM
         else:
             agg = magg
-        value_expr = _build_field_expression(mname, agg)
+        value_expr = _build_field_expression(mname, agg, resolver=resolver)
         # CAST numeric aggregates to DOUBLE so UNION ALL types align (incidents vs money)
         branch = (
             f"SELECT {dim_prefix}'{label}' AS `Metric`, "
@@ -750,7 +752,7 @@ def _build_unpivot_measure_sql(
         for mname, magg in measures:
             agg = magg if magg != AggregationType.NONE else AggregationType.SUM
             rank_parts.append(
-                f"CAST({_build_field_expression(mname, agg)} AS DOUBLE)"
+                f"CAST({_build_field_expression(mname, agg, resolver=resolver)} AS DOUBLE)"
             )
         rank_expr = " + ".join(rank_parts)
         top_n_subq = (
@@ -1138,7 +1140,8 @@ def normalize_tom_to_ubim(
                 else None
             )
             sql = _build_unpivot_measure_sql(
-                up_dims, up_measures, from_clause, where, top_n=top_n
+                up_dims, up_measures, from_clause, where, top_n=top_n,
+                ds=ds, resolver=resolver,
             )
             field_meta = (
                 [{"name": d, "type": "string"} for d in up_dims]
@@ -1149,12 +1152,15 @@ def normalize_tom_to_ubim(
             select_parts = []
             for dim in dimensions:
                 alias = _make_safe_alias(dim)
-                if alias != dim:
+                calc = resolver.get_calc_sql(dim) if resolver else None
+                if calc:
+                    select_parts.append(f"({calc.strip()}) AS `{alias}`")
+                elif alias != dim:
                     select_parts.append(f"`{dim}` AS `{alias}`")
                 else:
                     select_parts.append(f"`{dim}`")
             for mname, magg in measures:
-                expr = _build_field_expression(mname, magg)
+                expr = _build_field_expression(mname, magg, resolver=resolver)
                 alias = _make_safe_alias(mname)
                 select_parts.append(f"{expr} AS `{alias}`")
 
@@ -1226,6 +1232,7 @@ def normalize_tom_to_ubim(
             # Ontology chrome: title text zones + dashboard filter cards
             chrome = _build_dashboard_chrome_widgets(db, y_offset=0)
             # Bind each filter to a dataset that projects the filter field
+            existing_ds_names = {d.name for d in ubim_dash.datasets}
             for cw in chrome:
                 if cw.chart_type not in (
                     ChartType.FILTER_MULTI, ChartType.FILTER_SINGLE, ChartType.FILTER_DATE
@@ -1237,12 +1244,64 @@ def normalize_tom_to_ubim(
                     fname = cw.filters[0].field_name
                 elif cw.query_fields:
                     fname = cw.query_fields[0].name
-                bound = _find_dataset_projecting_field(ubim_dash.datasets, fname)
+                display_field = (cw.properties or {}).get("display_field") or fname
+                bound = (
+                    _find_dataset_projecting_field(ubim_dash.datasets, display_field)
+                    or _find_dataset_projecting_field(ubim_dash.datasets, fname)
+                )
+                if not bound and (display_field or fname):
+                    # No worksheet projects this field — create a DISTINCT filter dataset
+                    owner_ws_name = (cw.properties or {}).get("worksheet_owner")
+                    owner_ws = next(
+                        (w for w in workbook_meta.worksheets if w.name == owner_ws_name),
+                        None,
+                    ) if owner_ws_name else None
+                    owner_ds = (
+                        _resolve_datasource(owner_ws, workbook_meta)
+                        if owner_ws else None
+                    )
+                    if not owner_ds and workbook_meta.datasources:
+                        owner_ds = workbook_meta.datasources[0]
+                    if owner_ds:
+                        filter_from = _build_dataset_sql(
+                            owner_ds,
+                            table_mapping=table_mapping,
+                            catalog_schema=catalog_schema,
+                        )
+                        filter_field = display_field or fname
+                        # Prefer physical column name when resolver knows it
+                        phys = _resolve_field_for_sql(filter_field, resolver, owner_ds)
+                        filter_ds = _create_filter_dimension_dataset(
+                            phys or filter_field,
+                            filter_from,
+                            existing_ds_names,
+                        )
+                        # Also project under the widget's safe queryName when different
+                        safe_name = fname or _make_safe_alias(filter_field)
+                        if safe_name and safe_name != (phys or filter_field):
+                            # Rebuild so output alias matches filter widget queryName
+                            filter_ds = IntermediateDataset(
+                                name=filter_ds.name,
+                                sql_query=(
+                                    f"SELECT DISTINCT `{phys or filter_field}` AS `{safe_name}` "
+                                    f"FROM {filter_from}"
+                                ),
+                                tables_referenced=filter_ds.tables_referenced,
+                                fields=[{"name": safe_name, "type": "string"}],
+                            )
+                        ubim_dash.datasets.append(filter_ds)
+                        existing_ds_names.add(filter_ds.name)
+                        bound = filter_ds.name
                 if bound:
                     cw.dataset_name = bound
                     for f in cw.filters:
                         f.dataset_name = bound
-                page.widgets.append(cw)
+                    page.widgets.append(cw)
+                else:
+                    logger.warning(
+                        "Skipping filter chrome '%s' — no projecting dataset for field '%s'",
+                        cw.name, display_field or fname,
+                    )
             
             ubim_dash.pages.append(page)
     else:
@@ -1263,19 +1322,24 @@ def normalize_tom_to_ubim(
 
 
 def _dataset_sql_projects_field(sql: str, field_name: str) -> bool:
-    """Return True if ``field_name`` appears as an output column of the dataset SQL."""
+    """Return True if ``field_name`` is a SELECT output column (not merely in WHERE)."""
     if not sql or not field_name:
+        return False
+    from app.services.validator.validation_engine import _projected_output_columns
+
+    output_cols = _projected_output_columns(sql)
+    if not output_cols:
         return False
     alias = _make_safe_alias(field_name)
     candidates = {field_name, alias}
-    patterns = []
+    lower_map = {c.lower(): c for c in output_cols}
     for name in candidates:
-        patterns.extend([
-            rf"`{re.escape(name)}`",
-            rf"\bAS\s+`{re.escape(name)}`",
-            rf"'{re.escape(name)}'",
-        ])
-    return any(re.search(p, sql, flags=re.IGNORECASE) for p in patterns)
+        if name in output_cols or name.lower() in lower_map:
+            return True
+        safe_out = _make_safe_alias(name)
+        if safe_out in output_cols or any(_make_safe_alias(c) == safe_out for c in output_cols):
+            return True
+    return False
 
 
 def _find_dataset_projecting_field(
@@ -1296,6 +1360,34 @@ def _find_dataset_projecting_field(
         if alias != field_name and _dataset_sql_projects_field(ds.sql_query, alias):
             candidates.append(ds.name)
     return candidates[0] if candidates else None
+
+
+def _create_filter_dimension_dataset(
+    field_name: str,
+    from_clause: str,
+    existing_names: set,
+) -> IntermediateDataset:
+    """Create a SELECT DISTINCT dataset so a filter widget can bind to the field."""
+    alias = _make_safe_alias(field_name)
+    ds_id = f"filter_{alias}"[:48] or f"filter_{uuid.uuid4().hex[:8]}"
+    base = ds_id
+    n = 2
+    while ds_id in existing_names:
+        ds_id = f"{base}_{n}"
+        n += 1
+    # Prefer projecting under the safe alias Lakeview filter widgets use as queryName
+    if alias != field_name:
+        sql = f"SELECT DISTINCT `{field_name}` AS `{alias}` FROM {from_clause}"
+        out_name = alias
+    else:
+        sql = f"SELECT DISTINCT `{field_name}` AS `{field_name}` FROM {from_clause}"
+        out_name = field_name
+    return IntermediateDataset(
+        name=ds_id,
+        sql_query=sql,
+        tables_referenced=[],
+        fields=[{"name": out_name, "type": "string"}],
+    )
 
 
 def _has_generated_geo_shelves(ws: WorksheetMetadata) -> bool:

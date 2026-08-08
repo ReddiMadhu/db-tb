@@ -180,8 +180,14 @@ def _unaggregated_columns(query: str) -> List[str]:
 def _select_item_output_name(item: str) -> str:
     """Resolve the output column name of one SELECT list item."""
     item = (item or "").strip()
-    if not item or item == "*" or item.upper().startswith("DISTINCT"):
+    if not item or item == "*":
         return ""
+    # SELECT DISTINCT col — DISTINCT is a modifier, not the item itself
+    if item.upper().startswith("DISTINCT"):
+        rest = item[8:].lstrip()
+        if not rest:
+            return ""
+        item = rest
     # Explicit AS alias — prefer the last AS segment (handles CAST(... AS DOUBLE) AS `Value`)
     parts = _split_top_level(item, _AS_RE)
     if len(parts) >= 2:

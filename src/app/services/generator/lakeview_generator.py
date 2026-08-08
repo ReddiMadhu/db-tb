@@ -576,9 +576,27 @@ def _create_widget_via_factory(
 
 
 def _dataset_projects_field_sql(sql: str, field_name: str) -> bool:
+    """True when field_name is a SELECT output column (not merely present in WHERE)."""
     if not sql or not field_name:
         return False
-    return bool(re.search(rf"`{re.escape(field_name)}`", sql, flags=re.IGNORECASE))
+    from app.services.validator.validation_engine import _projected_output_columns
+
+    output_cols = _projected_output_columns(sql)
+    if not output_cols:
+        return False
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", field_name).strip("_") or field_name
+    candidates = {field_name, safe}
+    lower_map = {c.lower(): c for c in output_cols}
+    for name in candidates:
+        if name in output_cols or name.lower() in lower_map:
+            return True
+        safe_out = re.sub(r"[^a-zA-Z0-9_]", "_", name).strip("_") or name
+        if safe_out in output_cols or any(
+            (re.sub(r"[^a-zA-Z0-9_]", "_", c).strip("_") or c) == safe_out
+            for c in output_cols
+        ):
+            return True
+    return False
 
 
 def _pick_dataset_for_filter(
@@ -586,7 +604,7 @@ def _pick_dataset_for_filter(
     field_name: str,
     preferred: Optional[str] = None,
 ) -> Optional[str]:
-    """Choose a dataset whose SQL projects ``field_name``."""
+    """Choose a dataset whose SQL projects ``field_name``. No silent fallback."""
     if preferred:
         for ds in datasets:
             if ds.name == preferred and _dataset_projects_field_sql(ds.query, field_name):
@@ -594,7 +612,7 @@ def _pick_dataset_for_filter(
     for ds in datasets:
         if _dataset_projects_field_sql(ds.query, field_name):
             return ds.name
-    return preferred or (datasets[0].name if datasets else None)
+    return None
 
 
 def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboard:
@@ -695,6 +713,12 @@ def generate_lakeview_dashboard(ubim: IntermediateDashboard) -> LakeviewDashboar
                     bound = _pick_dataset_for_filter(lakeview.datasets, f_field)
                     if bound:
                         dataset_ref = bound
+                if not bound:
+                    logger.warning(
+                        "Skipping filter widget '%s' — no dataset projects field '%s'",
+                        log_label, display_field or f_field,
+                    )
+                    continue
 
             incomplete_sql = False
             if lakeview.datasets:
