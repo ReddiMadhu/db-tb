@@ -1,0 +1,885 @@
+{
+  "datasets": [
+    {
+      "name": "claims_overview",
+      "displayName": "Claims Overview",
+      "catalog": "hive_metastore",
+      "config": {
+        "source": "SELECT cf.*, ranked.diagnosis_rank FROM hive_metastore.insurance_data.claims_fact cf JOIN (\n  SELECT `Diagnosis Category`, DENSE_RANK() OVER (ORDER BY COUNT(DISTINCT `Claim CaseNumber`) DESC) as diagnosis_rank\n  FROM hive_metastore.insurance_data.claims_fact\n  GROUP BY `Diagnosis Category`\n) ranked ON cf.`Diagnosis Category` = ranked.`Diagnosis Category`\n",
+        "measures": [
+          {
+            "name": "total_claims",
+            "expr": "COUNT(DISTINCT `Claim CaseNumber`)"
+          },
+          {
+            "name": "avg_duration",
+            "expr": "AVG(`Business Days Duration`)"
+          },
+          {
+            "name": "approval_rate",
+            "expr": "COUNT(CASE WHEN `Benefit Status` = 'Approved' THEN `Claim CaseNumber` END) * 1.0 / COUNT(`Claim CaseNumber`)",
+            "format": {
+              "type": "percentage",
+              "decimalPlaces": {
+                "type": "exact",
+                "places": 1.0
+              }
+            }
+          },
+          {
+            "name": "sum_business_days_duration",
+            "expr": "SUM(`Business Days Duration`)"
+          }
+        ],
+        "version": "1.1",
+        "comment": "Migrated from Tableau workbook \"Claims Overview (1)\".\nDatasource: claims_fact (hive_metastore.insurance_data.claims_fact)+ (insurance_data)\nIncludes pre-computed diagnosis_rank for Top-N filtering.\n",
+        "dimensions": [
+          {
+            "name": "benefit_creation_date",
+            "expr": "`Benefit Creation Date`"
+          },
+          {
+            "name": "benefit_creation_date_quarter",
+            "expr": "QUARTER(`Benefit Creation Date`)"
+          },
+          {
+            "name": "province",
+            "expr": "`Province`"
+          },
+          {
+            "name": "diagnosis_category",
+            "expr": "`Diagnosis Category`"
+          },
+          {
+            "name": "claim_casenumber",
+            "expr": "`Claim CaseNumber`"
+          },
+          {
+            "name": "benefit_type_group",
+            "expr": "benefit_type_dim.`Benefit Type Group`"
+          },
+          {
+            "name": "termination_reason",
+            "expr": "`Termination Reason`"
+          },
+          {
+            "name": "business_days_duration",
+            "expr": "`Business Days Duration`"
+          },
+          {
+            "name": "benefit_status",
+            "expr": "`Benefit Status`"
+          },
+          {
+            "name": "at_incident_occupation",
+            "expr": "occupation_dim.`At Incident Occupation`"
+          },
+          {
+            "name": "diagnosis_rank",
+            "expr": "diagnosis_rank"
+          }
+        ],
+        "joins": [
+          {
+            "name": "benefit_type_dim",
+            "source": "hive_metastore.insurance_data.benefit_type_dim",
+            "on": "source.`Benefit ID` = benefit_type_dim.`Benefit ID`",
+            "cardinality": "many_to_one"
+          },
+          {
+            "name": "occupation_dim",
+            "source": "hive_metastore.insurance_data.occupation_dim",
+            "on": "source.`Occupation ID` = occupation_dim.`Occupation ID`",
+            "cardinality": "many_to_one"
+          }
+        ]
+      }
+    }
+  ],
+  "pages": [
+    {
+      "name": "insurance_claims_overview",
+      "displayName": "Insurance Claims Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "total_claims",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "measure(total_claims)",
+                      "expression": "MEASURE(`total_claims`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Claims",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(total_claims)"
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "avg_duration",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "measure(avg_duration)",
+                      "expression": "MEASURE(`avg_duration`)"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`benefit_status` IN ('Closed')"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Average Duration",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(avg_duration)"
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "approval_rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "measure(approval_rate)",
+                      "expression": "MEASURE(`approval_rate`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "App Rate",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(approval_rate)"
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "closed_claims_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "claim_casenumber",
+                      "expression": "`claim_casenumber`"
+                    },
+                    {
+                      "name": "benefit_type_group",
+                      "expression": "`benefit_type_group`"
+                    },
+                    {
+                      "name": "diagnosis_category",
+                      "expression": "`diagnosis_category`"
+                    },
+                    {
+                      "name": "termination_reason",
+                      "expression": "`termination_reason`"
+                    },
+                    {
+                      "name": "business_days_duration",
+                      "expression": "`business_days_duration`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`benefit_status` IN ('Closed')"
+                    }
+                  ],
+                  "disaggregated": true,
+                  "orders": [
+                    {
+                      "direction": "DESC",
+                      "expression": "`business_days_duration`"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Closed Claims Table",
+                "showTitle": true
+              },
+              "rowsPerPage": 10,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "claim_casenumber"
+                  },
+                  {
+                    "fieldName": "benefit_type_group"
+                  },
+                  {
+                    "fieldName": "diagnosis_category"
+                  },
+                  {
+                    "fieldName": "termination_reason"
+                  },
+                  {
+                    "fieldName": "business_days_duration"
+                  }
+                ],
+                "rowOrder": [
+                  {
+                    "by": "column-reversed",
+                    "field": {
+                      "index": 4
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "diagnosis_trends",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "diagnosis_category",
+                      "expression": "`diagnosis_category`"
+                    },
+                    {
+                      "name": "benefit_creation_date_quarter",
+                      "expression": "`benefit_creation_date_quarter`"
+                    },
+                    {
+                      "name": "measure(total_claims)",
+                      "expression": "MEASURE(`total_claims`)"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`diagnosis_rank` <= 4"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Diagnosis Trends Over Time (3)",
+                "showTitle": true
+              },
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "benefit_creation_date_quarter",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(total_claims)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "diagnosis_category",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 4,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "benefit_type_claims",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "benefit_type_group",
+                      "expression": "`benefit_type_group`"
+                    },
+                    {
+                      "name": "measure(total_claims)",
+                      "expression": "MEASURE(`total_claims`)"
+                    },
+                    {
+                      "name": "benefit_creation_date_quarter",
+                      "expression": "`benefit_creation_date_quarter`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Benefit Type Claims (2)",
+                "showTitle": true
+              },
+              "mark": {
+                "layout": "stack"
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "measure(total_claims)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "benefit_creation_date_quarter",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "color": {
+                  "fieldName": "benefit_type_group",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 8,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "claims_by_diagnosis",
+      "displayName": "Claims Overview by Diagnosis",
+      "layout": [
+        {
+          "widget": {
+            "name": "filter_diagnosis",
+            "queries": [
+              {
+                "name": "dashboards/01f19303efe41628a4ffe18fb7b95acf/datasets/01f19305b8071e85af55696c7aee7ed5_diagnosis_category",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "diagnosis_category",
+                      "expression": "`diagnosis_category`"
+                    },
+                    {
+                      "name": "diagnosis_category_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Diagnosis Category",
+                "showTitle": true
+              },
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "diagnosis_category",
+                    "queryName": "dashboards/01f19303efe41628a4ffe18fb7b95acf/datasets/01f19305b8071e85af55696c7aee7ed5_diagnosis_category"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "total_claims",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "measure(total_claims)",
+                      "expression": "MEASURE(`total_claims`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Claims (2)",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(total_claims)"
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "avg_duration",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "measure(avg_duration)",
+                      "expression": "MEASURE(`avg_duration`)"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`benefit_status` IN ('Closed')"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Average Duration (2)",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(avg_duration)"
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "approval_rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "measure(approval_rate)",
+                      "expression": "MEASURE(`approval_rate`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "App Rate (2)",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(approval_rate)"
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 0,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "benefit_type_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "benefit_type_group",
+                      "expression": "`benefit_type_group`"
+                    },
+                    {
+                      "name": "measure(total_claims)",
+                      "expression": "MEASURE(`total_claims`)"
+                    },
+                    {
+                      "name": "benefit_creation_date_quarter",
+                      "expression": "`benefit_creation_date_quarter`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Benefit Type Claims (3)",
+                "showTitle": true
+              },
+              "mark": {
+                "layout": "stack"
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "measure(total_claims)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "benefit_creation_date_quarter",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "color": {
+                  "fieldName": "benefit_type_group",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 2,
+            "width": 7,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "closed_claims_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "claim_casenumber",
+                      "expression": "`claim_casenumber`"
+                    },
+                    {
+                      "name": "benefit_type_group",
+                      "expression": "`benefit_type_group`"
+                    },
+                    {
+                      "name": "termination_reason",
+                      "expression": "`termination_reason`"
+                    },
+                    {
+                      "name": "business_days_duration",
+                      "expression": "`business_days_duration`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`benefit_status` IN ('Closed')"
+                    }
+                  ],
+                  "disaggregated": true,
+                  "orders": [
+                    {
+                      "direction": "DESC",
+                      "expression": "`business_days_duration`"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Closed Claims Table (2)",
+                "showTitle": true
+              },
+              "rowsPerPage": 10,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "claim_casenumber"
+                  },
+                  {
+                    "fieldName": "benefit_type_group"
+                  },
+                  {
+                    "fieldName": "termination_reason"
+                  },
+                  {
+                    "fieldName": "business_days_duration"
+                  }
+                ],
+                "rowOrder": [
+                  {
+                    "by": "column-reversed",
+                    "field": {
+                      "index": 3
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "province_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "claims_overview",
+                  "fields": [
+                    {
+                      "name": "province",
+                      "expression": "`province`"
+                    },
+                    {
+                      "name": "measure(total_claims)",
+                      "expression": "MEASURE(`total_claims`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Diagnosis Trends Over Time",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "province",
+                  "scale": {
+                    "type": "categorical",
+                    "categorySize": {
+                      "type": "number-of-categories",
+                      "number": 5
+                    },
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(total_claims)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "province",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 5,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}

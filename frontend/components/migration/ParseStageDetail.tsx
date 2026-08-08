@@ -195,7 +195,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
         caption: cap || rawName || "Calculated Field",
         formula: cf.formula || "",
         type: cf.type || cf.formula_type || "STANDARD",
-        datasource: resolveDsName(cf.datasource || "Default"),
+        datasource: cf.datasource || "Default",
         return_type: cf.return_type || undefined,
         dependencies: Array.isArray(cf.dependencies) ? cf.dependencies : undefined,
         is_used: typeof cf.is_used === "boolean" ? cf.is_used : undefined,
@@ -243,49 +243,100 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     [dsNameMap]
   );
 
+  // ── Helper to clean table names from GUIDs, brackets, and raw aliases ──
+  const cleanTableName = useCallback((raw: any): string => {
+    if (!raw) return "";
+    let s = typeof raw === "string" ? raw : raw.clean_name || raw.name || raw.raw_name || "";
+    if (!s) return "";
+
+    // Extract parenthesized name like `claims_fact (Claims_Fact)_7AB...` -> `Claims_Fact`
+    const parenMatch = s.match(/\(([^)]+)\)/);
+    if (parenMatch && parenMatch[1]) {
+      const inside = parenMatch[1].trim();
+      if (inside && !/^calculation$/i.test(inside)) {
+        s = inside;
+      }
+    }
+
+    // Strip trailing _GUID or hex hash (12+ hex characters)
+    s = s.replace(/_[0-9A-Fa-f]{12,}$/g, "");
+    s = s.replace(/^`|`$/g, "").replace(/^\[|\]$/g, "").trim();
+
+    // Strip schema/catalog prefix if hive_metastore.default.table -> table
+    if (s.includes(".")) {
+      const parts = s.split(".");
+      s = parts[parts.length - 1];
+    }
+
+    return s;
+  }, []);
+
   // ── Aggregate all joins from datasources for RelationshipDiagram ──
   const allJoinRelations: JoinRelation[] = useMemo(() => {
     const result: JoinRelation[] = [];
+    const pushRel = (
+      jType: string,
+      lTable: string,
+      lCol: string,
+      rTable: string,
+      rCol: string,
+      ds?: string
+    ) => {
+      const left = cleanTableName(lTable);
+      const right = cleanTableName(rTable);
+      if (!left || !right) return;
+      result.push({
+        join_type: jType || "inner",
+        left_table: left,
+        left_column: lCol || "",
+        right_table: right,
+        right_column: rCol || "",
+        datasource: ds,
+      });
+    };
+
     // From top-level joins
     joins.forEach((j: any) => {
-      result.push({
-        join_type: j.join_type || j.type || "inner",
-        left_table: j.left_table || "",
-        left_column: j.left_column || j.left_key || "",
-        right_table: j.right_table || "",
-        right_column: j.right_column || j.right_key || "",
-        datasource: j.datasource,
-      });
+      pushRel(
+        j.join_type || j.type,
+        j.left_table,
+        j.left_column || j.left_key,
+        j.right_table,
+        j.right_column || j.right_key,
+        j.datasource
+      );
     });
+
     // From datasource-level joins
     datasources.forEach((ds: any) => {
       if (Array.isArray(ds.joins)) {
         ds.joins.forEach((j: any) => {
-          result.push({
-            join_type: j.join_type || j.type || "inner",
-            left_table: j.left_table || "",
-            left_column: j.left_column || j.left_key || "",
-            right_table: j.right_table || "",
-            right_column: j.right_column || j.right_key || "",
-            datasource: resolveDsName(ds.name),
-          });
+          pushRel(
+            j.join_type || j.type,
+            j.left_table,
+            j.left_column || j.left_key,
+            j.right_table,
+            j.right_column || j.right_key,
+            resolveDsName(ds.name)
+          );
         });
       }
       if (Array.isArray(ds.relationships)) {
         ds.relationships.forEach((r: any) => {
-          result.push({
-            join_type: r.relationship_type || "relationship",
-            left_table: r.table1 || r.left_table || "",
-            left_column: r.column1 || r.left_column || "",
-            right_table: r.table2 || r.right_table || "",
-            right_column: r.column2 || r.right_column || "",
-            datasource: resolveDsName(ds.name),
-          });
+          pushRel(
+            r.relationship_type || "relationship",
+            r.table1 || r.left_table,
+            r.column1 || r.left_column,
+            r.table2 || r.right_table,
+            r.column2 || r.right_column,
+            resolveDsName(ds.name)
+          );
         });
       }
     });
+
     return result;
-  }, [joins, datasources, resolveDsName]);
+  }, [joins, datasources, resolveDsName, cleanTableName]);
 
   // ── Counts ──
   const dashboardCount = metrics.dashboards_parsed ?? (artifacts.dashboards ? artifacts.dashboards.length : 0);
@@ -460,43 +511,79 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
     return list;
   }, [calcFields, selectedWs, selectedVisual, calcSearch, resolveFieldName]);
 
-  // ── Complete Workbook Tables & Data Model ──
-  const tableSet = new Set<string>();
-  datasources.forEach((ds: any) => {
-    if (Array.isArray(ds.tables)) ds.tables.forEach((t: string) => tableSet.add(t));
-    else if (ds.name) tableSet.add(ds.name);
-  });
-  joins.forEach((j: any) => {
-    if (j.left_table) tableSet.add(j.left_table);
-    if (j.right_table) tableSet.add(j.right_table);
-  });
-  relationships.forEach((r: any) => {
-    if (r.table1) tableSet.add(r.table1);
-    if (r.table2) tableSet.add(r.table2);
-  });
+  // ── Complete Workbook Tables & Data Model (Deduplicated & Cleaned) ──
+  const tablesList = useMemo(() => {
+    const tableMap = new Map<string, string>(); // lowerKey -> canonicalName
 
-  const tablesList = Array.from(tableSet);
+    const addT = (raw: any) => {
+      const cleaned = cleanTableName(raw);
+      if (!cleaned) return;
+      const lower = cleaned.toLowerCase();
+      if (!tableMap.has(lower)) {
+        tableMap.set(lower, cleaned);
+      } else {
+        const existing = tableMap.get(lower)!;
+        if (cleaned !== existing && /[A-Z]/.test(cleaned) && !/[A-Z]/.test(existing)) {
+          tableMap.set(lower, cleaned);
+        }
+      }
+    };
+
+    datasources.forEach((ds: any) => {
+      if (Array.isArray(ds.tables)) {
+        ds.tables.forEach((t: any) => addT(t));
+      } else if (ds.name) {
+        addT(ds.name);
+      }
+    });
+
+    allJoinRelations.forEach((r) => {
+      if (r.left_table) addT(r.left_table);
+      if (r.right_table) addT(r.right_table);
+    });
+
+    let list = Array.from(tableMap.values());
+
+    // If specific domain tables exist (e.g. Claims_Fact, Benefit_Type_Dim), filter unlinked generic placeholders "Fact", "Dim", "Extract"
+    const hasSpecificFactOrDim = list.some((n) => /_(fact|dim)$/i.test(n));
+    if (hasSpecificFactOrDim) {
+      list = list.filter((n) => !/^(fact|dim|extract)$/i.test(n));
+    }
+
+    return list;
+  }, [datasources, allJoinRelations, cleanTableName]);
+
   const activeTable = tablesList.includes(selectedTable)
     ? selectedTable
-    : tablesList[0] || (datasources[0]?.name || "Main Datasource");
+    : tablesList[0] || (datasources[0]?.name ? cleanTableName(datasources[0].name) : "Main Datasource");
 
-  const activeDs = datasources.find(
-    (ds: any) => ds.name === activeTable || (ds.tables && ds.tables.includes(activeTable))
-  );
+  const activeDs = datasources.find((ds: any) => {
+    const cleanedDs = cleanTableName(ds.name);
+    if (cleanedDs.toLowerCase() === activeTable.toLowerCase()) return true;
+    if (Array.isArray(ds.tables)) {
+      return ds.tables.some((t: any) => cleanTableName(t).toLowerCase() === activeTable.toLowerCase());
+    }
+    return false;
+  });
+
   const activeColsCount = activeDs?.columns ? activeDs.columns.length : 12;
   const activeCalcCount = activeDs?.calculated_field_count ?? calcFields.length;
   const activeConnectionType = activeDs?.connection_type || "Relational SQL";
 
-  const activeRelsSet = new Set<string>();
-  joins.forEach((j: any) => {
-    if (j.left_table === activeTable && j.right_table) activeRelsSet.add(j.right_table);
-    if (j.right_table === activeTable && j.left_table) activeRelsSet.add(j.left_table);
-  });
-  relationships.forEach((r: any) => {
-    if (r.table1 === activeTable && r.table2) activeRelsSet.add(r.table2);
-    if (r.table2 === activeTable && r.table1) activeRelsSet.add(r.table1);
-  });
-  const activeRelsList = Array.from(activeRelsSet);
+  const activeRelsList = useMemo(() => {
+    const set = new Set<string>();
+    if (!activeTable) return [];
+    const activeLower = activeTable.toLowerCase();
+    allJoinRelations.forEach((r) => {
+      if (r.left_table.toLowerCase() === activeLower && r.right_table) {
+        set.add(r.right_table);
+      }
+      if (r.right_table.toLowerCase() === activeLower && r.left_table) {
+        set.add(r.left_table);
+      }
+    });
+    return Array.from(set);
+  }, [activeTable, allJoinRelations]);
 
   // ── Handlers ──
   const handleSelectWs = useCallback((name: string) => {
@@ -1118,7 +1205,7 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
         {/* Table Joins & Linkage Data Model */}
         {allJoinRelations.length > 0 && (
           <div style={{ marginTop: "1rem" }}>
-            <RelationshipDiagram joins={allJoinRelations} />
+            <RelationshipDiagram joins={allJoinRelations} activeTable={activeTable} />
           </div>
         )}
       </div>

@@ -46,6 +46,7 @@ interface StageDetailPanelProps {
   loading?: boolean;
   onExecute?: () => void;
   onSelectStage?: (stageId: string) => void;
+  goldenOverride?: boolean;
 }
 
 export default function StageDetailPanel({
@@ -55,6 +56,7 @@ export default function StageDetailPanel({
   loading: propLoading = false,
   onExecute,
   onSelectStage,
+  goldenOverride = false,
 }: StageDetailPanelProps) {
   const [stage, setStage] = useState<StageDetail | null>(propStage || null);
   const [fetching, setFetching] = useState<boolean>(false);
@@ -127,7 +129,11 @@ export default function StageDetailPanel({
   if (stage.stage_id === "CALC_LOGIC_CONVERSION") {
     return (
       <div className={styles.panel}>
-        <CalcLogicConversionDetail jobUuid={jobUuid} stage={stage} />
+        <CalcLogicConversionDetail
+          jobUuid={jobUuid}
+          stage={stage}
+          goldenOverride={goldenOverride}
+        />
       </div>
     );
   }
@@ -135,7 +141,11 @@ export default function StageDetailPanel({
   if (stage.stage_id === "LAYOUT_GENERATION") {
     return (
       <div className={styles.panel}>
-        <VisualConversionDetail jobUuid={jobUuid} stage={stage} />
+        <VisualConversionDetail
+          jobUuid={jobUuid}
+          stage={stage}
+          goldenOverride={goldenOverride}
+        />
       </div>
     );
   }

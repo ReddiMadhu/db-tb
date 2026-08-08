@@ -25,6 +25,13 @@
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   animation: fadeIn 0.2s var(--easing-default) both;
+  transition: all 0.2s ease;
+}
+
+.joinRowActive {
+  background: rgba(0, 168, 204, 0.08);
+  border-color: rgba(0, 168, 204, 0.4);
+  box-shadow: 0 0 8px rgba(0, 168, 204, 0.2);
 }
 
 .tableBox {
@@ -40,6 +47,13 @@
   color: var(--text-primary);
   font-weight: var(--font-weight-medium);
   white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.tableBoxActive {
+  background: rgba(0, 168, 204, 0.18);
+  border-color: var(--accent-cyan);
+  color: #ffffff;
 }
 
 .columnName {
@@ -54,6 +68,11 @@
   color: var(--text-tertiary);
   font-size: 0.75rem;
   flex-shrink: 0;
+  transition: color 0.2s ease;
+}
+
+.arrowActive {
+  color: var(--accent-cyan);
 }
 
 .joinType {
@@ -70,9 +89,15 @@
   flex-shrink: 0;
 }
 
+.joinTypeActive {
+  background: rgba(0, 168, 204, 0.2);
+  color: #38bdf8;
+}
+
 .empty {
   padding: var(--space-4);
   text-align: center;
   color: var(--text-tertiary);
   font-size: var(--font-size-sm);
 }
+

@@ -196,6 +196,9 @@ export interface StatusResponse {
   created_at: string;
   completed_at: string | null;
   error_bag: ErrorBagItem[];
+  has_output?: boolean;
+  golden_override?: boolean;
+  golden_source?: string | null;
 }
 
 export interface ErrorBagItem {

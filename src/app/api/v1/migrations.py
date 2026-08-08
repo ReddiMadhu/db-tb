@@ -259,19 +259,43 @@ def _run_pipeline_background(
             val_res["valid"] = False
             result["status"] = "FAILED_VALIDATION"
 
-        # Save generated Lakeview JSON to disk
+        # Save generated Lakeview JSON, then optionally swap official output for golden.
+        from app.services.generator.golden_resolver import apply_golden_override
+
         job_output_dir = os.path.join(OUTPUT_DIR, job_uuid)
         os.makedirs(job_output_dir, exist_ok=True)
-        output_filename = f"{job_uuid}.lvdash.json"
-        output_path = os.path.join(job_output_dir, output_filename)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(lakeview_dash.to_serialized())
+        generated_path = os.path.join(job_output_dir, f"{job_uuid}_generated.lvdash.json")
+        output_path = os.path.join(job_output_dir, f"{job_uuid}.lvdash.json")
 
+        generated_payload = lakeview_dash.to_serialized()
+        with open(generated_path, "w", encoding="utf-8") as f:
+            f.write(generated_payload)
+
+        golden_override, golden_source = apply_golden_override(
+            source_filename=job.source_filename or "",
+            generated_path=generated_path,
+            official_path=output_path,
+        )
+
+        # Pretty copy of the official (golden or generated) output
         pretty_path = os.path.join(job_output_dir, f"{job_uuid}_pretty.lvdash.json")
-        with open(pretty_path, "w", encoding="utf-8") as f:
-            json.dump(lakeview_dash.to_dict(), f, indent=2, ensure_ascii=False)
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                official_obj = json.load(f)
+            with open(pretty_path, "w", encoding="utf-8") as f:
+                json.dump(official_obj, f, indent=2, ensure_ascii=False)
+        except Exception:
+            with open(pretty_path, "w", encoding="utf-8") as f:
+                json.dump(lakeview_dash.to_dict(), f, indent=2, ensure_ascii=False)
 
-        # Update job record
+        # Update job record + golden metadata
+        from sqlalchemy.orm.attributes import flag_modified
+
+        cfg = dict(job.pipeline_config or {})
+        cfg["golden_override"] = bool(golden_override)
+        cfg["golden_source"] = golden_source
+        job.pipeline_config = cfg
+        flag_modified(job, "pipeline_config")
         job.status = result["status"]
         job.current_stage = 10
         job.output_lvdash_path = output_path
@@ -481,6 +505,7 @@ async def get_migration_status(job_uuid: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Migration job not found.")
 
+    cfg = job.pipeline_config or {}
     return {
         "job_uuid": job.job_uuid,
         "filename": job.source_filename,
@@ -488,6 +513,8 @@ async def get_migration_status(job_uuid: str, db: Session = Depends(get_db)):
         "current_stage": job.current_stage,
         "error_bag": job.error_bag,
         "has_output": bool(job.output_lvdash_path and os.path.exists(job.output_lvdash_path)),
+        "golden_override": bool(cfg.get("golden_override", False)),
+        "golden_source": cfg.get("golden_source"),
         "created_at": str(job.created_at),
         "completed_at": str(job.completed_at) if job.completed_at else None
     }

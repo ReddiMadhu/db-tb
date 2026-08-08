@@ -22,6 +22,8 @@ export default function MigrationWorkspacePage() {
 
   const [status, setStatus] = useState<string>("INITIALIZED");
   const [filename, setFilename] = useState<string>("");
+  const [goldenOverride, setGoldenOverride] = useState(false);
+  const [goldenSource, setGoldenSource] = useState<string | null>(null);
   const [stages, setStages] = useState<StageSummary[]>([]);
   const [selectedStageId, setSelectedStageId] = useState<string>("UPLOAD");
   const [progress, setProgress] = useState<PipelineProgressType | null>(null);
@@ -39,6 +41,8 @@ export default function MigrationWorkspacePage() {
       ]);
       setStatus(statusRes.status);
       setFilename(statusRes.filename || "");
+      setGoldenOverride(Boolean(statusRes.golden_override));
+      setGoldenSource(statusRes.golden_source ?? null);
       setStages(stagesRes.stages);
 
       // Auto-select a relevant stage
@@ -89,6 +93,11 @@ export default function MigrationWorkspacePage() {
           setStatus(progressRes.job_status);
           setExecuting(false);
           if (pollRef.current) clearInterval(pollRef.current);
+          const statusRes = await getMigrationStatus(jobUuid).catch(() => null);
+          if (statusRes) {
+            setGoldenOverride(Boolean(statusRes.golden_override));
+            setGoldenSource(statusRes.golden_source ?? null);
+          }
           if (progressRes.is_complete) {
             setSelectedStageId(progressRes.job_status === "DEPLOYED" ? "PUBLISH" : "SCHEMA_VALIDATION");
           }
@@ -120,13 +129,19 @@ export default function MigrationWorkspacePage() {
       ]);
       setStatus(statusRes.status);
       setStages(stagesRes.stages);
+      setGoldenOverride(Boolean(statusRes.golden_override));
+      setGoldenSource(statusRes.golden_source ?? null);
       if (["COMPLETED", "DEPLOYED", "FAILED_VALIDATION"].includes(statusRes.status)) {
         setSelectedStageId(statusRes.status === "DEPLOYED" ? "PUBLISH" : "SCHEMA_VALIDATION");
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Pipeline execution failed");
       const statusRes = await getMigrationStatus(jobUuid).catch(() => null);
-      if (statusRes) setStatus(statusRes.status);
+      if (statusRes) {
+        setStatus(statusRes.status);
+        setGoldenOverride(Boolean(statusRes.golden_override));
+        setGoldenSource(statusRes.golden_source ?? null);
+      }
     } finally {
       setExecuting(false);
     }
@@ -187,6 +202,11 @@ export default function MigrationWorkspacePage() {
           </button>
           <div className={styles.jobInfo}>
             <h1 className={styles.jobFilename}>{filename || jobUuid}</h1>
+            {goldenOverride && (
+              <span className={styles.curatedBadge} title={goldenSource || undefined}>
+                ✦ Curated Demo Output
+              </span>
+            )}
           </div>
         </div>
         <div className={styles.actionBarRight}>
@@ -238,6 +258,7 @@ export default function MigrationWorkspacePage() {
           stageId={selectedStageId}
           onExecute={handleExecute}
           onSelectStage={setSelectedStageId}
+          goldenOverride={goldenOverride}
         />
       </div>
     </div>

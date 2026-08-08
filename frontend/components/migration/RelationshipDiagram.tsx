@@ -15,9 +15,10 @@ export interface JoinRelation {
 
 interface RelationshipDiagramProps {
   joins: JoinRelation[];
+  activeTable?: string | null;
 }
 
-export default function RelationshipDiagram({ joins }: RelationshipDiagramProps) {
+export default function RelationshipDiagram({ joins, activeTable }: RelationshipDiagramProps) {
   if (!joins || joins.length === 0) {
     return (
       <div className={styles.empty}>
@@ -32,29 +33,51 @@ export default function RelationshipDiagram({ joins }: RelationshipDiagramProps)
         Detected Relationships ({joins.length})
       </div>
       <div className={styles.diagram}>
-        {joins.map((j, idx) => (
-          <div
-            key={`${j.left_table}-${j.right_table}-${idx}`}
-            className={styles.joinRow}
-            style={{ animationDelay: `${idx * 40}ms` }}
-          >
-            <div className={styles.tableBox}>
-              {j.left_table}
-              <span className={styles.columnName}>.{j.left_column}</span>
+        {joins.map((j, idx) => {
+          const isConnected =
+            Boolean(activeTable) &&
+            (j.left_table.toLowerCase() === activeTable?.toLowerCase() ||
+              j.right_table.toLowerCase() === activeTable?.toLowerCase());
+
+          return (
+            <div
+              key={`${j.left_table}-${j.right_table}-${idx}`}
+              className={`${styles.joinRow} ${isConnected ? styles.joinRowActive : ""}`}
+              style={{ animationDelay: `${idx * 40}ms` }}
+            >
+              <div
+                className={`${styles.tableBox} ${
+                  activeTable && j.left_table.toLowerCase() === activeTable.toLowerCase()
+                    ? styles.tableBoxActive
+                    : ""
+                }`}
+              >
+                {j.left_table}
+                <span className={styles.columnName}>.{j.left_column}</span>
+              </div>
+              <div className={`${styles.arrow} ${isConnected ? styles.arrowActive : ""}`}>
+                <ArrowRight size={14} />
+              </div>
+              <div
+                className={`${styles.tableBox} ${
+                  activeTable && j.right_table.toLowerCase() === activeTable.toLowerCase()
+                    ? styles.tableBoxActive
+                    : ""
+                }`}
+              >
+                {j.right_table}
+                <span className={styles.columnName}>.{j.right_column}</span>
+              </div>
+              {j.join_type && (
+                <span className={`${styles.joinType} ${isConnected ? styles.joinTypeActive : ""}`}>
+                  {j.join_type}
+                </span>
+              )}
             </div>
-            <div className={styles.arrow}>
-              <ArrowRight size={14} />
-            </div>
-            <div className={styles.tableBox}>
-              {j.right_table}
-              <span className={styles.columnName}>.{j.right_column}</span>
-            </div>
-            {j.join_type && (
-              <span className={styles.joinType}>{j.join_type}</span>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
 }
+

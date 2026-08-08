@@ -845,3 +845,63 @@
   color: var(--text-tertiary);
   font-size: var(--font-size-sm);
 }
+
+/* -- Golden mode master-detail -- */
+.goldenLayout {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.goldenRail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 0.75rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  position: sticky;
+  top: 0.5rem;
+}
+
+.goldenRailTitle {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary, #8b949e);
+  margin-bottom: 0.35rem;
+  padding: 0 0.35rem;
+}
+
+.goldenRailItem {
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary, #8b949e);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.45rem 0.55rem;
+  cursor: pointer;
+}
+
+.goldenRailItem:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, #f0f6fc);
+}
+
+.goldenRailItemActive {
+  background: rgba(0, 168, 204, 0.12);
+  border-color: rgba(0, 168, 204, 0.35);
+  color: var(--accent-cyan, #00a8cc);
+}
+
+@media (max-width: 900px) {
+  .goldenLayout {
+    grid-template-columns: 1fr;
+  }
+}

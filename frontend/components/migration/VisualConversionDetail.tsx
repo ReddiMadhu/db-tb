@@ -28,13 +28,18 @@ import {
   Zap,
 } from "lucide-react";
 import type { StageDetail } from "@/lib/types";
-import { exportMigrationAsset } from "@/lib/api";
+import { exportMigrationAsset, getLakeviewJson, getStageDetail } from "@/lib/api";
 import ReviewCardActions from "./ReviewCardActions";
+import {
+  LakeviewDashboardAdapter,
+  type MatchedPair,
+} from "@/lib/lakeviewDashboardAdapter";
 import styles from "./VisualConversionDetail.module.css";
 
 interface VisualConversionDetailProps {
   jobUuid: string;
   stage: StageDetail;
+  goldenOverride?: boolean;
 }
 
 export interface TableauVisualDef {
@@ -381,6 +386,7 @@ const DEFAULT_CONVERSION_CARDS: ConversionCardItem[] = [
 export default function VisualConversionDetail({
   jobUuid,
   stage,
+  goldenOverride = false,
 }: VisualConversionDetailProps) {
   const [activeTab, setActiveTab] = useState<"CARDS" | "JSON" | "MANUAL_REVIEW">("CARDS");
   const [searchQuery, setSearchQuery] = useState("");
@@ -394,6 +400,10 @@ export default function VisualConversionDetail({
   const [actionOk, setActionOk] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [goldenJson, setGoldenJson] = useState<unknown | null>(null);
+  const [goldenLoading, setGoldenLoading] = useState(false);
+  const [goldenEmptyReason, setGoldenEmptyReason] = useState<string | null>(null);
+  const [selectedGoldenId, setSelectedGoldenId] = useState<string | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -419,50 +429,211 @@ export default function VisualConversionDetail({
     : [];
   const chromeWidgets = Array.isArray(artifacts.chrome_widgets) ? artifacts.chrome_widgets : [];
 
-  // Build conversion cards from backend artifacts or fall back cleanly
-  const rawCards: ConversionCardItem[] = Array.isArray(artifacts.conversion_cards) && artifacts.conversion_cards.length > 0
-    ? artifacts.conversion_cards
-    : Array.isArray(artifacts.widgets) && artifacts.widgets.length > 0
-    ? artifacts.widgets
-        .filter((w: any) => w.type === "chart")
-        .map((w: any, idx: number) => ({
-          id: `widget-${idx}`,
-          worksheet_name: w.name || w.title || `Worksheet ${idx + 1}`,
-          status: "SUCCESS" as const,
-          tableau: {
-            type: w.visual_type_label || w.visual_type || "Chart",
-            rows: [],
-            columns: [],
-          },
-          databricks: {
-            widget_type: w.visual_type_label || w.visual_type || w.type || "Chart",
-            dataset: w.dataset || "",
-            category: w.encodings?.x || w.encodings?.color || undefined,
-            value: w.encodings?.y || w.encodings?.angle || undefined,
-            aggregation: "SUM",
-          },
-          lakeview_json: {
-            widgetType: w.visual_type || "bar",
-            datasetName: w.dataset || "",
-            encodings: w.encodings || {},
-            frame: { title: w.name || w.title },
-          },
-          validation: {
-            visual_type_preserved: true,
-            fields_correctly_mapped: true,
-            filters_preserved: true,
-            aggregations_preserved: true,
-            formatting_preserved: true,
-            sort_order_preserved: true,
-            tooltip_preserved: true,
-            calculations_preserved: true,
-          },
-        }))
-    : DEFAULT_CONVERSION_CARDS;
+  const artifactCards: ConversionCardItem[] =
+    Array.isArray(artifacts.conversion_cards) && artifacts.conversion_cards.length > 0
+      ? artifacts.conversion_cards
+      : Array.isArray(artifacts.widgets) && artifacts.widgets.length > 0
+      ? artifacts.widgets
+          .filter((w: any) => w.type === "chart")
+          .map((w: any, idx: number) => ({
+            id: `widget-${idx}`,
+            worksheet_name: w.name || w.title || `Worksheet ${idx + 1}`,
+            status: "SUCCESS" as const,
+            tableau: {
+              type: w.visual_type_label || w.visual_type || "Chart",
+              rows: [],
+              columns: [],
+            },
+            databricks: {
+              widget_type: w.visual_type_label || w.visual_type || w.type || "Chart",
+              dataset: w.dataset || "",
+              category: w.encodings?.x || w.encodings?.color || undefined,
+              value: w.encodings?.y || w.encodings?.angle || undefined,
+              aggregation: "SUM",
+            },
+            lakeview_json: {
+              widgetType: w.visual_type || "bar",
+              datasetName: w.dataset || "",
+              encodings: w.encodings || {},
+              frame: { title: w.name || w.title },
+            },
+            validation: {
+              visual_type_preserved: true,
+              fields_correctly_mapped: true,
+              filters_preserved: true,
+              aggregations_preserved: true,
+              formatting_preserved: true,
+              sort_order_preserved: true,
+              tooltip_preserved: true,
+              calculations_preserved: true,
+            },
+          }))
+      : [];
+
+  // Non-golden: artifacts → widgets → DEFAULT. Golden: never DEFAULT.
+  const rawCards: ConversionCardItem[] = goldenOverride
+    ? []
+    : artifactCards.length > 0
+      ? artifactCards
+      : DEFAULT_CONVERSION_CARDS;
 
   useEffect(() => {
+    if (goldenOverride) return;
     setCardsState(rawCards);
-  }, [stage.artifacts, stage.generated_code]);
+  }, [stage.artifacts, stage.generated_code, goldenOverride]);
+
+  useEffect(() => {
+    if (!goldenOverride) {
+      setGoldenJson(null);
+      setGoldenEmptyReason(null);
+      return;
+    }
+
+    let cancelled = false;
+    setGoldenLoading(true);
+    setGoldenEmptyReason(null);
+
+    (async () => {
+      try {
+        const [json, parseStage] = await Promise.all([
+          getLakeviewJson(jobUuid),
+          getStageDetail(jobUuid, "PARSE").catch(() => null),
+        ]);
+        if (cancelled) return;
+        setGoldenJson(json);
+
+        const adapter = new LakeviewDashboardAdapter(json);
+        const tableauNames: string[] = [];
+        const seen = new Set<string>();
+        for (const c of artifactCards) {
+          const n = c.worksheet_name;
+          if (n && !seen.has(n)) {
+            seen.add(n);
+            tableauNames.push(n);
+          }
+        }
+        const parseArtifacts = (parseStage?.artifacts || {}) as Record<string, any>;
+        const detailed = Array.isArray(parseArtifacts.detailed_visuals)
+          ? parseArtifacts.detailed_visuals
+          : [];
+        for (const v of detailed) {
+          const n = v?.name || v?.worksheet_name || v?.title;
+          if (typeof n === "string" && n && !seen.has(n)) {
+            seen.add(n);
+            tableauNames.push(n);
+          }
+        }
+        const wsList = Array.isArray(parseArtifacts.worksheets) ? parseArtifacts.worksheets : [];
+        for (const w of wsList) {
+          const n = typeof w === "string" ? w : w?.name;
+          if (typeof n === "string" && n && !seen.has(n)) {
+            seen.add(n);
+            tableauNames.push(n);
+          }
+        }
+        if (tableauNames.length === 0 && Array.isArray(artifacts.pages)) {
+          for (const p of artifacts.pages) {
+            const ws = p?.worksheets || p?.worksheet_names || [];
+            if (Array.isArray(ws)) {
+              for (const n of ws) {
+                if (typeof n === "string" && n && !seen.has(n)) {
+                  seen.add(n);
+                  tableauNames.push(n);
+                }
+              }
+            }
+          }
+        }
+
+        const pairs: MatchedPair[] = adapter.matchWorksheets(tableauNames);
+        if (pairs.length === 0) {
+          setCardsState([]);
+          setGoldenEmptyReason(
+            "No matched visuals between Tableau worksheets and curated Lakeview widgets"
+          );
+          setSelectedGoldenId(null);
+          return;
+        }
+
+        const byName = new Map(
+          artifactCards.map((c) => [c.worksheet_name, c] as const)
+        );
+
+        const goldenCards: ConversionCardItem[] = pairs.map((pair, idx) => {
+          const w = pair.widget;
+          const existing = byName.get(pair.tableauWorksheetName);
+          const axes = adapter.getAxes(w);
+          const dims = adapter.getDimensions(w);
+          const measures = adapter.getMeasures(w);
+          const aggs = adapter.getAggregations(w);
+          const filters = adapter.getFilters(w);
+          const visualType = adapter.getVisualType(w);
+
+          return {
+            id: `golden-${w.id || idx}`,
+            worksheet_name: pair.tableauWorksheetName,
+            status: "SUCCESS" as const,
+            tableau: existing?.tableau || {
+              type: "N/A",
+              rows: dims,
+              columns: measures,
+              filters: [],
+              calculated_fields: [],
+            },
+            databricks: {
+              widget_type: visualType,
+              dataset: adapter.getDataset(w),
+              category: dims[0],
+              value: measures[0],
+              x_axis: axes.x.join(", ") || undefined,
+              y_axis: axes.y.join(", ") || undefined,
+              filters: filters.length ? filters : undefined,
+              aggregation: aggs.join(", ") || undefined,
+            },
+            lakeview_json: {
+              widgetType: w.widgetType,
+              datasetName: w.datasetName,
+              encodings: (w.raw.spec as any)?.encodings || {},
+              frame: { title: w.title },
+              dimensions: dims,
+              measures,
+              aggregations: aggs,
+              filters,
+              query: adapter.getQuery(w),
+              axes,
+            },
+            validation: existing?.validation || {
+              visual_type_preserved: true,
+              fields_correctly_mapped: true,
+              filters_preserved: true,
+              aggregations_preserved: true,
+              formatting_preserved: true,
+              sort_order_preserved: true,
+              tooltip_preserved: true,
+              calculations_preserved: true,
+            },
+          };
+        });
+
+        setCardsState(goldenCards);
+        setSelectedGoldenId(goldenCards[0]?.id ?? null);
+        setGoldenEmptyReason(null);
+      } catch (err: any) {
+        if (!cancelled) {
+          setCardsState([]);
+          setGoldenEmptyReason(err?.message || "Failed to load curated Lakeview JSON");
+        }
+      } finally {
+        if (!cancelled) setGoldenLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // artifactCards identity changes each render — key off stage artifacts
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goldenOverride, jobUuid, stage.artifacts]);
 
   // Filtered Cards
   const cards = cardsState.filter((card) => {
@@ -478,7 +649,12 @@ export default function VisualConversionDetail({
       (statusFilter === "REVIEW" && card.status === "MANUAL_REVIEW") ||
       (statusFilter === "UNSUPPORTED" && card.status === "UNSUPPORTED");
 
-    return matchesSearch && matchesStatus;
+    const matchesSelection =
+      !goldenOverride ||
+      !selectedGoldenId ||
+      card.id === selectedGoldenId;
+
+    return matchesSearch && matchesStatus && matchesSelection;
   });
 
   // Calculate Conversion Summary Metrics
@@ -513,7 +689,9 @@ export default function VisualConversionDetail({
   };
 
   // Full Published Databricks Lakeview JSON
-  const fullPublishedJson = artifacts.lakeview_json_str
+  const fullPublishedJson = goldenOverride && goldenJson
+    ? JSON.stringify(goldenJson, null, 2)
+    : artifacts.lakeview_json_str
     ? artifacts.lakeview_json_str
     : JSON.stringify(
         {
@@ -829,9 +1007,37 @@ export default function VisualConversionDetail({
 
       {/* ── TAB 1: VISUAL CONVERSION CARDS ── */}
       {activeTab === "CARDS" && (
+        <div className={goldenOverride ? styles.goldenLayout : undefined}>
+          {goldenOverride && cardsState.length > 0 && (
+            <div className={styles.goldenRail}>
+              <div className={styles.goldenRailTitle}>Worksheets</div>
+              {cardsState.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`${styles.goldenRailItem} ${
+                    selectedGoldenId === c.id ? styles.goldenRailItemActive : ""
+                  }`}
+                  onClick={() => {
+                    setSelectedGoldenId(c.id);
+                    setExpandedCardIds((prev) => ({ ...prev, [c.id]: true }));
+                  }}
+                >
+                  {c.worksheet_name}
+                </button>
+              ))}
+            </div>
+          )}
         <div className={styles.cardsList}>
-          {cards.length === 0 ? (
-            <div className={styles.emptyState}>No visual conversion cards match your search filter.</div>
+          {goldenLoading ? (
+            <div className={styles.emptyState}>Loading curated Lakeview visuals…</div>
+          ) : cards.length === 0 ? (
+            <div className={styles.emptyState}>
+              {goldenOverride
+                ? goldenEmptyReason ||
+                  "No matched visuals between Tableau worksheets and curated Lakeview widgets"
+                : "No visual conversion cards match your search filter."}
+            </div>
           ) : (
             cards.map((card) => {
               const isCardExpanded = !!expandedCardIds[card.id];
@@ -1216,6 +1422,7 @@ export default function VisualConversionDetail({
               );
             })
           )}
+        </div>
         </div>
       )}
 
