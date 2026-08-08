@@ -1087,17 +1087,22 @@ def normalize_tom_to_ubim(
                     if alias:
                         ds_columns.add(alias)
 
-        if workbook_meta and workbook_meta.calculated_fields:
-            for cf in workbook_meta.calculated_fields:
-                if cf.caption:
-                    ds_columns.add(cf.caption)
-                if cf.name:
-                    ds_columns.add(cf.name)
-                if cf.internal_name:
-                    ds_columns.add(cf.internal_name)
-                alias = _make_safe_alias(cf.caption or cf.name or cf.internal_name or "")
-                if alias:
-                    ds_columns.add(alias)
+        if workbook_meta and getattr(workbook_meta, "datasources", None):
+            for ds_obj in workbook_meta.datasources:
+                if getattr(ds_obj, "calculated_fields", None):
+                    for cf in ds_obj.calculated_fields:
+                        c_cap = getattr(cf, "caption", None)
+                        c_name = getattr(cf, "name", None)
+                        c_internal = getattr(cf, "internal_name", None)
+                        if c_cap:
+                            ds_columns.add(c_cap)
+                        if c_name:
+                            ds_columns.add(c_name)
+                        if c_internal:
+                            ds_columns.add(c_internal)
+                        alias = _make_safe_alias(c_cap or c_name or c_internal or "")
+                        if alias:
+                            ds_columns.add(alias)
 
         if ds_columns:
             valid_dims = []
