@@ -18,12 +18,10 @@ import {
 import type { StageDetail } from "@/lib/types";
 import { getLakeviewJson, getStageDetail, getMigrationStatus } from "@/lib/api";
 import {
-  LakeviewDashboardAdapter,
   buildCalcLabelMap,
-  fieldAliasKeys,
-  normalizeName,
+  buildSemanticExprIndex,
   resolveCalcLabel,
-  type MatchedPair,
+  resolveSemanticExpr,
 } from "@/lib/lakeviewDashboardAdapter";
 import styles from "./CalcLogicConversionDetail.module.css";
 
@@ -50,11 +48,8 @@ export default function CalcLogicConversionDetail({
   const [copiedScript, setCopiedScript] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
 
-  const [goldenLoading, setGoldenLoading] = useState(false);
-  const [matchedPairs, setMatchedPairs] = useState<MatchedPair[]>([]);
-  const [selectedWorksheet, setSelectedWorksheet] = useState<string | null>(null);
   const [parseCalcs, setParseCalcs] = useState<Array<Record<string, unknown>>>([]);
-  const [adapter, setAdapter] = useState<LakeviewDashboardAdapter | null>(null);
+  const [goldenExprIndex, setGoldenExprIndex] = useState<Map<string, string>>(() => new Map());
   const [resolvedGolden, setResolvedGolden] = useState(Boolean(goldenOverride));
 
   useEffect(() => {
@@ -79,14 +74,12 @@ export default function CalcLogicConversionDetail({
 
   useEffect(() => {
     if (!isGolden) {
-      setMatchedPairs([]);
-      setSelectedWorksheet(null);
-      setAdapter(null);
+      setGoldenExprIndex(new Map());
+      setParseCalcs([]);
       return;
     }
 
     let cancelled = false;
-    setGoldenLoading(true);
 
     (async () => {
       try {
@@ -112,49 +105,12 @@ export default function CalcLogicConversionDetail({
           ? parseArtifacts.calculated_fields
           : [];
         setParseCalcs(calcs);
-
-        const lv = new LakeviewDashboardAdapter(dashboardJson);
-        setAdapter(lv);
-
-        const names: string[] = [];
-        const seen = new Set<string>();
-        const detailed = Array.isArray(parseArtifacts.detailed_visuals)
-          ? parseArtifacts.detailed_visuals
-          : [];
-        for (const v of detailed) {
-          const n = v?.name || v?.worksheet_name || v?.title;
-          if (typeof n === "string" && n && !seen.has(n)) {
-            seen.add(n);
-            names.push(n);
-          }
-        }
-        const wsList = Array.isArray(parseArtifacts.worksheets) ? parseArtifacts.worksheets : [];
-        for (const w of wsList) {
-          const n = typeof w === "string" ? w : w?.name;
-          if (typeof n === "string" && n && !seen.has(n)) {
-            seen.add(n);
-            names.push(n);
-          }
-        }
-        if (names.length === 0) {
-          for (const w of lv.getChartWidgets()) {
-            if (w.title && !seen.has(w.title)) {
-              seen.add(w.title);
-              names.push(w.title);
-            }
-          }
-        }
-
-        const pairs = lv.matchWorksheets(names);
-        setMatchedPairs(pairs);
-        setSelectedWorksheet(pairs[0]?.tableauWorksheetName ?? null);
+        setGoldenExprIndex(buildSemanticExprIndex(dashboardJson));
       } catch {
         if (!cancelled) {
-          setMatchedPairs([]);
-          setSelectedWorksheet(null);
+          setGoldenExprIndex(new Map());
+          setParseCalcs([]);
         }
-      } finally {
-        if (!cancelled) setGoldenLoading(false);
       }
     })();
 
@@ -168,17 +124,7 @@ export default function CalcLogicConversionDetail({
     [rawConversions, parseCalcs]
   );
 
-  const selectedPair = useMemo(
-    () => matchedPairs.find((p) => p.tableauWorksheetName === selectedWorksheet) || null,
-    [matchedPairs, selectedWorksheet]
-  );
-
-  const selectedFieldKeys = useMemo(() => {
-    if (!adapter || !selectedPair) return new Set<string>();
-    return adapter.getNormalizedFieldKeys(selectedPair.widget);
-  }, [adapter, selectedPair]);
-
-  /** Filter conversions: search/type always; golden mode also requires field linkage. */
+  /** Filter conversions: search + type only (all calcs, golden or not). */
   const filteredConversions = rawConversions.filter((item: any) => {
     const caption = item.caption || item.name || "";
     const nameStr = caption.toLowerCase();
@@ -207,24 +153,6 @@ export default function CalcLogicConversionDetail({
       ) {
         return false;
       }
-    }
-
-    if (isGolden && selectedWorksheet) {
-      // Must link to selected golden widget field set
-      const candidates = [
-        item.caption,
-        item.name,
-        item.internal_name,
-      ].filter(Boolean) as string[];
-
-      const linked = candidates.some((c) => {
-        const aliases = fieldAliasKeys(c);
-        if (aliases.some((a) => selectedFieldKeys.has(a))) return true;
-        if (selectedFieldKeys.has(c)) return true;
-        const label = resolveCalcLabel(c, calcLabelMap);
-        return fieldAliasKeys(label).some((a) => selectedFieldKeys.has(a));
-      });
-      return linked;
     }
 
     return true;
@@ -270,21 +198,14 @@ export default function CalcLogicConversionDetail({
     return resolveCalcLabel(raw, calcLabelMap);
   };
 
-  const usageFor = (item: any) => {
-    if (!selectedPair || !adapter) return null;
-    const fields = adapter.getFieldNames(selectedPair.widget);
-    const label = displayNameFor(item);
-    const matchedField =
-      fields.find((f) => normalizeName(f) === normalizeName(label)) ||
-      fields.find((f) => normalizeName(f) === normalizeName(item.name)) ||
-      fields.find((f) => normalizeName(f) === normalizeName(item.caption)) ||
-      null;
-    return {
-      usedBy: selectedPair.tableauWorksheetName,
-      widgetTitle: selectedPair.widget.title,
-      field: matchedField || label,
-      sourceFields: adapter.getDimensions(selectedPair.widget).concat(adapter.getMeasures(selectedPair.widget)),
-    };
+  const databricksSqlFor = (item: any): { sql: string; fromGolden: boolean } => {
+    if (isGolden && goldenExprIndex.size > 0) {
+      const golden = resolveSemanticExpr(item, goldenExprIndex, calcLabelMap);
+      if (golden) return { sql: golden, fromGolden: true };
+    }
+    const compiled = typeof item.compiled_sql === "string" ? item.compiled_sql.trim() : "";
+    if (compiled) return { sql: compiled, fromGolden: false };
+    return { sql: "/* No Databricks SQL for this calculation */", fromGolden: false };
   };
 
   return (
@@ -345,189 +266,126 @@ export default function CalcLogicConversionDetail({
 
       {/* ── TAB 1: FORMULA CARDS ── */}
       {activeTab === "CARDS" && (
-        <div className={isGolden ? styles.goldenLayout : undefined}>
-          {isGolden && (
-            <div className={styles.goldenRail}>
-              <div className={styles.goldenRailTitle}>Worksheets</div>
-              {goldenLoading && <div className={styles.emptyState}>Loading…</div>}
-              {!goldenLoading && matchedPairs.length === 0 && (
-                <div className={styles.emptyState}>
-                  No matched visuals between Tableau worksheets and Lakeview widgets
-                </div>
-              )}
-              {matchedPairs.map((p) => (
-                <button
-                  key={p.tableauWorksheetName}
-                  type="button"
-                  className={`${styles.goldenRailItem} ${
-                    selectedWorksheet === p.tableauWorksheetName ? styles.goldenRailItemActive : ""
-                  }`}
-                  onClick={() => setSelectedWorksheet(p.tableauWorksheetName)}
-                >
-                  {p.tableauWorksheetName}
-                </button>
-              ))}
-            </div>
-          )}
+        <div className={styles.cardsList}>
+          {filteredConversions.length === 0 ? (
+            <div className={styles.emptyState}>No calculated fields match your search filter.</div>
+          ) : (
+            filteredConversions.map((item: any, idx: number) => {
+              const origFormula = (item.original_formula || "").trim();
+              const { sql: displaySql, fromGolden } = databricksSqlFor(item);
+              const compiledSql = typeof item.compiled_sql === "string" ? item.compiled_sql : "";
+              const status = item.validation_status || "VALID";
+              const isFail = status === "FAIL" || /Unable to transpile/i.test(compiledSql);
+              const isWarn =
+                status === "WARNING" || (!isFail && (item.is_table_calc || status === "WARNING"));
+              const formulaType = item.formula_type || "STANDARD";
+              const title = displayNameFor(item);
 
-          <div className={styles.cardsList}>
-            {isGolden && selectedWorksheet && filteredConversions.length === 0 && !goldenLoading ? (
-              <div className={styles.emptyState}>
-                No linked calculations found for this worksheet.
-              </div>
-            ) : filteredConversions.length === 0 ? (
-              <div className={styles.emptyState}>No calculated fields match your search filter.</div>
-            ) : (
-              filteredConversions.map((item: any, idx: number) => {
-                const origFormula = (item.original_formula || "").trim();
-                const compiledSql = item.compiled_sql || "";
-                const status = item.validation_status || "VALID";
-                const isFail = status === "FAIL" || /Unable to transpile/i.test(compiledSql);
-                const isWarn =
-                  status === "WARNING" || (!isFail && (item.is_table_calc || status === "WARNING"));
-                const formulaType = item.formula_type || "STANDARD";
-                const title = displayNameFor(item);
-                const usage = isGolden ? usageFor(item) : null;
-
-                return (
-                  <div key={idx} className={styles.conversionCard}>
-                    <div className={styles.cardHeader}>
-                      <div className={styles.cardTitleGroup}>
-                        <span className={styles.cardFieldTitle}>{title}</span>
-                        <span className={styles.formulaTypeBadge}>{formulaType}</span>
-                        {item.datasource && (
-                          <span className={styles.datasourceBadge}>
-                            Source:{" "}
-                            {item.datasource.startsWith("federated.")
-                              ? "Datasource"
-                              : item.datasource}
-                          </span>
-                        )}
-                      </div>
-                      <div>
-                        {isFail ? (
-                          <span className={styles.statusBadgeWarn}>
-                            <AlertTriangle size={13} /> Failed to transpile
-                          </span>
-                        ) : isWarn ? (
-                          <span className={styles.statusBadgeWarn}>
-                            <AlertTriangle size={13} /> Requires Review
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className={styles.sideBySideGrid}>
-                      <div className={styles.codeColumn}>
-                        <div className={styles.codeColumnHeader}>
-                          <span className={styles.codeColumnTitleTableau}>
-                            <FileText size={13} /> Tableau Calculated Field / Formula
-                          </span>
-                          <button
-                            className={styles.copyBtn}
-                            onClick={() => copyToClipboard(origFormula || item.name || "", `orig-${idx}`)}
-                            disabled={!origFormula}
-                          >
-                            {copiedIndex === `orig-${idx}` ? (
-                              <>
-                                <Check size={12} style={{ color: "var(--accent-green)" }} /> Copied
-                              </>
-                            ) : (
-                              <>
-                                <Copy size={12} /> Copy Formula
-                              </>
-                            )}
-                          </button>
-                        </div>
-                        <pre className={styles.codeBlock}>
-                          <code>{origFormula || "/* No Tableau formula on this field */"}</code>
-                        </pre>
-                        {compiledSql && (
-                          <pre className={`${styles.codeBlock} ${styles.codeBlockSql}`} style={{ marginTop: "0.5rem" }}>
-                            <code>{compiledSql}</code>
-                          </pre>
-                        )}
-                      </div>
-
-                      <div className={styles.centerArrowDivider}>
-                        <ArrowRight size={18} />
-                        <span className={styles.arrowLabel}>
-                          {isGolden ? "Used In" : "Converted To"}
+              return (
+                <div key={idx} className={styles.conversionCard}>
+                  <div className={styles.cardHeader}>
+                    <div className={styles.cardTitleGroup}>
+                      <span className={styles.cardFieldTitle}>{title}</span>
+                      <span className={styles.formulaTypeBadge}>{formulaType}</span>
+                      {fromGolden && (
+                        <span className={styles.goldenSqlBadge} title="SQL from golden Lakeview semantic model">
+                          <ShieldCheck size={12} /> Golden
                         </span>
-                      </div>
-
-                      <div className={styles.codeColumn}>
-                        <div className={styles.codeColumnHeader}>
-                          <span className={styles.codeColumnTitleDatabricks}>
-                            <Code2 size={13} />{" "}
-                            {isGolden
-                              ? "Lakeview Visual Usage"
-                              : "Databricks Spark SQL Conversion"}
-                          </span>
-                          {!isGolden && (
-                            <button
-                              className={styles.copyBtn}
-                              onClick={() => copyToClipboard(compiledSql, `sql-${idx}`)}
-                            >
-                              {copiedIndex === `sql-${idx}` ? (
-                                <>
-                                  <Check size={12} style={{ color: "var(--accent-green)" }} /> Copied
-                                </>
-                              ) : (
-                                <>
-                                  <Copy size={12} /> Copy SQL
-                                </>
-                              )}
-                            </button>
-                          )}
-                        </div>
-                        {isGolden && usage ? (
-                          <div className={styles.usagePanel}>
-                            <div>
-                              <div className={styles.usageLabel}>Calculated Field</div>
-                              <div className={styles.usageValue}>{title}</div>
-                            </div>
-                            <div>
-                              <div className={styles.usageLabel}>Used By</div>
-                              <div className={styles.usageValue}>{usage.usedBy}</div>
-                            </div>
-                            <div>
-                              <div className={styles.usageLabel}>Lakeview Widget</div>
-                              <div className={styles.usageValue}>{usage.widgetTitle}</div>
-                            </div>
-                            <div>
-                              <div className={styles.usageLabel}>Field in Visual</div>
-                              <div className={styles.usageValue}>{usage.field}</div>
-                            </div>
-                            {usage.sourceFields.length > 0 && (
-                              <div>
-                                <div className={styles.usageLabel}>Source Fields</div>
-                                <div className={styles.usageValue}>{usage.sourceFields.join(", ")}</div>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <pre className={`${styles.codeBlock} ${styles.codeBlockSql}`}>
-                            <code>{compiledSql || "/* No SQL generated */"}</code>
-                          </pre>
-                        )}
-                      </div>
-                    </div>
-
-                    {item.ai_explanation && (
-                      <div className={styles.explanationFooter}>
-                        <Sparkles size={14} className={styles.sparkleIcon} />
-                        <span>
-                          <strong>SQL Translation Note: </strong>
-                          {item.ai_explanation}
+                      )}
+                      {item.datasource && (
+                        <span className={styles.datasourceBadge}>
+                          Source:{" "}
+                          {item.datasource.startsWith("federated.")
+                            ? "Datasource"
+                            : item.datasource}
                         </span>
-                      </div>
-                    )}
+                      )}
+                    </div>
+                    <div>
+                      {isFail ? (
+                        <span className={styles.statusBadgeWarn}>
+                          <AlertTriangle size={13} /> Failed to transpile
+                        </span>
+                      ) : isWarn ? (
+                        <span className={styles.statusBadgeWarn}>
+                          <AlertTriangle size={13} /> Requires Review
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                );
-              })
-            )}
-          </div>
+
+                  <div className={styles.sideBySideGrid}>
+                    <div className={styles.codeColumn}>
+                      <div className={styles.codeColumnHeader}>
+                        <span className={styles.codeColumnTitleTableau}>
+                          <FileText size={13} /> Tableau Calculated Field / Formula
+                        </span>
+                        <button
+                          className={styles.copyBtn}
+                          onClick={() => copyToClipboard(origFormula || item.name || "", `orig-${idx}`)}
+                          disabled={!origFormula}
+                        >
+                          {copiedIndex === `orig-${idx}` ? (
+                            <>
+                              <Check size={12} style={{ color: "var(--accent-green)" }} /> Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy size={12} /> Copy Formula
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <pre className={styles.codeBlock}>
+                        <code>{origFormula || "/* No Tableau formula on this field */"}</code>
+                      </pre>
+                    </div>
+
+                    <div className={styles.centerArrowDivider}>
+                      <ArrowRight size={18} />
+                      <span className={styles.arrowLabel}>Converted To</span>
+                    </div>
+
+                    <div className={styles.codeColumn}>
+                      <div className={styles.codeColumnHeader}>
+                        <span className={styles.codeColumnTitleDatabricks}>
+                          <Code2 size={13} /> Databricks Spark SQL Conversion
+                        </span>
+                        <button
+                          className={styles.copyBtn}
+                          onClick={() => copyToClipboard(displaySql, `sql-${idx}`)}
+                          disabled={!displaySql || displaySql.startsWith("/* No Databricks")}
+                        >
+                          {copiedIndex === `sql-${idx}` ? (
+                            <>
+                              <Check size={12} style={{ color: "var(--accent-green)" }} /> Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy size={12} /> Copy SQL
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <pre className={`${styles.codeBlock} ${styles.codeBlockSql}`}>
+                        <code>{displaySql}</code>
+                      </pre>
+                    </div>
+                  </div>
+
+                  {item.ai_explanation && (
+                    <div className={styles.explanationFooter}>
+                      <Sparkles size={14} className={styles.sparkleIcon} />
+                      <span>
+                        <strong>SQL Translation Note: </strong>
+                        {item.ai_explanation}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       )}
 
