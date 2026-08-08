@@ -72,8 +72,11 @@ export interface TableauDatasourceInfo {
   tables: {
     name: string;
     raw_name: string;
+    source?: string;
     is_unresolved: boolean;
     clean_name: string;
+    /** Already-qualified UC path parsed from Tableau relation table/source */
+    uc_fqn?: string | null;
   }[];
   column_count: number;
   worksheets: string[];
