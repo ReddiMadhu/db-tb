@@ -473,6 +473,14 @@ class WorkbookMetadata(BaseModel):
     parse_warnings: List[str] = Field(default_factory=list)
 
     @property
+    def calculated_fields(self) -> List[CalculatedFieldMetadata]:
+        """Flat view of all datasource calculated fields (workbook has none of its own)."""
+        out: List[CalculatedFieldMetadata] = []
+        for ds in self.datasources or []:
+            out.extend(ds.calculated_fields or [])
+        return out
+
+    @property
     def has_databricks_connections(self) -> bool:
         """True if any datasource connects to Databricks."""
         return len(self.databricks_connections) > 0

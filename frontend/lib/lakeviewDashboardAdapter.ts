@@ -95,6 +95,69 @@ export function fieldAliasKeys(raw: string | null | undefined): string[] {
   return Array.from(keys);
 }
 
+/**
+ * Index Lakeview semantic-model measure/dimension expressions by normalized name.
+ * Used by Formula Conversion to show golden SQL when a calc caption/name matches.
+ */
+export function buildSemanticExprIndex(dashboardJson: unknown): Map<string, string> {
+  const index = new Map<string, string>();
+  const root = asRecord(dashboardJson);
+  if (!root) return index;
+
+  const datasets = asArray(root.datasets);
+  for (const ds of datasets) {
+    const d = asRecord(ds);
+    const config = asRecord(d?.config);
+    if (!config) continue;
+
+    const ingest = (items: unknown) => {
+      for (const item of asArray(items)) {
+        const rec = asRecord(item);
+        if (!rec) continue;
+        const name = typeof rec.name === "string" ? rec.name : "";
+        const expr = typeof rec.expr === "string" ? rec.expr.trim() : "";
+        if (!name || !expr) continue;
+        for (const key of fieldAliasKeys(name)) {
+          if (key && !index.has(key)) index.set(key, expr);
+        }
+      }
+    };
+
+    ingest(config.measures);
+    ingest(config.dimensions);
+  }
+  return index;
+}
+
+/** Resolve a calculation row to a golden semantic expr, if any. */
+export function resolveSemanticExpr(
+  item: Record<string, unknown>,
+  exprIndex: Map<string, string>,
+  calcLabelMap?: Record<string, string>
+): string | null {
+  if (!exprIndex.size) return null;
+  const candidates: string[] = [];
+  for (const key of ["caption", "name", "internal_name"] as const) {
+    const v = item[key];
+    if (typeof v === "string" && v.trim()) candidates.push(v.trim());
+  }
+  if (calcLabelMap) {
+    for (const c of [...candidates]) {
+      const label = resolveCalcLabel(c, calcLabelMap);
+      if (label && !candidates.includes(label)) candidates.push(label);
+    }
+  }
+  for (const c of candidates) {
+    for (const alias of fieldAliasKeys(c)) {
+      const hit = exprIndex.get(alias);
+      if (hit) return hit;
+    }
+    const direct = exprIndex.get(c);
+    if (direct) return direct;
+  }
+  return null;
+}
+
 function humanizeFieldLabel(raw: string): string {
   if (!raw) return raw;
   let s = raw;
