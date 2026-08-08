@@ -21,6 +21,7 @@ from app.services.mapper.datasource_mapper import (
     is_unresolved_table,
     clean_table_name_for_catalog,
     parse_uc_fqn_from_tableau_table,
+    normalize_mapping_status_for_save,
 )
 from app.services.mapper.unity_catalog_service import (
     UnityCatalogService,
@@ -513,14 +514,17 @@ async def save_mappings(
     # Delete existing mappings
     db.query(DatasourceMapping).filter(DatasourceMapping.job_id == job.id).delete()
 
-    # Save new mappings
+    # Save new mappings. Any row with a target is treated as confirmed for
+    # pipeline readiness (AUTO_DETECTED / MATCHED from live Databricks or discover).
     confirmed_count = 0
     for m in req.mappings:
         # Parse full_name into catalog.schema.table
-        parts = m.target_full_name.split(".")
+        parts = m.target_full_name.split(".") if m.target_full_name else []
         cat = parts[0] if len(parts) >= 3 else ""
         sch = parts[1] if len(parts) >= 3 else (parts[0] if len(parts) >= 2 else "")
         tbl = parts[-1] if parts else ""
+
+        status = normalize_mapping_status_for_save(m.status, m.target_full_name or "")
 
         mapping = DatasourceMapping(
             job_id=job.id,
@@ -532,10 +536,10 @@ async def save_mappings(
             target_table=tbl,
             target_full_name=m.target_full_name,
             confidence_score=m.confidence_score,
-            status=m.status,
+            status=status,
         )
         db.add(mapping)
-        if m.status == "CONFIRMED":
+        if status == "CONFIRMED" and m.target_full_name:
             confirmed_count += 1
 
     # Update job mapping status
@@ -552,7 +556,7 @@ async def save_mappings(
 
     # Also save as global mapping profiles for reuse
     for m in req.mappings:
-        if m.status == "CONFIRMED":
+        if m.target_full_name:
             existing_profile = (
                 db.query(MappingProfile)
                 .filter(MappingProfile.source_pattern == m.tableau_table_name)

@@ -177,7 +177,9 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
     setSaving(true);
     try {
       if (totalCount > 0) {
-        const list = Object.values(mappings);
+        const list = Object.values(mappings).map((m) =>
+          m.target_full_name ? { ...m, status: "CONFIRMED" as const } : m
+        );
         await saveMappings(jobUuid, list);
       }
       if (onExecute) {
@@ -194,7 +196,10 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
   };
 
   const handleSaveAndExecute = async () => {
-    const list = Object.values(mappings);
+    // Promote Auto-Detected / Matched rows to CONFIRMED so /execute loads them.
+    const list = Object.values(mappings).map((m) =>
+      m.target_full_name ? { ...m, status: "CONFIRMED" as const } : m
+    );
     const unmapped = list.filter((m) => !m.target_full_name);
     if (unmapped.length > 0) {
       toastError(`${unmapped.length} datasource(s) still unmapped.`, "Incomplete");
@@ -203,6 +208,13 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
     setSaving(true);
     try {
       await saveMappings(jobUuid, list);
+      setMappings((prev) => {
+        const next = { ...prev };
+        for (const m of list) {
+          next[m.tableau_table_name] = m;
+        }
+        return next;
+      });
       if (onExecute) {
         onExecute();
       } else {

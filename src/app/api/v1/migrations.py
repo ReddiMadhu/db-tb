@@ -17,6 +17,10 @@ from app.services.pipeline import MigrationPipeline
 from app.services.deployer.api_client import LakeviewAPIClient
 from app.services.deployer.bundle_generator import generate_databricks_asset_bundle
 from app.services.deployer.diff_engine import compute_dashboard_diff
+from app.services.mapper.datasource_mapper import (
+    build_execute_table_mapping,
+    EXECUTABLE_MAPPING_STATUSES,
+)
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -434,13 +438,15 @@ async def execute_migration_pipeline(
             detail="Source workbook file not found. Please re-upload."
         )
 
-    # Load saved confirmed mappings from DB
+    # Load saved mappings that have a target (CONFIRMED / AUTO_DETECTED / MATCHED).
+    # Auto-detected live Databricks paths must participate in execute the same as
+    # manually confirmed ones — otherwise Save & Execute runs with an empty map.
     db_mappings = (
         db.query(DatasourceMapping)
-        .filter(DatasourceMapping.job_id == job.id, DatasourceMapping.status == "CONFIRMED")
+        .filter(DatasourceMapping.job_id == job.id)
         .all()
     )
-    saved_table_mapping = {m.tableau_table_name: m.target_full_name for m in db_mappings if m.target_full_name}
+    saved_table_mapping = build_execute_table_mapping(db_mappings)
 
     # Explicit request mapping overrides saved mapping
     table_mapping = {**saved_table_mapping, **((req.table_mapping if req else None) or {})}
@@ -454,14 +460,17 @@ async def execute_migration_pipeline(
     mapping_started = datetime.utcnow()
 
     # Count total tables from all datasource mappings for this job
-    all_mappings = (
-        db.query(DatasourceMapping)
-        .filter(DatasourceMapping.job_id == job.id)
-        .all()
-    )
+    all_mappings = db_mappings
     total_tables = len(all_mappings) if all_mappings else 0
     mapped_count = len(table_mapping)
-    unmapped = [m for m in all_mappings if m.tableau_table_name not in table_mapping and m.status != "CONFIRMED"]
+    unmapped = [
+        m
+        for m in all_mappings
+        if m.tableau_table_name not in table_mapping
+        and not (
+            m.target_full_name and (m.status or "") in EXECUTABLE_MAPPING_STATUSES
+        )
+    ]
 
     mapping_stage = (
         db.query(StageResult)
