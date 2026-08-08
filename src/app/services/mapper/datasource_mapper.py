@@ -57,6 +57,140 @@ def clean_table_name_for_catalog(raw_name: str) -> str:
 # Statuses that carry a usable target for pipeline execute.
 EXECUTABLE_MAPPING_STATUSES = frozenset({"CONFIRMED", "AUTO_DETECTED", "MATCHED"})
 
+# Pre-a9e4132 normalize turned ``foo.csv`` into ``Csv`` (last segment after '.').
+_FILE_EXT_RE = re.compile(
+    r"\.(csv|txt|tsv|xlsx?|xlsm|xls|hyper|tde|json|parquet|avro)$",
+    re.IGNORECASE,
+)
+_LEGACY_EXT_TABLE_NAMES = frozenset(
+    {
+        "csv",
+        "txt",
+        "tsv",
+        "xlsx",
+        "xls",
+        "xlsm",
+        "hyper",
+        "tde",
+        "json",
+        "parquet",
+        "avro",
+    }
+)
+
+
+def legacy_extension_table_keys(raw_name: Optional[str]) -> List[str]:
+    """Return old normalize keys (e.g. ``Csv``) for a file-based raw table name.
+
+    Used so datasource_mappings saved before a9e4132 still resolve against
+    current stem table names (``Insurance_Tableau_Dataset``).
+    """
+    if not raw_name or not isinstance(raw_name, str):
+        return []
+    m = _FILE_EXT_RE.search(raw_name.strip().strip('"').strip("'").strip("[]"))
+    if not m:
+        return []
+    ext = m.group(1)
+    # Old clean_table used ``t.title() if t.islower() else t`` on the extension.
+    titled = ext.title() if ext.islower() else ext
+    keys = [titled]
+    if ext != titled:
+        keys.append(ext)
+    if ext.upper() != titled:
+        keys.append(ext.upper())
+    # Dedupe preserving order
+    seen: set = set()
+    out: List[str] = []
+    for k in keys:
+        kl = k.lower()
+        if kl in seen:
+            continue
+        seen.add(kl)
+        out.append(k)
+    return out
+
+
+def mapping_lookup_keys(
+    table_name: Optional[str],
+    raw_name: Optional[str] = None,
+) -> List[str]:
+    """Ordered keys to try when resolving a user/DB table mapping."""
+    keys: List[str] = []
+    seen: set = set()
+    for k in (table_name, raw_name):
+        if not k:
+            continue
+        kl = k.lower()
+        if kl in seen:
+            continue
+        seen.add(kl)
+        keys.append(k)
+    for k in legacy_extension_table_keys(raw_name or table_name):
+        kl = k.lower()
+        if kl in seen:
+            continue
+        seen.add(kl)
+        keys.append(k)
+    # If the saved key itself is a bare extension (legacy), also allow reverse
+    # lookup by treating table_name as that extension when matching stems later.
+    if table_name and table_name.lower() in _LEGACY_EXT_TABLE_NAMES:
+        kl = table_name.lower()
+        if kl not in seen:
+            seen.add(kl)
+            keys.append(table_name)
+    return keys
+
+
+def lookup_user_mapping(
+    table_name: Optional[str],
+    raw_name: Optional[str],
+    user_mapping: Dict[str, str],
+) -> Optional[str]:
+    """Resolve a UC target from user_mapping using current and legacy keys."""
+    if not user_mapping:
+        return None
+    # Direct / legacy from current table + raw
+    for key in mapping_lookup_keys(table_name, raw_name):
+        if key in user_mapping:
+            return user_mapping[key]
+    # Case-insensitive fallback
+    lower_map = {k.lower(): v for k, v in user_mapping.items()}
+    for key in mapping_lookup_keys(table_name, raw_name):
+        hit = lower_map.get(key.lower())
+        if hit:
+            return hit
+    return None
+
+
+def expand_execute_mapping_with_datasources(
+    execute_mapping: Dict[str, str],
+    datasources: list,
+) -> Dict[str, str]:
+    """Add current stem keys for legacy ``Csv``/``Txt`` entries using table raw_name."""
+    if not execute_mapping:
+        return {}
+    out = dict(execute_mapping)
+    lower_map = {k.lower(): (k, v) for k, v in execute_mapping.items()}
+    for ds in datasources or []:
+        for table in getattr(ds, "tables", None) or []:
+            name = getattr(table, "name", None) or ""
+            raw = getattr(table, "raw_name", None) or name
+            if not name:
+                continue
+            if name in out:
+                continue
+            target = lookup_user_mapping(name, raw, execute_mapping)
+            if target:
+                out[name] = target
+                continue
+            # Legacy DB key is extension-only; bind stem → same target
+            for leg in legacy_extension_table_keys(raw):
+                hit = lower_map.get(leg.lower())
+                if hit:
+                    out[name] = hit[1]
+                    break
+    return out
+
 
 def normalize_mapping_status_for_save(status: Optional[str], target_full_name: str) -> str:
     """Promote auto/matched/pending rows with a target to CONFIRMED on save."""
@@ -171,12 +305,10 @@ def build_table_mapping(
             original = table.name
             raw = table.raw_name or original
 
-            # Tier 1: Explicit user mapping
-            if original in user_mapping:
-                mapping[original] = user_mapping[original]
-                continue
-            if raw in user_mapping:
-                mapping[original] = user_mapping[raw]
+            # Tier 1: Explicit user mapping (incl. legacy Csv/Txt keys from raw)
+            resolved = lookup_user_mapping(original, raw, user_mapping)
+            if resolved:
+                mapping[original] = resolved
                 continue
 
             # Tier 2: Check if this needs resolution

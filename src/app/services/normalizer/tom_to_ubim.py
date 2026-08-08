@@ -32,7 +32,8 @@ from app.services.parser.mark_type_resolver import resolve_mark_type
 from app.services.compiler.expression_compiler import compile_expression_to_sql
 from app.services.parser.tableau_extractor import is_tableau_pseudo_field
 from app.services.mapper.datasource_mapper import (
-    build_table_mapping, resolve_table_in_sql, is_unresolved_table, clean_table_name_for_catalog
+    build_table_mapping, resolve_table_in_sql, is_unresolved_table, clean_table_name_for_catalog,
+    expand_execute_mapping_with_datasources, lookup_user_mapping,
 )
 from app.services.compiler.field_classifier import (
     classify_field, semantic_to_aggregation, is_aggregatable, is_groupable,
@@ -363,7 +364,12 @@ def _build_dataset_sql(ds: DatasourceMetadata, table_mapping: Dict[str, str] = N
     def _map_table(raw: str) -> str:
         """Resolve a Tableau table/object-id to a mapped UC FQN (or cleaned name)."""
         canonical = _resolve_ds_table_name(raw, ds) or raw
-        mapped = table_mapping.get(canonical, table_mapping.get(raw, canonical))
+        mapped = (
+            lookup_user_mapping(canonical, raw, table_mapping)
+            or table_mapping.get(canonical)
+            or table_mapping.get(raw)
+            or canonical
+        )
         if is_unresolved_table(mapped):
             clean_name = clean_table_name_for_catalog(mapped)
             if catalog_schema:
@@ -1015,6 +1021,10 @@ def normalize_tom_to_ubim(
     and the resolver cross-references Tableau fields against the actual schema.
     """
     table_mapping = table_mapping or {}
+    # Remap legacy Csv/Txt keys onto current stem table names before merge.
+    table_mapping = expand_execute_mapping_with_datasources(
+        table_mapping, workbook_meta.datasources
+    )
 
     # Build canonical field resolver if not provided — inject semantic model for enrichment
     resolver = field_resolver or CanonicalFieldResolver(workbook_meta, semantic_model=semantic_model)

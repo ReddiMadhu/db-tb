@@ -41,7 +41,23 @@ class CachedStructuredRunnable:
                 return self.schema.model_validate(cached_data)
             return cached_data
 
-        response = self.base_runnable.invoke(input_data)
+        response = None
+        import concurrent.futures
+        from app.core.llm import LLM_REQUEST_TIMEOUT_SEC
+
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = pool.submit(self.base_runnable.invoke, input_data)
+            try:
+                response = fut.result(timeout=LLM_REQUEST_TIMEOUT_SEC + 5)
+            except concurrent.futures.TimeoutError as e:
+                fut.cancel()
+                raise TimeoutError(
+                    f"LLM structured invoke exceeded {LLM_REQUEST_TIMEOUT_SEC + 5}s"
+                ) from e
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+
         if response:
             if hasattr(response, 'dict'):
                 serialized = response.dict()
@@ -111,14 +127,19 @@ class CachedLLM:
         import concurrent.futures
         from app.core.llm import LLM_REQUEST_TIMEOUT_SEC
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             fut = pool.submit(self.base_llm.invoke, input_data)
             try:
                 response = fut.result(timeout=LLM_REQUEST_TIMEOUT_SEC + 5)
             except concurrent.futures.TimeoutError as e:
+                fut.cancel()
                 raise TimeoutError(
                     f"LLM invoke exceeded {LLM_REQUEST_TIMEOUT_SEC + 5}s"
                 ) from e
+        finally:
+            # wait=False: do not block forever on a hung Azure/OpenAI socket thread.
+            pool.shutdown(wait=False, cancel_futures=True)
 
         if hasattr(response, 'content'):
             self.cache[prompt_hash] = response.content

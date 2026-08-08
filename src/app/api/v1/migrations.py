@@ -84,6 +84,53 @@ def _has_running_stage(db: Session, job_uuid: str) -> bool:
     )
 
 
+# Soft-lock: reclaim zombie RUNNING stages left by a dead background worker.
+STALE_RUNNING_STAGE_SEC = float(os.getenv("STALE_RUNNING_STAGE_SEC", "600"))
+
+
+def _reclaim_stale_running_stages(
+    db: Session,
+    job: MigrationJob,
+    *,
+    max_age_sec: float = STALE_RUNNING_STAGE_SEC,
+) -> int:
+    """Fail RUNNING stages older than max_age_sec. Returns count reclaimed."""
+    from app.models.stage_model import StageResult
+    from sqlalchemy.orm.attributes import flag_modified
+
+    now = datetime.utcnow()
+    rows = (
+        db.query(StageResult)
+        .filter(StageResult.job_uuid == job.job_uuid, StageResult.status == "RUNNING")
+        .all()
+    )
+    reclaimed = 0
+    for row in rows:
+        started = row.started_at
+        if started is None:
+            age = max_age_sec + 1  # treat missing start as stale
+        else:
+            age = (now - started).total_seconds()
+        if age < max_age_sec:
+            continue
+        row.status = "FAILED"
+        row.completed_at = now
+        row.errors = list(row.errors or []) + [
+            f"Reclaimed stale RUNNING after {int(age)}s (threshold={int(max_age_sec)}s)"
+        ]
+        reclaimed += 1
+
+    if reclaimed:
+        _append_exec_debug(
+            db,
+            job,
+            f"reclaiming stale RUNNING — cleared {reclaimed} stage(s) older than {int(max_age_sec)}s",
+            level="WARNING",
+        )
+        flag_modified(job, "error_bag")
+    return reclaimed
+
+
 def _normalize_table_ref(raw: str) -> str:
     """Strip backticks/whitespace so `a`.`b`.`c` and a.b.c compare the same."""
     return re.sub(r"[`\s]", "", raw or "")
@@ -478,9 +525,12 @@ async def execute_migration_pipeline(
     if not job:
         raise HTTPException(status_code=404, detail="Migration job not found.")
 
-    # Soft-lock: only block if a stage is actually RUNNING. Stuck EXECUTING with
-    # all WAITING/COMPLETED (org screenshot) must be retryable.
+    # Soft-lock: only block if a stage is actually RUNNING (and not stale).
+    # Stuck EXECUTING with all WAITING/COMPLETED must be retryable.
+    # Zombie RUNNING older than STALE_RUNNING_STAGE_SEC is reclaimed first.
     if job.status == "EXECUTING":
+        _reclaim_stale_running_stages(db, job)
+        db.commit()
         if _has_running_stage(db, job_uuid):
             return {
                 "job_uuid": job_uuid,

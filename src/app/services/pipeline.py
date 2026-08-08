@@ -654,15 +654,9 @@ class MigrationPipeline:
 
         # Upload already completed PARSE — rebuild workbook_meta in memory without
         # flipping PARSE to RUNNING (UI would jump back to Dashboard Intelligence).
-        # Mark CALC RUNNING first so progress is not stuck on "Waiting...".
+        # Do NOT mark CALC RUNNING here — prep is not calculation conversion.
         if self._get_stage_status("PARSE") == "COMPLETED":
             self._exec_debug("silent PARSE branch — skip UI-visible PARSE re-run")
-            self._persist_stage(
-                "CALC_LOGIC_CONVERSION",
-                status="RUNNING",
-                started_at=datetime.utcnow(),
-                input_summary="Preparing workbook metadata (parse + UC discovery)",
-            )
             t0 = time.time()
             self._exec_debug("parse_workbook start")
             try:

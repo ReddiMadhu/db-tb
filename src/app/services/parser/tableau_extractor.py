@@ -1825,7 +1825,19 @@ def extract_columns(root: etree._Element, ds_prefixes: list, caption_map: dict, 
     # columns from every worksheet-embedded copy.
     tag = root.tag.split("}")[-1] if isinstance(root.tag, str) else ""
     if tag == "datasource":
-        col_nodes = root.xpath("./column")
+        # Scoped to this DS only (never absolute //datasource).
+        # Process ./column first so captioned/role-bearing defs win over stub
+        # <columns><column name="Foo"> entries that share the same stripped name.
+        direct = root.xpath("./column")
+        nested = [
+            c
+            for c in root.xpath(".//column")
+            if c not in direct
+            and c.getparent() is not None
+            and (c.getparent().tag.split("}")[-1] if isinstance(c.getparent().tag, str) else "")
+            != "columns"
+        ]
+        col_nodes = direct + nested
     else:
         col_nodes = root.xpath("//datasource[not(@name='Parameters')]/column")
     for col in col_nodes:
