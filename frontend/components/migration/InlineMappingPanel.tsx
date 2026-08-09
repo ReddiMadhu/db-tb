@@ -81,13 +81,14 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
             (t.uc_fqn ? res.existing_mappings?.[t.uc_fqn.split(".").pop() || ""] : undefined) ||
             // legacy key when "*.csv" was wrongly normalized to "Csv"
             (/\.csv$/i.test(t.raw_name || "") ? res.existing_mappings?.["Csv"] : undefined);
+          // Helper to check if a string is a valid 3-part UC FQN (catalog.schema.table)
+          const is3PartFqn = (target?: string) => Boolean(target && target.includes(".") && target.split(".").filter(Boolean).length >= 3);
+
           // Prefer embedded UC FQN from live Databricks relation, then connection catalog.
-          // Compute autoTarget even when a saved target exists — only CONFIRMED
-          // mappings are sacred.  This ensures stale PENDING mappings on deployed
-          // systems still get promoted to AUTO_DETECTED.
+          // Compute autoTarget even when a saved target exists unless it is CONFIRMED with a 3-part FQN.
           let autoTarget = "";
           let autoStatus: any = "PENDING";
-          const savedIsConfirmed = (ex?.status || "").toUpperCase() === "CONFIRMED";
+          const savedIsConfirmed = (ex?.status || "").toUpperCase() === "CONFIRMED" && is3PartFqn(ex?.target_full_name);
           if (!savedIsConfirmed && t.uc_fqn) {
             autoTarget = t.uc_fqn;
             autoStatus = "AUTO_DETECTED";
@@ -98,21 +99,16 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
             autoTarget = `${cat}.${sch}.${cleanName}`;
             autoStatus = "AUTO_DETECTED";
           }
-          // Determine effective target: saved target wins, then autoTarget, then fallback
-          const effectiveTarget = ex?.target_full_name || autoTarget || (t.is_unresolved ? "" : t.name);
+
+          // Determine effective target:
+          // 1. Saved target IF confirmed with valid 3-part FQN
+          // 2. autoTarget (valid 3-part FQN)
+          // 3. Saved target IF valid 3-part FQN
+          // 4. Fallback table name
+          const effectiveTarget = (savedIsConfirmed && ex?.target_full_name) || autoTarget || (is3PartFqn(ex?.target_full_name) ? ex?.target_full_name : "") || (t.is_unresolved ? "" : t.name);
 
           // Determine effective status:
-          // - CONFIRMED is authoritative — never demote
-          // - PENDING with an autoTarget → promote to AUTO_DETECTED
-          // - Otherwise use saved status or derive from context
-          let effectiveStatus: string = ex?.status || "PENDING";
-          if (effectiveStatus === "CONFIRMED") {
-            // keep CONFIRMED
-          } else if (autoTarget) {
-            effectiveStatus = "AUTO_DETECTED";
-          } else if (effectiveTarget && effectiveStatus === "PENDING") {
-            effectiveStatus = "PENDING";
-          }
+          let effectiveStatus: string = savedIsConfirmed ? "CONFIRMED" : (autoTarget ? autoStatus : (ex?.status || "PENDING"));
 
           initial[t.name] = {
             tableau_datasource_name: ds.name,

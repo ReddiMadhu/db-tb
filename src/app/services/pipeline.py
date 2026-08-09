@@ -990,7 +990,7 @@ class MigrationPipeline:
                     host_override=host,
                     token_override=token,
                     warehouse_id_override=wh_id,
-                    discover_constraints=True,
+                    discover_constraints=False,
                     discover_properties=False,
                 )
 

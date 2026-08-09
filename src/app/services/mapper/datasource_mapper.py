@@ -54,14 +54,22 @@ def clean_table_name_for_catalog(raw_name: str) -> str:
     return name.lower() or 'imported_table'
 
 
+def is_valid_uc_fqn(target: Optional[str]) -> bool:
+    """Check if target is a valid 3-part Unity Catalog FQN (catalog.schema.table)."""
+    if not target or not isinstance(target, str):
+        return False
+    parts = target.split(".")
+    return len(parts) >= 3 and all(p.strip() for p in parts)
+
+
 # Statuses that carry a usable target for pipeline execute.
 EXECUTABLE_MAPPING_STATUSES = frozenset({"CONFIRMED", "AUTO_DETECTED", "MATCHED"})
 
 
 def normalize_mapping_status_for_save(status: Optional[str], target_full_name: str) -> str:
-    """Promote auto/matched/pending rows with a target to CONFIRMED on save."""
+    """Promote auto/matched/pending rows with a valid 3-part FQN target to CONFIRMED on save."""
     status = (status or "PENDING").strip() or "PENDING"
-    if target_full_name and status in ("AUTO_DETECTED", "MATCHED", "PENDING", ""):
+    if is_valid_uc_fqn(target_full_name) and status in ("AUTO_DETECTED", "MATCHED", "PENDING", ""):
         return "CONFIRMED"
     return status
 
@@ -73,7 +81,7 @@ def build_execute_table_mapping(rows: list) -> Dict[str, str]:
         status = getattr(m, "status", None) or ""
         target = getattr(m, "target_full_name", None) or ""
         name = getattr(m, "tableau_table_name", None) or ""
-        if name and target and status in EXECUTABLE_MAPPING_STATUSES:
+        if name and is_valid_uc_fqn(target) and status in EXECUTABLE_MAPPING_STATUSES:
             out[name] = target
     return out
 

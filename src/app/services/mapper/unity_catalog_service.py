@@ -312,7 +312,7 @@ class UnityCatalogService:
                         })
                 return columns
             except Exception as e:
-                logger.warning("Failed to describe table %s via SQL: %s", full_name, str(e))
+                logger.debug("Failed to describe table %s via SQL: %s", full_name, str(e))
 
         return []
 

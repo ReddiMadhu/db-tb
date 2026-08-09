@@ -192,7 +192,9 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
     # Auto-compose target_full_name for live Databricks / already-qualified UC tables.
     # Priority: embedded 3-part relation FQN > catalog.schema.clean_name from connection.
     # Promote PENDING entries to AUTO_DETECTED when we can resolve a UC target;
-    # never overwrite CONFIRMED mappings.
+    # never overwrite user-confirmed mappings WITH VALID 3-part FQN.
+    from app.services.mapper.datasource_mapper import is_valid_uc_fqn
+
     for ds in workbook_meta.datasources:
         catalog = ""
         schema = "default"
@@ -220,12 +222,13 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
                 if not key:
                     continue
                 existing = mapping_lookup.get(key)
-                if existing and (existing.get("status") or "").upper() == "CONFIRMED":
-                    # Never overwrite user-confirmed mappings
+                existing_target = (existing.get("target_full_name") if existing else None) or ""
+                existing_status = ((existing.get("status") if existing else "") or "").upper()
+                if existing and existing_status == "CONFIRMED" and is_valid_uc_fqn(existing_target):
+                    # Truly user-confirmed with a valid 3-part FQN — keep it
                     continue
-                # Overwrite PENDING (even with an old target) and empty entries
-                if not existing or (existing.get("status") or "").upper() != "CONFIRMED":
-                    mapping_lookup[key] = dict(auto)
+                # Overwrite single-part/stale/PENDING entries with valid 3-part auto-detected FQN
+                mapping_lookup[key] = dict(auto)
 
     # Build the top-level list of all Databricks sources for the Data Model screen
     databricks_sources = []

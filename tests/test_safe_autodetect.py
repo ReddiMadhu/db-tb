@@ -125,6 +125,27 @@ class TestParseUcFqn:
         assert self._parse("Claims_Fact.csv") is None
 
 
+class TestIsValidUcFqn:
+    """is_valid_uc_fqn checks for valid 3-part Unity Catalog FQNs."""
+
+    def _check(self, raw):
+        from app.services.mapper.datasource_mapper import is_valid_uc_fqn
+        return is_valid_uc_fqn(raw)
+
+    def test_valid_3part(self):
+        assert self._check("hive_metastore.insurance_data.benefit_type_dim") is True
+
+    def test_invalid_single_part(self):
+        assert self._check("Benefit_type_dim") is False
+
+    def test_invalid_2part(self):
+        assert self._check("schema.table") is False
+
+    def test_invalid_none_or_empty(self):
+        assert self._check(None) is False
+        assert self._check("") is False
+
+
 # ── Mapping status transitions ──────────────────────────────────────
 
 class TestAutoDetectedSafety:
