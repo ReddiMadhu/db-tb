@@ -20,7 +20,9 @@ from app.services.parser.tableau_extractor import parse_workbook
 from app.services.mapper.datasource_mapper import (
     is_unresolved_table,
     clean_table_name_for_catalog,
+    compose_uc_fqn,
     extract_embedded_files_from_twbx,
+    infer_catalog_schema_from_table_sources,
     normalize_mapping_status_for_save,
     parse_uc_fqn_from_tableau_table,
 )
@@ -145,6 +147,16 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
                 "uc_fqn": parse_uc_fqn_from_tableau_table(getattr(t, "source", None) or raw),
             })
 
+        # Sibling FQN: fill missing uc_fqn from catalog.schema of any qualified relation
+        inferred = infer_catalog_schema_from_table_sources(ds.tables)
+        if inferred:
+            cat, sch = inferred
+            for tbl in tables:
+                if not tbl.get("uc_fqn"):
+                    composed = compose_uc_fqn(cat, sch, tbl["name"])
+                    if composed:
+                        tbl["uc_fqn"] = composed
+
         # Find which worksheets reference this datasource
         referencing_worksheets = [
             ws.name for ws in workbook_meta.worksheets
@@ -160,18 +172,38 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
             "worksheets": referencing_worksheets,
         }
 
-        # Include Databricks connection details if this datasource connects to Databricks
+        # Include Databricks connection details if this datasource connects to Databricks.
+        # When leaf detection missed but relations embed UC FQNs, surface inferred catalog/schema.
         if ds.databricks_connection:
+            catalog = ds.databricks_connection.catalog
+            schema = ds.databricks_connection.schema_name
+            if inferred:
+                catalog = catalog or inferred[0]
+                if inferred[1] and (not schema or schema == "default"):
+                    schema = inferred[1]
             ds_info["is_databricks"] = True
             ds_info["databricks_connection"] = {
                 "host": ds.databricks_connection.host,
                 "http_path": ds.databricks_connection.http_path,
-                "catalog": ds.databricks_connection.catalog,
-                "schema": ds.databricks_connection.schema_name,
+                "catalog": catalog,
+                "schema": schema,
                 "warehouse_id": ds.databricks_connection.warehouse_id,
                 "auth_method": ds.databricks_connection.auth_method,
                 "connection_class": ds.databricks_connection.connection_class,
             }
+        elif inferred:
+            ds_info["is_databricks"] = True
+            ds_info["databricks_connection"] = {
+                "host": "",
+                "http_path": "",
+                "catalog": inferred[0],
+                "schema": inferred[1],
+                "warehouse_id": "",
+                "auth_method": "",
+                "connection_class": "inferred_uc_fqn",
+            }
+            if (ds_info["connection_type"] or "").lower() in ("federated", "unknown", ""):
+                ds_info["connection_type"] = "databricks"
         else:
             ds_info["is_databricks"] = False
 
@@ -190,7 +222,8 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
     } for m in existing_mappings}
 
     # Auto-compose target_full_name for live Databricks / already-qualified UC tables.
-    # Priority: embedded 3-part relation FQN > catalog.schema.clean_name from connection.
+    # Priority: embedded 3-part relation FQN > sibling catalog.schema from any
+    # relation FQN > connection catalog.schema.clean_name.
     # Promote PENDING entries to AUTO_DETECTED when we can resolve a UC target;
     # never overwrite user-confirmed mappings WITH VALID 3-part FQN.
     from app.services.mapper.datasource_mapper import is_valid_uc_fqn
@@ -202,12 +235,18 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
             catalog = ds.databricks_connection.catalog
             schema = ds.databricks_connection.schema_name or "default"
 
+        # Prefer catalog.schema embedded in any sibling relation over connection defaults
+        # (connection schema is often "default" while tables live in insurance_data).
+        inferred = infer_catalog_schema_from_table_sources(ds.tables)
+        if inferred:
+            catalog = inferred[0] or catalog
+            if inferred[1]:
+                schema = inferred[1]
+
         for t in ds.tables:
             fqn = parse_uc_fqn_from_tableau_table(getattr(t, "source", None) or t.raw_name)
             if not fqn and catalog:
-                clean_name = clean_table_name_for_catalog(t.name)
-                if clean_name:
-                    fqn = f"{catalog}.{schema}.{clean_name}"
+                fqn = compose_uc_fqn(catalog, schema, t.name)
 
             if not fqn:
                 continue
@@ -293,23 +332,27 @@ async def discover_mappings(
                     "connection_type": ds.connection_type or "unknown",
                 }
 
-    # Fetch UC tables for matching
+    # Fetch UC tables for matching. Pass warehouse_id so hive_metastore can use
+    # SQL SHOW TABLES fallback (required on workspaces without UC API coverage).
+    warehouse_id = (req.warehouse_id or "").strip() or None
     uc_tables = []
     try:
-        catalogs = UnityCatalogService.list_catalogs(req.host, req.token)
+        catalogs = UnityCatalogService.list_catalogs(req.host, req.token, warehouse_id=warehouse_id)
         for cat in catalogs:
             cat_name = cat.get("name", "")
             if cat_name in ("system", "__databricks_internal"):
                 continue
             try:
-                schemas = UnityCatalogService.list_schemas(req.host, req.token, cat_name)
+                schemas = UnityCatalogService.list_schemas(
+                    req.host, req.token, cat_name, warehouse_id=warehouse_id
+                )
                 for sch in schemas:
                     sch_name = sch.get("name", "")
                     if sch_name == "information_schema":
                         continue
                     try:
                         tables = UnityCatalogService.list_tables(
-                            req.host, req.token, cat_name, sch_name
+                            req.host, req.token, cat_name, sch_name, warehouse_id=warehouse_id
                         )
                         for tbl in tables:
                             uc_tables.append({

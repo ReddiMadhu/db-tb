@@ -15,6 +15,11 @@ import {
 import type { TableauDatasourceInfo, EmbeddedFileInfo, DatasourceMappingItem } from "@/lib/types";
 import styles from "./InlineMappingPanel.module.css";
 
+/** Valid Unity Catalog target: catalog.schema.table */
+function is3PartFqn(target?: string): boolean {
+  return Boolean(target && target.includes(".") && target.split(".").filter(Boolean).length >= 3);
+}
+
 interface InlineMappingPanelProps {
   jobUuid: string;
   onExecute?: () => void;
@@ -73,6 +78,12 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
 
       const initial: Record<string, DatasourceMappingItem> = {};
       for (const ds of res.datasources || []) {
+        // Sibling catalog.schema from any table that already has a 3-part uc_fqn
+        const siblingFqn = (ds.tables || []).map((x) => x.uc_fqn).find((f) => is3PartFqn(f));
+        const siblingParts = siblingFqn ? siblingFqn.split(".") : [];
+        const siblingCat = siblingParts[0] || "";
+        const siblingSch = siblingParts[1] || "";
+
         for (const t of ds.tables) {
           const ex =
             res.existing_mappings?.[t.name] ||
@@ -81,34 +92,38 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
             (t.uc_fqn ? res.existing_mappings?.[t.uc_fqn.split(".").pop() || ""] : undefined) ||
             // legacy key when "*.csv" was wrongly normalized to "Csv"
             (/\.csv$/i.test(t.raw_name || "") ? res.existing_mappings?.["Csv"] : undefined);
-          // Helper to check if a string is a valid 3-part UC FQN (catalog.schema.table)
-          const is3PartFqn = (target?: string) => Boolean(target && target.includes(".") && target.split(".").filter(Boolean).length >= 3);
 
-          // Prefer embedded UC FQN from live Databricks relation, then connection catalog.
-          // Compute autoTarget even when a saved target exists unless it is CONFIRMED with a 3-part FQN.
+          // Prefer embedded UC FQN / sibling-composed FQN, then connection catalog.
+          // Do NOT fall back to bare table names (false "Mapped" badge).
           let autoTarget = "";
           let autoStatus: any = "PENDING";
           const savedIsConfirmed = (ex?.status || "").toUpperCase() === "CONFIRMED" && is3PartFqn(ex?.target_full_name);
-          if (!savedIsConfirmed && t.uc_fqn) {
-            autoTarget = t.uc_fqn;
+          if (!savedIsConfirmed && is3PartFqn(t.uc_fqn)) {
+            autoTarget = t.uc_fqn!;
             autoStatus = "AUTO_DETECTED";
-          } else if (!savedIsConfirmed && ds.is_databricks && ds.databricks_connection?.catalog) {
-            const cat = ds.databricks_connection.catalog;
-            const sch = ds.databricks_connection.schema || "default";
+          } else if (!savedIsConfirmed && (siblingCat || (ds.is_databricks && ds.databricks_connection?.catalog))) {
+            const cat = siblingCat || ds.databricks_connection?.catalog || "";
+            const sch = siblingSch || ds.databricks_connection?.schema || "default";
             const cleanName = t.clean_name || t.name;
-            autoTarget = `${cat}.${sch}.${cleanName}`;
-            autoStatus = "AUTO_DETECTED";
+            if (cat && cleanName) {
+              autoTarget = `${cat}.${sch}.${cleanName}`;
+              autoStatus = "AUTO_DETECTED";
+            }
           }
 
-          // Determine effective target:
-          // 1. Saved target IF confirmed with valid 3-part FQN
-          // 2. autoTarget (valid 3-part FQN)
-          // 3. Saved target IF valid 3-part FQN
-          // 4. Fallback table name
-          const effectiveTarget = (savedIsConfirmed && ex?.target_full_name) || autoTarget || (is3PartFqn(ex?.target_full_name) ? ex?.target_full_name : "") || (t.is_unresolved ? "" : t.name);
+          const effectiveTarget =
+            (savedIsConfirmed && ex?.target_full_name) ||
+            autoTarget ||
+            (is3PartFqn(ex?.target_full_name) ? ex?.target_full_name : "") ||
+            "";
 
-          // Determine effective status:
-          let effectiveStatus: string = savedIsConfirmed ? "CONFIRMED" : (autoTarget ? autoStatus : (ex?.status || "PENDING"));
+          const effectiveStatus: string = savedIsConfirmed
+            ? "CONFIRMED"
+            : autoTarget
+              ? autoStatus
+              : is3PartFqn(ex?.target_full_name)
+                ? ex?.status || "PENDING"
+                : "PENDING";
 
           initial[t.name] = {
             tableau_datasource_name: ds.name,
@@ -147,7 +162,9 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
       for (const [tblName, sug] of Object.entries(res.suggestions || {})) {
         if (sug.matches && sug.matches.length > 0) {
           const top = sug.matches[0];
-          if (top.confidence_score >= 0.7 && !updated[tblName]?.target_full_name) {
+          const current = updated[tblName]?.target_full_name;
+          // Apply when empty or only a bare/invalid name (never overwrite a real 3-part FQN)
+          if (top.confidence_score >= 0.7 && !is3PartFqn(current)) {
             updated[tblName] = { ...updated[tblName], target_full_name: top.target_full_name, confidence_score: top.confidence_score, status: "MATCHED" };
             applied++;
           }
@@ -194,7 +211,7 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
     try {
       if (totalCount > 0) {
         const list = Object.values(mappings).map((m) =>
-          m.target_full_name ? { ...m, status: "CONFIRMED" as const } : m
+          is3PartFqn(m.target_full_name) ? { ...m, status: "CONFIRMED" as const } : m
         );
         await saveMappings(jobUuid, list);
       }
@@ -213,10 +230,11 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
 
   const handleSaveAndExecute = async () => {
     // Promote Auto-Detected / Matched rows to CONFIRMED so /execute loads them.
+    // Only 3-part UC FQNs count as mapped.
     const list = Object.values(mappings).map((m) =>
-      m.target_full_name ? { ...m, status: "CONFIRMED" as const } : m
+      is3PartFqn(m.target_full_name) ? { ...m, status: "CONFIRMED" as const } : m
     );
-    const unmapped = list.filter((m) => !m.target_full_name);
+    const unmapped = list.filter((m) => !is3PartFqn(m.target_full_name));
     if (unmapped.length > 0) {
       toastError(`${unmapped.length} datasource(s) still unmapped.`, "Incomplete");
       return;
@@ -245,7 +263,7 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
   };
 
   const totalCount = Object.keys(mappings).length;
-  const mappedCount = Object.values(mappings).filter((m) => m.target_full_name).length;
+  const mappedCount = Object.values(mappings).filter((m) => is3PartFqn(m.target_full_name)).length;
   const progressPct = totalCount > 0 ? (mappedCount / totalCount) * 100 : 100;
   const isComplete = totalCount === 0 || (totalCount > 0 && mappedCount === totalCount);
 
@@ -315,7 +333,7 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
                 <div key={t.name} className={isSelected ? styles.mappingCardSelected : styles.mappingCard}>
                   <div className={styles.sourceRow}>
                     <span className={styles.sourceName}>{t.name}</span>
-                    {target ? (
+                    {is3PartFqn(target) ? (
                       mapItem?.status === "AUTO_DETECTED" ? (
                         <span className={styles.mappedBadge} style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}>✓ Auto-Detected</span>
                       ) : (

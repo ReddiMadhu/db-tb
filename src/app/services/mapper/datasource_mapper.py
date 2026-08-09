@@ -123,6 +123,39 @@ def parse_uc_fqn_from_tableau_table(raw: str | None) -> str | None:
     return None
 
 
+def infer_catalog_schema_from_table_sources(
+    tables: list,
+) -> tuple[str, str] | None:
+    """Return ``(catalog, schema)`` from the first table with a 3-part UC FQN.
+
+    Used to compose sibling targets when only one relation embeds a full path
+    (e.g. Claims_Fact has ``hive_metastore.insurance_data.claims_fact`` but
+    Benefit_type_dim / Occupation_dim do not).
+    """
+    for t in tables or []:
+        raw = getattr(t, "source", None) or getattr(t, "raw_name", None) or ""
+        if isinstance(t, dict):
+            raw = t.get("source") or t.get("raw_name") or t.get("uc_fqn") or ""
+        fqn = parse_uc_fqn_from_tableau_table(raw if isinstance(raw, str) else None)
+        if not fqn and isinstance(t, dict) and t.get("uc_fqn"):
+            fqn = parse_uc_fqn_from_tableau_table(t.get("uc_fqn"))
+        if fqn and is_valid_uc_fqn(fqn):
+            parts = fqn.split(".")
+            return parts[0], parts[1]
+    return None
+
+
+def compose_uc_fqn(catalog: str, schema: str, table_name: str) -> str | None:
+    """Build ``catalog.schema.clean_table`` when all parts are present."""
+    if not catalog or not table_name:
+        return None
+    sch = schema or "default"
+    clean = clean_table_name_for_catalog(table_name)
+    if not clean:
+        return None
+    return f"{catalog}.{sch}.{clean}"
+
+
 def extract_embedded_files_from_twbx(twbx_path: str) -> List[Dict[str, str]]:
     """List data files embedded inside a .twbx archive."""
     if not twbx_path or not zipfile.is_zipfile(twbx_path):

@@ -263,6 +263,103 @@ class TestStageLifecycle:
 
 # ── Table name regression ──────────────────────────────────────────
 
+class TestSiblingFqnInference:
+    """Dims without embedded FQN inherit catalog.schema from a sibling relation."""
+
+    def test_infer_catalog_schema_from_claims_fact(self):
+        from types import SimpleNamespace
+        from app.services.mapper.datasource_mapper import (
+            compose_uc_fqn,
+            infer_catalog_schema_from_table_sources,
+        )
+
+        tables = [
+            SimpleNamespace(
+                name="Claims_Fact",
+                raw_name="Claims_Fact",
+                source="[hive_metastore].[insurance_data].[Claims_Fact]",
+            ),
+            SimpleNamespace(
+                name="Benefit_type_dim",
+                raw_name="Benefit_type_dim",
+                source="[Benefit_type_dim]",
+            ),
+            SimpleNamespace(
+                name="Occupation_dim",
+                raw_name="Occupation_dim",
+                source="Occupation_dim",
+            ),
+        ]
+        inferred = infer_catalog_schema_from_table_sources(tables)
+        assert inferred == ("hive_metastore", "insurance_data")
+        assert (
+            compose_uc_fqn(*inferred, "Benefit_type_dim")
+            == "hive_metastore.insurance_data.benefit_type_dim"
+        )
+        assert (
+            compose_uc_fqn(*inferred, "Occupation_dim")
+            == "hive_metastore.insurance_data.occupation_dim"
+        )
+
+    def test_enrich_connection_from_relation_fqn(self):
+        from app.services.parser.tableau_extractor import (
+            _enrich_databricks_connection_from_tables,
+        )
+        from app.models.metadata import TableMetadata
+
+        tables = [
+            TableMetadata(
+                name="Claims_Fact",
+                raw_name="Claims_Fact",
+                source="[hive_metastore].[insurance_data].[Claims_Fact]",
+                type="table",
+            ),
+            TableMetadata(
+                name="Benefit_type_dim",
+                raw_name="Benefit_type_dim",
+                source="Benefit_type_dim",
+                type="table",
+            ),
+        ]
+        info = _enrich_databricks_connection_from_tables(None, tables, "ds1")
+        assert info is not None
+        assert info.catalog == "hive_metastore"
+        assert info.schema_name == "insurance_data"
+        assert info.connection_class == "inferred_uc_fqn"
+
+    def test_enrich_overrides_default_schema(self):
+        from app.services.parser.tableau_extractor import (
+            _enrich_databricks_connection_from_tables,
+        )
+        from app.models.metadata import TableMetadata, DatabricksConnectionInfo
+
+        existing = DatabricksConnectionInfo(
+            datasource_name="ds1",
+            host="https://host.databricks.com",
+            http_path="/sql/1.0/warehouses/abc",
+            catalog="hive_metastore",
+            schema_name="default",
+            warehouse_id="abc",
+            auth_method="PAT",
+            connection_class="databricks",
+            server="host.databricks.com",
+            port="",
+            jdbc_url="",
+        )
+        tables = [
+            TableMetadata(
+                name="Claims_Fact",
+                raw_name="Claims_Fact",
+                source="[hive_metastore].[insurance_data].[Claims_Fact]",
+                type="table",
+            ),
+        ]
+        info = _enrich_databricks_connection_from_tables(existing, tables, "ds1")
+        assert info.schema_name == "insurance_data"
+        assert info.catalog == "hive_metastore"
+        assert info.host == "https://host.databricks.com"
+
+
 class TestTableNameRegression:
     """Claims_Fact.csv must produce Claims_Fact, not Csv."""
 

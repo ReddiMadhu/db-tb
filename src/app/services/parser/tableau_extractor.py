@@ -2285,6 +2285,71 @@ def _detect_databricks_connection(
     )
 
 
+def _infer_catalog_schema_from_relations(
+    tables: List[TableMetadata],
+) -> tuple[str, str] | None:
+    """Extract (catalog, schema) from the first table with a 3-part UC ``source`` path."""
+    from app.services.mapper.datasource_mapper import (
+        infer_catalog_schema_from_table_sources,
+    )
+
+    return infer_catalog_schema_from_table_sources(tables)
+
+
+def _enrich_databricks_connection_from_tables(
+    db_conn_info: DatabricksConnectionInfo | None,
+    tables: List[TableMetadata],
+    datasource_name: str,
+) -> DatabricksConnectionInfo | None:
+    """Backfill or synthesize Databricks connection metadata from relation FQNs.
+
+    Handles Claims Overview-style federated workbooks where only some relations
+    embed ``[hive_metastore].[insurance_data].[Claims_Fact]`` and the leaf
+    driver was missed or has schema=default while tables live elsewhere.
+    """
+    inferred = _infer_catalog_schema_from_relations(tables)
+    if not inferred:
+        return db_conn_info
+
+    cat, sch = inferred
+    if db_conn_info is None:
+        return DatabricksConnectionInfo(
+            datasource_name=datasource_name,
+            host="",
+            http_path="",
+            catalog=cat,
+            schema_name=sch,
+            warehouse_id="",
+            auth_method="",
+            connection_class="inferred_uc_fqn",
+            server="",
+            port="",
+            jdbc_url="",
+        )
+
+    # Prefer non-empty catalog; prefer relation schema over empty/default connection schema
+    catalog = db_conn_info.catalog or cat
+    schema = db_conn_info.schema_name or sch
+    if (not db_conn_info.schema_name or db_conn_info.schema_name == "default") and sch and sch != "default":
+        schema = sch
+    if catalog == db_conn_info.catalog and schema == db_conn_info.schema_name:
+        return db_conn_info
+
+    return DatabricksConnectionInfo(
+        datasource_name=db_conn_info.datasource_name or datasource_name,
+        host=db_conn_info.host,
+        http_path=db_conn_info.http_path,
+        catalog=catalog,
+        schema_name=schema,
+        warehouse_id=db_conn_info.warehouse_id,
+        auth_method=db_conn_info.auth_method,
+        connection_class=db_conn_info.connection_class,
+        server=db_conn_info.server,
+        port=db_conn_info.port,
+        jdbc_url=db_conn_info.jdbc_url,
+    )
+
+
 def parse_workbook(file_path: str) -> WorkbookMetadata:
     """Master entrypoint: Parses `.twb`/`.twbx` into full TOM model."""
     root = _load_xml(file_path)
@@ -2372,6 +2437,19 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
             pass
         
         ds_enrich = extract_datasource_enrichment(ds_el)
+        tables = extract_tables(ds_el, ds_prefixes)
+        # When federated leaf detection fails or schema is wrong/default, recover
+        # catalog.schema from any relation that embeds a 3-part UC path.
+        db_conn_info = _enrich_databricks_connection_from_tables(
+            db_conn_info, tables, ds_name
+        )
+        if db_conn_info is not None and (conn_type or "").lower() in (
+            "federated",
+            "",
+            "unknown",
+        ):
+            conn_type = db_conn_info.connection_class or "databricks"
+
         ds_meta = DatasourceMetadata(
             name=ds_name,
             caption=ds_el.attrib.get("caption"),
@@ -2383,7 +2461,7 @@ def parse_workbook(file_path: str) -> WorkbookMetadata:
             semantic_values=ds_enrich.get("semantic_values") or {},
             mapsource=workbook.mapsource,
             column_instances=ds_enrich.get("column_instances") or [],
-            tables=extract_tables(ds_el, ds_prefixes),
+            tables=tables,
             columns=extract_columns(ds_el, ds_prefixes, caption_map, alias_map),
             joins=extract_joins(ds_el, ds_prefixes),
             relationships=extract_relationships(ds_el, ds_prefixes),
