@@ -22,6 +22,7 @@ from app.services.mapper.datasource_mapper import (
     clean_table_name_for_catalog,
     extract_embedded_files_from_twbx,
     normalize_mapping_status_for_save,
+    parse_uc_fqn_from_tableau_table,
 )
 from app.services.mapper.unity_catalog_service import (
     UnityCatalogService,
@@ -138,8 +139,10 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
             tables.append({
                 "name": display,
                 "raw_name": raw,
+                "source": getattr(t, "source", None) or "",
                 "is_unresolved": is_unresolved_table(display),
                 "clean_name": clean_table_name_for_catalog(display),
+                "uc_fqn": parse_uc_fqn_from_tableau_table(getattr(t, "source", None) or raw),
             })
 
         # Find which worksheets reference this datasource
@@ -186,26 +189,34 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
         "confidence_score": m.confidence_score,
     } for m in existing_mappings}
 
-    # Auto-compose target_full_name for Databricks-connected datasources
-    # When catalog + schema are known from the live connection, pre-fill the mapping
+    # Auto-compose target_full_name for live Databricks / already-qualified UC tables.
+    # Priority: embedded 3-part relation FQN > catalog.schema.clean_name from connection.
     for ds in workbook_meta.datasources:
+        catalog = ""
+        schema = "default"
         if ds.databricks_connection and ds.databricks_connection.catalog:
             catalog = ds.databricks_connection.catalog
             schema = ds.databricks_connection.schema_name or "default"
-            for t in ds.tables:
+
+        for t in ds.tables:
+            fqn = parse_uc_fqn_from_tableau_table(getattr(t, "source", None) or t.raw_name)
+            if not fqn and catalog:
                 clean_name = clean_table_name_for_catalog(t.name)
-                if clean_name and clean_name not in mapping_lookup:
-                    mapping_lookup[clean_name] = {
-                        "target_full_name": f"{catalog}.{schema}.{clean_name}",
-                        "status": "AUTO_DETECTED",
-                        "confidence_score": 1.0,
-                    }
-                if t.name and t.name not in mapping_lookup:
-                    mapping_lookup[t.name] = {
-                        "target_full_name": f"{catalog}.{schema}.{clean_name}",
-                        "status": "AUTO_DETECTED",
-                        "confidence_score": 1.0,
-                    }
+                if clean_name:
+                    fqn = f"{catalog}.{schema}.{clean_name}"
+
+            if not fqn:
+                continue
+
+            auto = {
+                "target_full_name": fqn,
+                "status": "AUTO_DETECTED",
+                "confidence_score": 1.0,
+            }
+            clean_name = clean_table_name_for_catalog(t.name)
+            for key in (t.name, clean_name, t.raw_name, fqn.split(".")[-1]):
+                if key and key not in mapping_lookup:
+                    mapping_lookup[key] = dict(auto)
 
     # Build the top-level list of all Databricks sources for the Data Model screen
     databricks_sources = []
