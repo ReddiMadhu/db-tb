@@ -1182,12 +1182,6 @@ export default function ParseStageDetail({ jobUuid, stage }: ParseStageDetailPro
                 <span className={styles.inspectorVal}>{activeCalcCount}</span>
               </div>
               <div className={styles.inspectorMetricBox}>
-                <span className={styles.inspectorKey}>Connection</span>
-                <span className={styles.inspectorVal} style={{ fontSize: "0.75rem" }}>
-                  {activeConnectionType}
-                </span>
-              </div>
-              <div className={styles.inspectorMetricBox}>
                 <span className={styles.inspectorKey}>Relationships</span>
                 <span className={styles.inspectorVal}>{activeRelsList.length}</span>
               </div>

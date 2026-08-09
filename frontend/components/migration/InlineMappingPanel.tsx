@@ -269,15 +269,6 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
       <div className={styles.header}>
         <span className={styles.headerTitle}>Datasource → Unity Catalog Mapping</span>
         <div className={styles.headerActions}>
-          {embeddedFiles.length > 0 && (
-            <button className={styles.actionBtn} onClick={handleAutoUpload}>
-              <FileSpreadsheet size={13} /> Auto-Upload ({embeddedFiles.length})
-            </button>
-          )}
-          <button className={styles.actionBtn} onClick={handleDiscover} disabled={discovering}>
-            {discovering ? <RefreshCw size={13} className="spin" /> : <Sparkles size={13} />}
-            {discovering ? "Discovering..." : "Auto-Discover"}
-          </button>
           <button className={styles.actionBtnPrimary} onClick={handleSaveAndExecute} disabled={!isComplete || saving}>
             {saving ? <RefreshCw size={13} className="spin" /> : <ArrowRight size={13} />}
             {saving ? "Saving..." : "Save & Execute"}

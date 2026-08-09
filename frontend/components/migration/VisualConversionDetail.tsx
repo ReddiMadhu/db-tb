@@ -720,11 +720,6 @@ export default function VisualConversionDetail({
           <span className={styles.summaryValue}>
             {successfulCards + reviewCards} / {totalCards}
           </span>
-          <span className={styles.summarySubtext}>
-            {metrics.chart_widgets != null
-              ? `${metrics.chart_widgets} charts · ${metrics.chrome_widgets ?? 0} chrome`
-              : "Total Tableau Worksheets"}
-          </span>
         </div>
 
         <div className={styles.summaryCard}>
@@ -734,7 +729,6 @@ export default function VisualConversionDetail({
           <span className={`${styles.summaryValue} ${styles.summaryValueSuccess}`}>
             {successfulCards}
           </span>
-          <span className={styles.summarySubtext}>Mapped to Lakeview widgets</span>
         </div>
 
         <div className={styles.summaryCard}>
@@ -744,7 +738,6 @@ export default function VisualConversionDetail({
           <span className={`${styles.summaryValue} ${styles.summaryValueReview}`}>
             {reviewCards}
           </span>
-          <span className={styles.summarySubtext}>Partial mapping / fallback</span>
         </div>
 
         <div className={styles.summaryCard}>
@@ -754,7 +747,6 @@ export default function VisualConversionDetail({
           <span className={`${styles.summaryValue} ${styles.summaryValueUnsupported}`}>
             {unsupportedCards}
           </span>
-          <span className={styles.summarySubtext}>No widget generated</span>
         </div>
       </div>
 

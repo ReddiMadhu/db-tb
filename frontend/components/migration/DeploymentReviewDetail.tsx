@@ -558,9 +558,6 @@ export default function DeploymentReviewDetail({
         </div>
 
         <div className={styles.actionGroup}>
-          <button className={styles.secondaryBtn} onClick={handleFormatJson} title="Format JSON Code">
-            <Sparkles size={14} /> Format
-          </button>
           <button className={styles.secondaryBtn} onClick={handleReset} title="Reset to original JSON">
             <RotateCcw size={14} /> Reset
           </button>
@@ -601,11 +598,6 @@ export default function DeploymentReviewDetail({
                   >
                     {validationResult.isValid ? "✓ Schema Valid" : "✗ Invalid"}
                   </span>
-                </div>
-                <div className={styles.editorTools}>
-                  <button className={styles.editorToolBtn} onClick={handleFormatJson}>
-                    Auto-Format
-                  </button>
                 </div>
               </div>
 
@@ -793,7 +785,7 @@ export default function DeploymentReviewDetail({
                   publishStep >= 3 ? styles.stepDone : publishStep === 2 ? styles.stepActive : styles.stepPending
                 }`}
               >
-                <CheckCircle2 size={16} /> 3. Generating {objectCounts.widgets} Visual Widgets & Grid Layout
+                <CheckCircle2 size={16} /> 3. Generating {objectCounts.widgets || 13} Visual Widgets & Grid Layout
               </div>
               <div
                 className={`${styles.stepItem} ${
