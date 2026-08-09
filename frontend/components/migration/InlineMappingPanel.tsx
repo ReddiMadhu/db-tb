@@ -94,12 +94,28 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
             autoTarget = `${cat}.${sch}.${cleanName}`;
             autoStatus = "AUTO_DETECTED";
           }
+          // Determine effective target: saved target wins, then autoTarget, then fallback
+          const effectiveTarget = ex?.target_full_name || autoTarget || (t.is_unresolved ? "" : t.name);
+
+          // Determine effective status:
+          // - CONFIRMED is authoritative — never demote
+          // - PENDING with an autoTarget → promote to AUTO_DETECTED
+          // - Otherwise use saved status or derive from context
+          let effectiveStatus: string = ex?.status || "PENDING";
+          if (effectiveStatus === "CONFIRMED") {
+            // keep CONFIRMED
+          } else if (autoTarget) {
+            effectiveStatus = "AUTO_DETECTED";
+          } else if (effectiveTarget && effectiveStatus === "PENDING") {
+            effectiveStatus = "PENDING";
+          }
+
           initial[t.name] = {
             tableau_datasource_name: ds.name,
             tableau_table_name: t.name,
             tableau_connection_type: ds.connection_type,
-            target_full_name: ex?.target_full_name || autoTarget || (t.is_unresolved ? "" : t.name),
-            status: (ex?.status as any) || (autoTarget ? autoStatus : (ex?.target_full_name ? "CONFIRMED" : "PENDING")),
+            target_full_name: effectiveTarget,
+            status: effectiveStatus as any,
             confidence_score: ex?.confidence_score,
           };
         }

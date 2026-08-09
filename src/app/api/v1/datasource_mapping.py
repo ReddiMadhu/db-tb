@@ -191,6 +191,8 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
 
     # Auto-compose target_full_name for live Databricks / already-qualified UC tables.
     # Priority: embedded 3-part relation FQN > catalog.schema.clean_name from connection.
+    # Promote PENDING entries to AUTO_DETECTED when we can resolve a UC target;
+    # never overwrite CONFIRMED mappings.
     for ds in workbook_meta.datasources:
         catalog = ""
         schema = "default"
@@ -215,7 +217,14 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
             }
             clean_name = clean_table_name_for_catalog(t.name)
             for key in (t.name, clean_name, t.raw_name, fqn.split(".")[-1]):
-                if key and key not in mapping_lookup:
+                if not key:
+                    continue
+                existing = mapping_lookup.get(key)
+                if existing and (existing.get("status") or "").upper() == "CONFIRMED":
+                    # Never overwrite user-confirmed mappings
+                    continue
+                if not existing or not existing.get("target_full_name"):
+                    # Fill empty or promote PENDING → AUTO_DETECTED
                     mapping_lookup[key] = dict(auto)
 
     # Build the top-level list of all Databricks sources for the Data Model screen

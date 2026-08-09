@@ -64,6 +64,24 @@ class MigrationPipeline:
     def log(self, level: str, message: str):
         self.error_bag.append({"level": level, "message": message})
 
+    def _get_stage_status(self, stage_id: str) -> Optional[str]:
+        """Return the current DB status of a stage, or None if not found."""
+        if not self.job_uuid:
+            return None
+        from app.models.stage_model import StageResult
+        db = self._get_db_session()
+        try:
+            row = (
+                db.query(StageResult)
+                .filter(StageResult.job_uuid == self.job_uuid, StageResult.stage_id == stage_id)
+                .first()
+            )
+            return row.status if row else None
+        except Exception:
+            return None
+        finally:
+            db.close()
+
     # ── Per-Stage DB Persistence ──
 
     def _get_db_session(self):
@@ -260,9 +278,15 @@ class MigrationPipeline:
 
         # ═══════════════════════════════════════════
         # Stage 2: Parse (combines backend stages 1-3: Parse + DAG)
-        # Note: Stage 1 (Upload) is handled by the upload endpoint separately
+        # Note: Stage 1 (Upload) is handled by the upload endpoint separately.
+        # When PARSE is already COMPLETED (from upload), do a silent rebuild
+        # of workbook_meta + catalog discovery WITHOUT flipping the stage to
+        # RUNNING.  This prevents the UI from jumping to "Dashboard Intelligence"
+        # and prevents the soft-lock that blocks Save & Execute retries.
         # ═══════════════════════════════════════════
         self.log("INFO", f"Stage 1-3: Parsing {filename}")
+
+        parse_already_completed = self._get_stage_status("PARSE") == "COMPLETED"
 
         def _do_parse():
             workbook_meta = parse_workbook(self.file_path)
@@ -604,11 +628,35 @@ class MigrationPipeline:
                 "data": workbook_meta,
             }
 
-        workbook_meta = self._run_stage(
-            "PARSE",
-            input_summary=f"{filename} ({os.path.getsize(self.file_path)} bytes)",
-            fn=_do_parse,
-        )
+        if parse_already_completed:
+            # Silent rebuild: parse the workbook and run discovery WITHOUT
+            # flipping PARSE to RUNNING.  The stage stays COMPLETED in DB,
+            # so the UI never jumps to "Dashboard Intelligence" and the
+            # soft-lock is never triggered.
+            logger.info(
+                "PARSE already COMPLETED for job=%s — silent rebuild (no RUNNING flip)",
+                self.job_uuid,
+            )
+            try:
+                workbook_meta = parse_workbook(self.file_path)
+                self._run_catalog_discovery(workbook_meta)
+            except Exception as e:
+                logger.exception(
+                    "Silent PARSE rebuild failed for job=%s — downstream stages will use fresh parse",
+                    self.job_uuid,
+                )
+                # Fall through to full _run_stage as fallback
+                workbook_meta = self._run_stage(
+                    "PARSE",
+                    input_summary=f"{filename} ({os.path.getsize(self.file_path)} bytes)",
+                    fn=_do_parse,
+                )
+        else:
+            workbook_meta = self._run_stage(
+                "PARSE",
+                input_summary=f"{filename} ({os.path.getsize(self.file_path)} bytes)",
+                fn=_do_parse,
+            )
 
         # ═══════════════════════════════════════════
         # NOTE: Source Mapping Validation (Stage 3) is now handled as a
@@ -884,6 +932,9 @@ class MigrationPipeline:
 
         return result
 
+    # ── Hard timeout for UC auto-discovery (seconds) ──
+    UC_DISCOVERY_TIMEOUT_SECONDS = 30
+
     def _run_catalog_discovery(self, workbook_meta: WorkbookMetadata) -> None:
         """Stage 3.5: Auto-discover Unity Catalog metadata when Databricks connections detected.
 
@@ -892,7 +943,9 @@ class MigrationPipeline:
           2. Databricks host is available (from connection or env)
           3. Databricks token is available (from env/config — never from Tableau XML)
 
-        On failure, logs warnings and falls back to the existing manual mapping flow.
+        On failure or timeout, logs warnings and falls back to the existing
+        manual mapping flow.  A hard timeout (UC_DISCOVERY_TIMEOUT_SECONDS)
+        prevents hanging UC API calls from blocking the entire pipeline.
         """
         if not workbook_meta.has_databricks_connections:
             return
@@ -928,16 +981,42 @@ class MigrationPipeline:
             return
 
         try:
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
             from app.services.mapper.catalog_discovery_service import CatalogDiscoveryService
 
-            self.semantic_model = CatalogDiscoveryService.discover(
-                workbook_meta=workbook_meta,
-                host_override=host,
-                token_override=token,
-                warehouse_id_override=wh_id,
-                discover_constraints=True,
-                discover_properties=False,
-            )
+            def _discover():
+                return CatalogDiscoveryService.discover(
+                    workbook_meta=workbook_meta,
+                    host_override=host,
+                    token_override=token,
+                    warehouse_id_override=wh_id,
+                    discover_constraints=True,
+                    discover_properties=False,
+                )
+
+            # Run discovery in a thread with a hard timeout so hanging UC
+            # API calls cannot block the pipeline indefinitely.
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_discover)
+                try:
+                    self.semantic_model = future.result(
+                        timeout=self.UC_DISCOVERY_TIMEOUT_SECONDS
+                    )
+                except FuturesTimeoutError:
+                    self.log(
+                        "WARNING",
+                        f"UC auto-discovery timed out after "
+                        f"{self.UC_DISCOVERY_TIMEOUT_SECONDS}s. "
+                        f"Falling back to manual mapping. "
+                        f"Check network connectivity to Databricks host: {host}"
+                    )
+                    logger.warning(
+                        "Stage 3.5 UC Discovery timed out after %ds for job=%s host=%s",
+                        self.UC_DISCOVERY_TIMEOUT_SECONDS,
+                        self.job_uuid,
+                        host,
+                    )
+                    return
 
             if self.semantic_model is not None:
                 summary = self.semantic_model.summary()

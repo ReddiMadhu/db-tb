@@ -40,12 +40,17 @@ class UnityCatalogError(Exception):
 class UnityCatalogService:
     """Stateless client for Databricks Unity Catalog APIs using the SDK with hive_metastore fallback."""
 
+    # HTTP connect/read timeout for SDK calls (seconds).
+    # Prevents hanging when the Databricks host is unreachable or slow.
+    HTTP_TIMEOUT_SECONDS = 15
+
     @staticmethod
     def _client(host: str, token: str) -> WorkspaceClient:
         """Create a WorkspaceClient for the given host/token pair."""
         return WorkspaceClient(
             host=host.rstrip("/"),
             token=token,
+            http_timeout_seconds=UnityCatalogService.HTTP_TIMEOUT_SECONDS,
         )
 
     @staticmethod
