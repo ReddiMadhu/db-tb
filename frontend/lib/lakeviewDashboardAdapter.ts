@@ -288,13 +288,18 @@ export class LakeviewDashboardAdapter {
     }
 
     const widgets: NormalizedWidget[] = [];
-    for (const page of asArray(root.pages)) {
+    asArray(root.pages).forEach((page, pageIndex) => {
       const p = asRecord(page);
-      if (!p) continue;
-      for (const item of asArray(p.layout)) {
+      if (!p) return;
+      const pageKey =
+        (typeof p.name === "string" && p.name) ||
+        (typeof p.displayName === "string" && p.displayName) ||
+        `page-${pageIndex}`;
+
+      asArray(p.layout).forEach((item, layoutIndex) => {
         const layoutItem = asRecord(item);
         const widget = asRecord(layoutItem?.widget);
-        if (!widget) continue;
+        if (!widget) return;
 
         const spec = asRecord(widget.spec) || {};
         const widgetType =
@@ -309,6 +314,10 @@ export class LakeviewDashboardAdapter {
           (typeof frame.title === "string" && frame.title) ||
           (typeof widget.name === "string" ? widget.name : "") ||
           "Untitled";
+        const widgetName =
+          typeof widget.name === "string" && widget.name ? widget.name : title;
+        // Page-scoped id: Lakeview often reuses widget.name across pages (e.g. KPIs).
+        const id = `${pageKey}::${widgetName}::${layoutIndex}`;
 
         const encodings = asRecord(spec.encodings) || {};
         const fields: NormalizedField[] = [];
@@ -357,8 +366,8 @@ export class LakeviewDashboardAdapter {
         const dsMeta = datasetName ? datasets.get(datasetName) : undefined;
 
         widgets.push({
-          id: typeof widget.name === "string" ? widget.name : title,
-          name: typeof widget.name === "string" ? widget.name : title,
+          id,
+          name: widgetName,
           title,
           widgetType,
           datasetName,
@@ -367,8 +376,8 @@ export class LakeviewDashboardAdapter {
           queryFields,
           raw: widget as Record<string, unknown>,
         });
-      }
-    }
+      });
+    });
 
     return { datasets, widgets };
   }
@@ -545,14 +554,24 @@ export class LakeviewDashboardAdapter {
     const charts = this.getChartWidgets();
     const usedWidgetIds = new Set<string>();
     const pairs: MatchedPair[] = [];
+    const unused = (w: NormalizedWidget) => !usedWidgetIds.has(w.id);
 
     for (const name of tableauNames) {
       const key = normalizeName(name);
       if (!key) continue;
-      const widget = charts.find((w) => {
-        if (usedWidgetIds.has(w.id)) return false;
-        return normalizeName(w.title) === key || normalizeName(w.name) === key;
-      });
+      const nameLower = name.trim().toLowerCase();
+
+      // Prefer exact title so "App Rate" and "App Rate (2)" stay distinct
+      // (normalizeName strips trailing "(N)" and would otherwise collide).
+      let widget =
+        charts.find((w) => unused(w) && w.title.trim().toLowerCase() === nameLower) ||
+        charts.find((w) => unused(w) && w.name.trim().toLowerCase() === nameLower) ||
+        charts.find(
+          (w) =>
+            unused(w) &&
+            (normalizeName(w.title) === key || normalizeName(w.name) === key)
+        );
+
       if (widget) {
         usedWidgetIds.add(widget.id);
         pairs.push({ tableauWorksheetName: name, widget });
