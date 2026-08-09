@@ -47,11 +47,13 @@ class UnityCatalogService:
     @staticmethod
     def _client(host: str, token: str) -> WorkspaceClient:
         """Create a WorkspaceClient for the given host/token pair."""
-        return WorkspaceClient(
+        from databricks.sdk.config import Config
+        cfg = Config(
             host=host.rstrip("/"),
             token=token,
             http_timeout_seconds=UnityCatalogService.HTTP_TIMEOUT_SECONDS,
         )
+        return WorkspaceClient(config=cfg)
 
     @staticmethod
     def _handle_error(operation: str, e: Exception) -> None:
