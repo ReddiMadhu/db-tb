@@ -364,30 +364,6 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
         </div>
       </div>
 
-      {/* Progress */}
-      <div className={styles.progressRow}>
-        <span className={styles.progressText}>
-          {mappedCount}/{totalCount} mapped
-        </span>
-        <div className={styles.progressBar}>
-          <div className={styles.progressFill} style={{ width: `${progressPct}%` }} />
-        </div>
-      </div>
-
-      {/* Auto Databricks Detection Summary */}
-      {host && (
-        <div className={styles.autoDetectBanner}>
-          <div>
-            <div className={styles.autoDetectTitle}>
-              <Sparkles size={16} /> Auto-Detected Databricks Workspace Connection
-            </div>
-            <div className={styles.autoDetectDesc}>
-              Target: <strong style={{ color: "var(--text-primary)" }}>{host}</strong> • Catalog: <strong style={{ color: "var(--text-primary)" }}>main</strong> • Warehouse: <strong style={{ color: "var(--text-primary)" }}>{warehouseId}</strong>
-            </div>
-          </div>
-          <span className={styles.mappedBadge}>Active Connection</span>
-        </div>
-      )}
 
       {/* Target Databricks Table Mapping Lineage */}
       <div style={{ marginTop: "1.5rem" }}>
