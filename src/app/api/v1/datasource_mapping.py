@@ -223,8 +223,8 @@ async def get_datasources(job_uuid: str, db: Session = Depends(get_db)):
                 if existing and (existing.get("status") or "").upper() == "CONFIRMED":
                     # Never overwrite user-confirmed mappings
                     continue
-                if not existing or not existing.get("target_full_name"):
-                    # Fill empty or promote PENDING → AUTO_DETECTED
+                # Overwrite PENDING (even with an old target) and empty entries
+                if not existing or (existing.get("status") or "").upper() != "CONFIRMED":
                     mapping_lookup[key] = dict(auto)
 
     # Build the top-level list of all Databricks sources for the Data Model screen

@@ -81,13 +81,17 @@ export default function InlineMappingPanel({ jobUuid, onExecute }: InlineMapping
             (t.uc_fqn ? res.existing_mappings?.[t.uc_fqn.split(".").pop() || ""] : undefined) ||
             // legacy key when "*.csv" was wrongly normalized to "Csv"
             (/\.csv$/i.test(t.raw_name || "") ? res.existing_mappings?.["Csv"] : undefined);
-          // Prefer embedded UC FQN from live Databricks relation, then connection catalog
+          // Prefer embedded UC FQN from live Databricks relation, then connection catalog.
+          // Compute autoTarget even when a saved target exists — only CONFIRMED
+          // mappings are sacred.  This ensures stale PENDING mappings on deployed
+          // systems still get promoted to AUTO_DETECTED.
           let autoTarget = "";
           let autoStatus: any = "PENDING";
-          if (!ex?.target_full_name && t.uc_fqn) {
+          const savedIsConfirmed = (ex?.status || "").toUpperCase() === "CONFIRMED";
+          if (!savedIsConfirmed && t.uc_fqn) {
             autoTarget = t.uc_fqn;
             autoStatus = "AUTO_DETECTED";
-          } else if (!ex?.target_full_name && ds.is_databricks && ds.databricks_connection?.catalog) {
+          } else if (!savedIsConfirmed && ds.is_databricks && ds.databricks_connection?.catalog) {
             const cat = ds.databricks_connection.catalog;
             const sch = ds.databricks_connection.schema || "default";
             const cleanName = t.clean_name || t.name;
