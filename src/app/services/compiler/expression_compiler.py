@@ -508,6 +508,8 @@ def _coerce_division_to_double(sql: str) -> str:
 
     ``COUNT(a)/COUNT(b)`` is integer division in Spark; cast numerator to DOUBLE.
     Skips operands that are already CAST(... AS DOUBLE) or contain a decimal literal.
+    Denominators already wrapped in ``NULLIF(..., 0)`` are not re-wrapped (avoids
+    nested NULLIFs when the multi-pass loop re-matches the same ``/``).
     """
     if not sql or "/" not in sql:
         return sql
@@ -532,10 +534,16 @@ def _coerce_division_to_double(sql: str) -> str:
         re.IGNORECASE,
     )
 
+    def _already_nullif_guard(expr: str) -> bool:
+        e = expr.strip()
+        return bool(re.match(r"^NULLIF\s*\(", e, re.IGNORECASE))
+
     def _repl(m: re.Match) -> str:
         left, right = m.group(1), m.group(2)
         if _needs_cast(left):
             left = f"CAST(({left}) AS DOUBLE)"
+        if _already_nullif_guard(right):
+            return f"{left} / {right}"
         return f"{left} / NULLIF(({right}), 0)"
 
     prev = None
