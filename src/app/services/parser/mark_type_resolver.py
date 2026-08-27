@@ -45,8 +45,10 @@ def resolve_mark_type(
             return 'Gantt Bar'
         if mark_lower == 'circle':
             return 'Scatter Plot'
-        if mark_lower in ('square', 'heatmap'):
-            return 'Heatmap (square)'
+        if mark_lower == 'square':
+            return 'Square'
+        if mark_lower == 'heatmap':
+            return 'Heatmap'
         if mark_lower == 'pie':
             return 'Pie chart'
         if mark_lower == 'area':

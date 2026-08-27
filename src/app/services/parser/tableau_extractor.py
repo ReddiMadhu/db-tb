@@ -187,6 +187,7 @@ TABLEAU_PSEUDO_FIELDS = {
     'Number of Records',
     'Multiple Values',
     'multiple values',
+    '""', "''",
 }
 
 TABLEAU_GENERATED_FIELD_RE = re.compile(
@@ -218,8 +219,10 @@ def is_tableau_pseudo_field(field_name: str) -> bool:
     """Returns True if the field is a Tableau-internal pseudo-field that has
     no corresponding column in real data."""
     if not field_name:
-        return False
+        return True
     name = field_name.strip()
+    if not name or not name.strip(' "\''):
+        return True
     if name in TABLEAU_PSEUDO_FIELDS or name.lower() in {f.lower() for f in TABLEAU_PSEUDO_FIELDS}:
         return True
     if TABLEAU_GENERATED_FIELD_RE.search(name):

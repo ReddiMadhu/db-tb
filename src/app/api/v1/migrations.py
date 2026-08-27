@@ -13,7 +13,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db, SessionLocal
-from app.models.db_models import MigrationJob, MigrationReport, DatasourceMapping
+from app.models.db_models import MigrationJob, MigrationReport, DatasourceMapping, Workbook
 from app.services.pipeline import MigrationPipeline
 from app.services.deployer.api_client import LakeviewAPIClient
 from app.services.deployer.bundle_generator import generate_databricks_asset_bundle
@@ -27,6 +27,9 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -629,6 +632,111 @@ async def download_lakeview_json(job_uuid: str, db: Session = Depends(get_db)):
         job.output_lvdash_path,
         media_type="application/json",
         filename=f"{job_uuid}.lvdash.json"
+    )
+
+
+@router.get("/{job_uuid}/download")
+@router.get("/{job_uuid}/download/source")
+@router.get("/{job_uuid}/source")
+async def download_source_file(
+    job_uuid: str,
+    download_type: Optional[str] = "source",
+    db: Session = Depends(get_db),
+):
+    """
+    Downloads the original uploaded Tableau workbook (.twb/.twbx) or generated artifact.
+    Does not require frontend linkage.
+    """
+    job = db.query(MigrationJob).filter(MigrationJob.job_uuid == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Migration job not found.")
+
+    if download_type in ("lakeview", "json", "output", "lvdash"):
+        out_path = job.output_lvdash_path
+        if not out_path or not os.path.exists(out_path):
+            candidate = os.path.join(OUTPUT_DIR, f"{job_uuid}.json")
+            if os.path.exists(candidate):
+                out_path = candidate
+            else:
+                candidate2 = os.path.join(OUTPUT_DIR, job_uuid, "lakeview.json")
+                if os.path.exists(candidate2):
+                    out_path = candidate2
+
+        if not out_path or not os.path.exists(out_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Generated Lakeview JSON not found for this migration."
+            )
+
+        filename = f"{job_uuid}.lvdash.json"
+        return FileResponse(
+            path=out_path,
+            filename=filename,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    # Locate source Tableau file (.twb / .twbx)
+    file_path = None
+
+    # 1. Check pipeline_config.upload_path
+    if job.pipeline_config and isinstance(job.pipeline_config, dict):
+        candidate = job.pipeline_config.get("upload_path")
+        if candidate and os.path.exists(candidate):
+            file_path = candidate
+
+    # 2. Check Workbook records in DB
+    if not file_path:
+        wb_record = db.query(Workbook).filter(Workbook.job_id == job.id).first()
+        if wb_record and wb_record.source_file and os.path.exists(wb_record.source_file):
+            file_path = wb_record.source_file
+
+    # 3. Check UPLOAD_DIR / {job_uuid} directory
+    if not file_path:
+        job_dir = os.path.join(UPLOAD_DIR, job_uuid)
+        if os.path.exists(job_dir):
+            if job.source_filename:
+                candidate = os.path.join(job_dir, job.source_filename)
+                if os.path.exists(candidate):
+                    file_path = candidate
+            if not file_path:
+                for fname in os.listdir(job_dir):
+                    full = os.path.join(job_dir, fname)
+                    if os.path.isfile(full) and (fname.lower().endswith(".twbx") or fname.lower().endswith(".twb")):
+                        file_path = full
+                        break
+                if not file_path:
+                    files = [os.path.join(job_dir, f) for f in os.listdir(job_dir) if os.path.isfile(os.path.join(job_dir, f))]
+                    if files:
+                        file_path = files[0]
+
+    # 4. Global search in UPLOAD_DIR if source_filename known
+    if not file_path and job.source_filename:
+        for root, _, files in os.walk(UPLOAD_DIR):
+            if job.source_filename in files:
+                candidate = os.path.join(root, job.source_filename)
+                if os.path.exists(candidate):
+                    file_path = candidate
+                    break
+
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source Tableau file not found on server for migration job '{job_uuid}'."
+        )
+
+    filename = job.source_filename or os.path.basename(file_path)
+    media_type = "application/octet-stream"
+    if filename.lower().endswith(".twbx"):
+        media_type = "application/x-twbx"
+    elif filename.lower().endswith(".twb"):
+        media_type = "application/xml"
+
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
 

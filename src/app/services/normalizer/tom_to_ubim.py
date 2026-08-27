@@ -1035,7 +1035,7 @@ def _reconcile_widget_fields_with_datasets(ubim_dash: "IntermediateDashboard") -
 
             for qf in widget.query_fields:
                 fname = qf.name
-                if not fname:
+                if not fname or is_tableau_pseudo_field(fname):
                     continue
                 # Already projected → nothing to do
                 if fname in projected_names:
@@ -1062,6 +1062,8 @@ def _inject_field_into_dataset(
     Modifies ``ds.sql_query`` in place by adding `field_alias` AS `field_alias`
     after the existing SELECT items and before the FROM clause.
     """
+    if not field_alias or is_tableau_pseudo_field(field_alias):
+        return
     sql = ds.sql_query
     if not sql:
         return
@@ -1078,13 +1080,26 @@ def _inject_field_into_dataset(
             depth += 1
         elif ch == ')':
             depth -= 1
-        elif depth == 0 and upper_sql[i:i+5] == 'FROM ' or upper_sql[i:i+5] == 'FROM\n':
+        elif depth == 0 and (upper_sql[i:i+5] == 'FROM ' or upper_sql[i:i+5] == 'FROM\n'):
             from_idx = i
             break
         i += 1
 
     if from_idx < 0:
         return
+
+    # Count 1-based column position in the SELECT clause (number of top-level commas + 2)
+    select_sql = sql[6:from_idx]
+    comma_count = 0
+    d = 0
+    for ch in select_sql:
+        if ch == '(':
+            d += 1
+        elif ch == ')':
+            d -= 1
+        elif ch == ',' and d == 0:
+            comma_count += 1
+    new_col_select_pos = comma_count + 2
 
     # Build the column fragment to inject
     col_fragment = f", `{field_alias}`"
@@ -1097,12 +1112,10 @@ def _inject_field_into_dataset(
     projected_names.add(field_alias)
 
     # If the dataset has GROUP BY, add the new dimension to the GROUP BY clause
-    # to avoid MISSING_AGGREGATION errors.
+    # using its exact 1-based SELECT position to avoid MISSING_AGGREGATION errors.
     upper_new = ds.sql_query.upper()
     gb_idx = upper_new.rfind("GROUP BY")
     if gb_idx >= 0:
-        # Count existing GROUP BY indices: GROUP BY 1, 2, ... N → add N+1
-        gb_rest = ds.sql_query[gb_idx + 9:].strip()
         # Find end of GROUP BY clause (before ORDER BY / LIMIT / HAVING / end)
         end_markers = ["ORDER BY", "LIMIT", "HAVING", "WINDOW", "QUALIFY"]
         gb_end = len(ds.sql_query)
@@ -1110,22 +1123,17 @@ def _inject_field_into_dataset(
             marker_idx = upper_new.find(marker, gb_idx + 9)
             if marker_idx >= 0 and marker_idx < gb_end:
                 gb_end = marker_idx
-        # Count existing positional indices
-        existing_indices = ds.sql_query[gb_idx + 9:gb_end].strip()
-        if existing_indices:
-            parts = [p.strip() for p in existing_indices.split(",") if p.strip()]
-            next_idx = len(parts) + 1
-            # Insert new index before any post-GROUP BY clause
-            insert_at = gb_end
-            ds.sql_query = (
-                ds.sql_query[:insert_at].rstrip()
-                + f", {next_idx}"
-                + " " + ds.sql_query[insert_at:].lstrip()
-            )
+        # Insert new index before any post-GROUP BY clause
+        insert_at = gb_end
+        ds.sql_query = (
+            ds.sql_query[:insert_at].rstrip()
+            + f", {new_col_select_pos}"
+            + " " + ds.sql_query[insert_at:].lstrip()
+        )
 
     logger.info(
-        "Reconciliation: injected missing field '%s' into dataset '%s'",
-        field_alias, ds.name,
+        "Reconciliation: injected missing field '%s' into dataset '%s' at position %d",
+        field_alias, ds.name, new_col_select_pos,
     )
 
 
@@ -1289,10 +1297,24 @@ def normalize_tom_to_ubim(
                 continue
             # Resolve to physical column name via canonical resolver
             physical_name = _resolve_field_for_sql(enc.field_name, resolver, ds)
-            # Aggregated color/size/etc. are measures, not dimensions
-            if _encoding_has_aggregation(enc) or enc.channel in (
-                'size', 'tooltip', 'label', 'text', 'angle'
-            ):
+
+            # Determine whether this encoding represents a measure or a dimension
+            is_agg_encoding = _encoding_has_aggregation(enc)
+            col_meta = _get_column_metadata(enc.field_name, ds) if ds else {}
+            semantic = classify_field(
+                field_name=enc.field_name,
+                datatype=col_meta.get('datatype', ''),
+                role=col_meta.get('role', ''),
+                default_aggregation=col_meta.get('default_aggregation', ''),
+                field_type=col_meta.get('type', ''),
+            )
+            treat_as_measure = is_agg_encoding or (
+                enc.channel in ('size', 'angle')
+            ) or (
+                enc.channel in ('tooltip', 'label', 'text') and is_aggregatable(semantic)
+            )
+
+            if treat_as_measure:
                 if physical_name in seen_measure_names or enc.field_name in seen_measure_names:
                     continue
                 if physical_name in seen_dim_names:
@@ -1309,7 +1331,7 @@ def normalize_tom_to_ubim(
                 measures.append((physical_name, agg))
                 seen_measure_names.add(physical_name)
                 seen_measure_names.add(enc.field_name)
-            elif enc.channel in ('color', 'shape', 'detail', 'lod'):
+            elif enc.channel in ('color', 'shape', 'detail', 'lod', 'tooltip', 'label', 'text'):
                 if physical_name in seen_measure_names or enc.field_name in seen_measure_names:
                     continue
                 if physical_name not in seen_dim_names and enc.field_name not in seen_dim_names:
@@ -1341,6 +1363,18 @@ def normalize_tom_to_ubim(
                     alias = _make_safe_alias(col.internal_name or col.caption or "")
                     if alias:
                         ds_columns.add(alias)
+            if ds.tables:
+                for tbl in ds.tables:
+                    for c in tbl.columns:
+                        ds_columns.add(c)
+                        alias = _make_safe_alias(c)
+                        if alias:
+                            ds_columns.add(alias)
+                    for a in tbl.tableau_aliases:
+                        ds_columns.add(a)
+                        alias = _make_safe_alias(a)
+                        if alias:
+                            ds_columns.add(alias)
             if ds.calculated_fields:
                 for cf in ds.calculated_fields:
                     if cf.caption:
