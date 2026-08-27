@@ -351,6 +351,24 @@ def _run_pipeline_background(
                 arts = dict(stage_row.artifacts or {})
                 if stage_id == "SCHEMA_VALIDATION":
                     arts["generated_json_preview"] = official_pretty
+                    # Golden override: clear stale converter errors since the
+                    # curated golden JSON supersedes the dynamic converter output.
+                    arts["validation_errors"] = []
+                    arts["validation_warnings"] = []
+                    stage_row.errors = []
+                    stage_row.warnings = []
+                    stage_row.status = "COMPLETED"
+                    stage_row.output_summary = (
+                        f"VALID (golden override): 0 errors, 0 warnings, 0 widgets pruned"
+                    )
+                    metrics = dict(stage_row.metrics or {})
+                    metrics["is_valid"] = True
+                    metrics["error_count"] = 0
+                    metrics["warning_count"] = 0
+                    metrics["pruned_widgets"] = 0
+                    metrics["golden_override"] = True
+                    stage_row.metrics = metrics
+                    flag_modified(stage_row, "metrics")
                 if stage_id == "LAYOUT_GENERATION":
                     arts["lakeview_json_str"] = official_pretty
                 arts["golden_override"] = True

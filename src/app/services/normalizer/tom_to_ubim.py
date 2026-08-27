@@ -1000,6 +1000,134 @@ def _filter_pseudo_shelf_fields(shelf_fields: List[ShelfField]) -> List[ShelfFie
     """Remove Tableau pseudo-fields from structured shelf fields."""
     return [sf for sf in shelf_fields if not is_tableau_pseudo_field(sf.field_name)]
 
+def _reconcile_widget_fields_with_datasets(ubim_dash: "IntermediateDashboard") -> None:
+    """Ensure every widget query_field is projected by its bound dataset SQL.
+
+    After the dataset SQL and widget query_fields are built by two independent
+    code paths, some widget fields (from detail/tooltip/expanded measures) may
+    reference columns that were never included in the dataset's SELECT clause.
+
+    This post-pass injects missing fields as raw dimension columns into the
+    dataset SQL, preventing Lakeview runtime "column not found" failures and
+    Tier 12b validation errors.
+    """
+    ds_by_name: Dict[str, "IntermediateDataset"] = {
+        ds.name: ds for ds in ubim_dash.datasets
+    }
+
+    for page in ubim_dash.pages:
+        for widget in page.widgets:
+            ds_name = widget.dataset_name
+            if not ds_name:
+                continue
+            ds = ds_by_name.get(ds_name)
+            if not ds or not ds.sql_query:
+                continue
+            # Skip incomplete / unpivot datasets
+            if "__incomplete_projection__" in ds.sql_query:
+                continue
+            # Skip UNION ALL unpivot datasets — they have a fixed
+            # (dimension, Metric, Value) schema that must not be altered.
+            if "UNION ALL" in ds.sql_query.upper():
+                continue
+
+            projected_names = {f["name"] for f in ds.fields}
+
+            for qf in widget.query_fields:
+                fname = qf.name
+                if not fname:
+                    continue
+                # Already projected → nothing to do
+                if fname in projected_names:
+                    continue
+                # The expression may be an aggregate (e.g. SUM(`Foo`)) that
+                # references a source column already in the projection — the
+                # aggregate itself is computed by Lakeview at query time, not
+                # by the dataset SQL. Only inject raw dimension references.
+                expr = (qf.expression or "").strip()
+                if _is_aggregated_expr(expr):
+                    continue
+
+                # Inject as a raw dimension column into the dataset SQL
+                _inject_field_into_dataset(ds, fname, projected_names)
+
+
+def _inject_field_into_dataset(
+    ds: "IntermediateDataset",
+    field_alias: str,
+    projected_names: set,
+) -> None:
+    """Add a raw dimension column to the dataset's SELECT and fields list.
+
+    Modifies ``ds.sql_query`` in place by adding `field_alias` AS `field_alias`
+    after the existing SELECT items and before the FROM clause.
+    """
+    sql = ds.sql_query
+    if not sql:
+        return
+
+    # Locate the FROM keyword (case-insensitive) to insert before it
+    from_idx = -1
+    upper_sql = sql.upper()
+    # Find the first top-level FROM (not inside a subquery)
+    depth = 0
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+        elif depth == 0 and upper_sql[i:i+5] == 'FROM ' or upper_sql[i:i+5] == 'FROM\n':
+            from_idx = i
+            break
+        i += 1
+
+    if from_idx < 0:
+        return
+
+    # Build the column fragment to inject
+    col_fragment = f", `{field_alias}`"
+
+    # Insert right before FROM
+    ds.sql_query = sql[:from_idx] + col_fragment + " " + sql[from_idx:]
+
+    # Also update fields metadata
+    ds.fields.append({"name": field_alias, "type": "string"})
+    projected_names.add(field_alias)
+
+    # If the dataset has GROUP BY, add the new dimension to the GROUP BY clause
+    # to avoid MISSING_AGGREGATION errors.
+    upper_new = ds.sql_query.upper()
+    gb_idx = upper_new.rfind("GROUP BY")
+    if gb_idx >= 0:
+        # Count existing GROUP BY indices: GROUP BY 1, 2, ... N → add N+1
+        gb_rest = ds.sql_query[gb_idx + 9:].strip()
+        # Find end of GROUP BY clause (before ORDER BY / LIMIT / HAVING / end)
+        end_markers = ["ORDER BY", "LIMIT", "HAVING", "WINDOW", "QUALIFY"]
+        gb_end = len(ds.sql_query)
+        for marker in end_markers:
+            marker_idx = upper_new.find(marker, gb_idx + 9)
+            if marker_idx >= 0 and marker_idx < gb_end:
+                gb_end = marker_idx
+        # Count existing positional indices
+        existing_indices = ds.sql_query[gb_idx + 9:gb_end].strip()
+        if existing_indices:
+            parts = [p.strip() for p in existing_indices.split(",") if p.strip()]
+            next_idx = len(parts) + 1
+            # Insert new index before any post-GROUP BY clause
+            insert_at = gb_end
+            ds.sql_query = (
+                ds.sql_query[:insert_at].rstrip()
+                + f", {next_idx}"
+                + " " + ds.sql_query[insert_at:].lstrip()
+            )
+
+    logger.info(
+        "Reconciliation: injected missing field '%s' into dataset '%s'",
+        field_alias, ds.name,
+    )
+
 
 def normalize_tom_to_ubim(
     workbook_meta: WorkbookMetadata,
@@ -1486,6 +1614,13 @@ def normalize_tom_to_ubim(
             page.widgets.append(widget)
             y_grid_acc += widget.position.grid_h
         ubim_dash.pages.append(page)
+
+    # ── Post-reconciliation: ensure widget query_fields ⊆ dataset output columns ──
+    # The dataset SQL generation and _build_widget are two independent code paths.
+    # _build_widget may add fields (from detail/tooltip/expanded measures) that the
+    # dataset SQL did not project. Inject any missing fields as raw dimensions into
+    # the dataset SELECT to prevent Lakeview runtime "column not found" failures.
+    _reconcile_widget_fields_with_datasets(ubim_dash)
 
     return ubim_dash
 
